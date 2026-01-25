@@ -1,0 +1,5 @@
+/outputs
+*/*/__pycache__/
+/__pycache__
+/databench.egg-info
+/databench/__pycache__
