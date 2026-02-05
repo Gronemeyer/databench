@@ -9,10 +9,10 @@ description = "Minimal, reproducible analysis/plotting toolkit for multiindex da
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "numpy>=1.26",
-    "pandas>=2.1",
-    "scipy>=1.11",
-    "matplotlib>=3.8",
+    "numpy",
+    "pandas",
+    "scipy",
+    "matplotlib",
 ]
 
 [tool.setuptools.packages.find]
