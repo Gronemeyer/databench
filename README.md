@@ -28,7 +28,7 @@ bench.setup("/path/to/input.pkl")
 paths = bench.output_paths
 df = bench.load()
 bench.set_filters(drop_rows=(
-	("GS29", "ses-04", "task-movies"),
+    ("GS29", "ses-04", "task-movies"),
 ))
 df = bench.filter_data(df)
 
@@ -37,8 +37,9 @@ feature_fns = bench.data
 
 # Example: summarize longitudinal stats
 session_table = bench.build_session_table(df, feature_fns)
-session_table, stats = longitudinal_summary(session_table, y=features[0])
+summary = bench.analyze("longitudinal_summary", session_table, y=features[0])
+session_table = summary.data
 
 # Example: plot using plotting submodule
-fig, _ = plotting.plot_feature(session_table, feature_fns[0])
+fig, _ = bench.plot("feature", session_table, feature=feature_fns[0])
 ```

@@ -1,0 +1,395 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Type, Union
+import json
+from dataclasses import asdict
+import subprocess
+
+import pandas as pd
+
+from .config import FilterConfig, IOConfig, OutputPaths
+from .analysis import (
+    Analysis,
+    AnalysisResult,
+    LongitudinalAnalysis,
+    OscillationDetectorAnalysis,
+)
+from .features import (
+    FeatureFn,
+    MeanSpeedCMS,
+    StdSpeedCMS,
+    TotalDistanceM,
+    LocomotionBoutsCount,
+    LocomotionBoutSpeedMeanCMS,
+    LocomotionBoutDistanceM,
+    LocomotionBoutDurationS,
+    MeanPupilMM,
+    StdPupilMM,
+    MeanMeso,
+    StdMeso,
+)
+from .plotting import Plotter, FeaturePlotter, LongitudinalPlotter
+from .utils import drop_rows, session_to_int
+from .debug import get_row, log_context
+
+
+DEFAULT_FEATURE_CLASSES: tuple[Type[FeatureFn], ...] = (
+    MeanSpeedCMS,
+    StdSpeedCMS,
+    TotalDistanceM,
+    LocomotionBoutsCount,
+    LocomotionBoutSpeedMeanCMS,
+    LocomotionBoutDistanceM,
+    LocomotionBoutDurationS,
+    MeanPupilMM,
+    StdPupilMM,
+    MeanMeso,
+    StdMeso,
+)
+
+
+DEFAULT_ANALYSIS_CLASSES: tuple[Type[Analysis], ...] = (
+    LongitudinalAnalysis,
+    OscillationDetectorAnalysis,
+)
+
+
+DEFAULT_PLOTTER_CLASSES: tuple[Type[Plotter], ...] = (
+    FeaturePlotter,
+    LongitudinalPlotter,
+)
+
+
+class Bench:
+    """Centralized entry point for configuring datasets, outputs, and features."""
+
+    def __init__(
+        self,
+        features: Optional[Iterable[Union[FeatureFn, Type[FeatureFn]]]] = None,
+        analyses: Optional[Iterable[Union[Analysis, Type[Analysis]]]] = None,
+        plotters: Optional[Iterable[Union[Plotter, Type[Plotter]]]] = None,
+    ) -> None:
+        self._features: Dict[str, FeatureFn] = {}
+        self._analyses: Dict[str, Analysis] = {}
+        self._plotters: Dict[str, Plotter] = {}
+        self.io_config: Optional[IOConfig] = None
+        self.filter_config: Optional[FilterConfig] = None
+        self.output_paths: Optional[OutputPaths] = None
+        self._usage: Dict[str, list] = {"features": [], "analyses": [], "plots": []}
+
+        for feat in (features or DEFAULT_FEATURE_CLASSES):
+            self.register_feature(feat)
+        for analysis in (analyses or DEFAULT_ANALYSIS_CLASSES):
+            self.register_analysis(analysis)
+        for plotter in (plotters or DEFAULT_PLOTTER_CLASSES):
+            self.register_plotter(plotter)
+
+    def register_feature(self, feat: Union[FeatureFn, Type[FeatureFn]]) -> "Bench":
+        if isinstance(feat, type):
+            if not issubclass(feat, FeatureFn):
+                raise TypeError("Feature class must subclass FeatureFn")
+            instance = feat()
+        elif isinstance(feat, FeatureFn):
+            instance = feat
+        else:
+            raise TypeError("Feature must be a FeatureFn or FeatureFn class")
+
+        self._features[instance.name] = instance
+        return self
+
+    def register_analysis(self, analysis: Union[Analysis, Type[Analysis]]) -> "Bench":
+        if isinstance(analysis, type):
+            if not issubclass(analysis, Analysis):
+                raise TypeError("Analysis class must subclass Analysis")
+            instance = analysis()
+        elif isinstance(analysis, Analysis):
+            instance = analysis
+        else:
+            raise TypeError("Analysis must be an Analysis or Analysis class")
+
+        self._analyses[instance.name] = instance
+        return self
+
+    def register_plotter(self, plotter: Union[Plotter, Type[Plotter]]) -> "Bench":
+        if isinstance(plotter, type):
+            if not issubclass(plotter, Plotter):
+                raise TypeError("Plotter class must subclass Plotter")
+            instance = plotter()
+        elif isinstance(plotter, Plotter):
+            instance = plotter
+        else:
+            raise TypeError("Plotter must be a Plotter or Plotter class")
+
+        self._plotters[instance.name] = instance
+        return self
+
+    @property
+    def data(self) -> List[FeatureFn]:
+        return list(self._features.values())
+
+    @property
+    def feature_names(self) -> List[str]:
+        return list(self._features.keys())
+
+    def get_feature(self, name: str) -> FeatureFn:
+        try:
+            return self._features[name]
+        except KeyError as exc:
+            raise KeyError(f"Unknown feature: {name!r}") from exc
+
+    def analyze(self, name: str, *args, **kwargs) -> AnalysisResult:
+        try:
+            analysis = self._analyses[name]
+        except KeyError as exc:
+            raise KeyError(f"Unknown analysis: {name!r}") from exc
+        self._usage["analyses"].append({"name": name, "kwargs": kwargs})
+        return analysis.run(*args, **kwargs)
+
+    def plot(self, name: str, *args, **kwargs):
+        if name in self._plotters:
+            self._usage["plots"].append({"name": name, "kwargs": kwargs})
+            return self._plotters[name].plot(*args, **kwargs)
+        if name in self._analyses:
+            self._usage["plots"].append({"name": name, "kwargs": kwargs})
+            return self._analyses[name].plot(*args, **kwargs)
+        raise KeyError(f"Unknown plotter or analysis: {name!r}")
+
+    def save(self, result: AnalysisResult, **kwargs) -> list:
+        try:
+            analysis = self._analyses[result.name]
+        except KeyError as exc:
+            raise KeyError(f"Unknown analysis: {result.name!r}") from exc
+        return analysis.save(result, **kwargs)
+
+    def set_filters(self, drop_rows: tuple = ()) -> FilterConfig:
+        cfg = FilterConfig(drop_rows=drop_rows)
+        self.filter_config = cfg
+        return cfg
+
+    def setup(
+        self,
+        input_path: Path,
+        output_root: Path = Path("outputs"),
+        run_name: str = "databench",
+        tag: Optional[str] = None,
+    ) -> tuple[IOConfig, OutputPaths]:
+        if tag:
+            cfg = IOConfig(input_path=Path(input_path), output_root=output_root, run_name=run_name, tag=tag)
+        else:
+            cfg = IOConfig(input_path=Path(input_path), output_root=output_root, run_name=run_name)
+        paths = self._make_output_paths(cfg)
+        self.io_config = cfg
+        self.output_paths = paths
+        return cfg, paths
+
+    def load(self, input_path: Optional[Path] = None) -> pd.DataFrame:
+        if input_path is None:
+            if self.io_config is None:
+                raise ValueError("Call setup() or pass input_path before loading.")
+            input_path = self.io_config.input_path
+        return self._load_df(input_path)
+
+    def build_session_table(
+        self,
+        df: pd.DataFrame,
+        features: Optional[Iterable[FeatureFn]] = None,
+    ) -> pd.DataFrame:
+        use_features = list(features) if features is not None else self.data
+        self._usage["features"].append({"names": [f.name for f in use_features]})
+        rows = []
+        for _, row in df.iterrows():
+            out = {}
+            for feat in use_features:
+                out[feat.name] = feat.run(row)
+            rows.append(out)
+        out = pd.DataFrame(rows, index=df.index)
+        out["session_n"] = df.index.get_level_values("Session").map(session_to_int)
+        return out.sort_values(["Subject", "session_n"])
+
+    def run_feature_on_row(
+		self,
+		df: pd.DataFrame,
+		feature: FeatureFn,
+		subject: Optional[str] = None,
+		session: Optional[str] = None,
+		task: Optional[str] = None,
+		debug: bool = False,
+    ):
+        idx, row = get_row(df, subject, session, task)
+        val = feature.run(row)
+        if debug:
+            print(f"{log_context(idx)} | {feature.name} = {val}")
+        return val
+
+    def filter_data(self, df: pd.DataFrame, drop_rows_list: Optional[tuple] = None) -> pd.DataFrame:
+        if drop_rows_list is None and self.filter_config is not None:
+            drop_rows_list = self.filter_config.drop_rows
+        return drop_rows(df, drop_rows_list or ())
+
+    def save_table(self, df: pd.DataFrame, name: str = "table.csv", folder: str = "stats") -> Path:
+        if self.output_paths is None:
+            raise ValueError("Call setup() before save_table().")
+        if not hasattr(self.output_paths, folder):
+            raise ValueError(f"Unknown output folder: {folder!r}")
+        out_dir = getattr(self.output_paths, folder)
+        path = out_dir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.suffix == ".csv":
+            df.to_csv(path)
+        elif path.suffix == ".parquet":
+            df.to_parquet(path)
+        else:
+            path = path.with_suffix(".csv")
+            df.to_csv(path)
+        return path
+
+    def save_provenance(self, name: str = "provenance.json") -> Path:
+        if self.output_paths is None:
+            raise ValueError("Call setup() before save_provenance().")
+        config_dir = self.output_paths.config
+        config_dir.mkdir(parents=True, exist_ok=True)
+
+        used_feature_names = {
+            name
+            for entry in self._usage.get("features", [])
+            for name in entry.get("names", [])
+        }
+        features = []
+        for feat in self.data:
+            if feat.name not in used_feature_names:
+                continue
+            try:
+                params = asdict(feat)
+            except Exception:
+                params = {"name": feat.name, "label": feat.label}
+            features.append({"name": feat.name, "class": feat.__class__.__name__, "params": params})
+
+        used_analysis_names = {entry.get("name") for entry in self._usage.get("analyses", [])}
+        analyses = [
+            {"name": a.name, "class": a.__class__.__name__}
+            for a in self._analyses.values()
+            if a.name in used_analysis_names
+        ]
+        used_plotter_names = {entry.get("name") for entry in self._usage.get("plots", [])}
+        plotters = [
+            {"name": p.name, "class": p.__class__.__name__}
+            for p in self._plotters.values()
+            if p.name in used_plotter_names
+        ]
+
+        payload = {
+            "io_config": None if self.io_config is None else asdict(self.io_config),
+            "filter_config": None if self.filter_config is None else asdict(self.filter_config),
+            "git_hash": self._get_git_hash(),
+            "features": features,
+            "analyses": analyses,
+            "plotters": plotters,
+            "usage": self._usage,
+        }
+
+        path = config_dir / name
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, default=str)
+        return path
+
+    def save_figure(
+        self,
+        fig,
+        name: str,
+        folder: str = "plots",
+        dpi: int = 300,
+        bbox_inches: str = "tight",
+    ) -> Path:
+        if self.output_paths is None:
+            raise ValueError("Call setup() before save_figure().")
+        if not hasattr(self.output_paths, folder):
+            raise ValueError(f"Unknown output folder: {folder!r}")
+        out_dir = getattr(self.output_paths, folder)
+        path = out_dir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=dpi, bbox_inches=bbox_inches)
+        return path
+
+    def export_feature_report(
+        self,
+        df: pd.DataFrame,
+        source: str,
+        feature: str,
+        name: str = "feature_report.csv",
+        folder: str = "stats",
+        id_sep: str = "_",
+    ) -> Path:
+        if self.output_paths is None:
+            raise ValueError("Call setup() before export_feature_report().")
+        if not isinstance(df.index, pd.MultiIndex):
+            raise ValueError("Expected MultiIndex with Subject/Session/Task.")
+        if not hasattr(self.output_paths, folder):
+            raise ValueError(f"Unknown output folder: {folder!r}")
+
+        cols = []
+        series = []
+        for idx, row in df.iterrows():
+            subject, session, task = idx
+            col_name = id_sep.join([str(subject), str(session), str(task)])
+            x = row.get((source, feature))
+            if x is None:
+                continue
+            arr = pd.Series(x).to_numpy().ravel()
+            cols.append(col_name)
+            series.append(arr)
+
+        if not series:
+            raise ValueError(f"No data found for ({source}, {feature}).")
+
+        max_len = max(len(a) for a in series)
+        data = {
+            c: pd.Series(a).reindex(range(max_len)).to_numpy()
+            for c, a in zip(cols, series)
+        }
+
+        out_df = pd.DataFrame(data)
+        out_dir = getattr(self.output_paths, folder)
+        out_path = out_dir / name
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_df.to_csv(out_path, index=False)
+        return out_path
+
+    @staticmethod
+    def _make_output_paths(cfg: IOConfig) -> OutputPaths:
+        run_dir = cfg.output_root / cfg.run_name / cfg.tag
+        plots = run_dir / "plots"
+        reports = run_dir / "reports"
+        stats = run_dir / "stats"
+        config = run_dir / "config"
+        for p in (plots, reports, stats, config):
+            p.mkdir(parents=True, exist_ok=True)
+        return OutputPaths(run_dir=run_dir, plots=plots, reports=reports, stats=stats, config=config)
+
+    @staticmethod
+    def _get_git_hash() -> Optional[str]:
+        try:
+            repo_root = Path(__file__).resolve().parents[1]
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return result.stdout.strip() or None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _load_df(path: Path) -> pd.DataFrame:
+        path = Path(path)
+        if path.suffix in {".pkl", ".pickle"}:
+            return pd.read_pickle(path)
+        if path.suffix in {".h5", ".hdf", ".hdf5"}:
+            return pd.read_hdf(path, key="HFSA")
+        if path.suffix == ".parquet":
+            return pd.read_parquet(path)
+        if path.suffix == ".csv":
+            return pd.read_csv(path)
+        raise ValueError(f"Unsupported input format: {path.suffix}")
