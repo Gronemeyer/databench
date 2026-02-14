@@ -3,3 +3,4 @@
 /__pycache__
 /databench.egg-info
 /databench/__pycache__
+*.csv
