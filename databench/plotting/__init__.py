@@ -1,6 +1,6 @@
 """Plotting utilities and axis helpers."""
-from .base import Plotter
-from .core import (
+from databench.plotting.base import Plotter
+from databench.plotting.core import (
     plot_mean_sem,
     plot_boxplot_mean_sem,
     plot_feature_longitudinal,
@@ -10,9 +10,9 @@ from .core import (
     FeaturePlotter,
     LongitudinalPlotter,
 )
-from .axes import SessionAxis, SubjectAxis
-from .mesomap import plot_stacked_envelopes, plot_spectrogram_panel
-from .treadmill import plot_locomotion_bouts
+from databench.plotting.axes import SessionAxis, SubjectAxis
+from databench.plotting.mesomap import plot_stacked_envelopes, plot_spectrogram_panel
+from databench.plotting.treadmill import plot_locomotion_bouts
 
 __all__ = [
     "plot_mean_sem",

@@ -3,12 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 import numpy as np
 
-from . import FeatureFn
-from ..utils import as_1d, get_first
+from databench.features.base import FeatureFn
+from databench.registry import register_feature
+from databench.utils import as_1d, get_first
 
 SOURCE_COLOR = "#1f77b4"
 
 
+@register_feature
 @dataclass(frozen=True)
 class MeanMeso(FeatureFn):
     name: str = "meso_mean"
@@ -23,6 +25,7 @@ class MeanMeso(FeatureFn):
         return float(np.nanmean(meso))
 
 
+@register_feature
 @dataclass(frozen=True)
 class StdMeso(FeatureFn):
     name: str = "meso_std"

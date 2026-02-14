@@ -1,6 +1,6 @@
 """Minimal, reproducible analysis/plotting toolkit for multiindex datasets."""
-from .bench import Bench
-from . import analysis, features, plotting, utils, debug
+from databench.bench import Bench
+from databench import analysis, features, plotting, utils, debug
 
 __all__ = [
     "Bench",

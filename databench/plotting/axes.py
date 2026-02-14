@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..analysis.base import AxisFn
+from databench.analysis.base import AxisFn
 
 
 @dataclass(frozen=True)

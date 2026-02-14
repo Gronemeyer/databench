@@ -9,8 +9,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy import signal
 
-from .base import AnalysisFn, Analysis, AnalysisResult
-from ..utils import as_1d, get_first, strip_prefix
+from databench.analysis.base import AnalysisFn, Analysis, AnalysisResult
+from databench.registry import register_analysis
+from databench.utils import as_1d, get_first, strip_prefix
 
 @dataclass(frozen=True)
 class OscillationDetectorConfig:
@@ -374,6 +375,7 @@ def save_oscillation_plot(
     return path
 
 
+@register_analysis
 @dataclass(frozen=True)
 class OscillationDetectorAnalysis(Analysis):
     name: str = "oscillation_detector"

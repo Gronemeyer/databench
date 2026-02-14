@@ -9,7 +9,7 @@ import json
 import subprocess
 
 if TYPE_CHECKING:
-    from .bench import Bench
+    from databench.bench import Bench
 
 
 def _safe_git_hash() -> Optional[str]:

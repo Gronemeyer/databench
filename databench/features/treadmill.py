@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Tuple
+from typing import Any, Iterable, Mapping, Tuple
 import numpy as np
+import pandas as pd
 
-from . import FeatureFn
-from ..utils import clean_xy, as_1d, get_first
+from databench.features.base import FeatureFn
+from databench.registry import register_feature
+from databench.utils import clean_xy, as_1d, get_first
 
 SOURCE_COLOR = "#2ca02c"
 
@@ -124,6 +126,7 @@ def _bout_stats(
     return mean_speeds, distances_m, durations_s
 
 
+@register_feature
 @dataclass(frozen=True)
 class MeanSpeedCMS(FeatureFn):
     name: str = "speed_mean_cms"
@@ -142,6 +145,7 @@ class MeanSpeedCMS(FeatureFn):
         return float(np.nanmean(spd_mm) / 10.0)
 
 
+@register_feature
 @dataclass(frozen=True)
 class StdSpeedCMS(FeatureFn):
     name: str = "speed_std_cms"
@@ -159,6 +163,7 @@ class StdSpeedCMS(FeatureFn):
         return float(np.nanstd(spd_mm) / 10.0)
 
 
+@register_feature
 @dataclass(frozen=True)
 class TotalDistanceM(FeatureFn):
     name: str = "distance_m"
@@ -214,6 +219,7 @@ class LocomotionBoutFeature(FeatureFn):
         return t, speed_cms, bouts
 
 
+@register_feature
 @dataclass(frozen=True)
 class LocomotionBoutsCount(LocomotionBoutFeature):
     name: str = "locomotion_bouts_n"
@@ -227,6 +233,7 @@ class LocomotionBoutsCount(LocomotionBoutFeature):
         return float(len(bouts))
 
 
+@register_feature
 @dataclass(frozen=True)
 class LocomotionBoutSpeedMeanCMS(LocomotionBoutFeature):
     name: str = "locomotion_bout_speed_mean_cms"
@@ -243,6 +250,7 @@ class LocomotionBoutSpeedMeanCMS(LocomotionBoutFeature):
         return float(np.nanmean(mean_speeds)) if mean_speeds else np.nan
 
 
+@register_feature
 @dataclass(frozen=True)
 class LocomotionBoutDistanceM(LocomotionBoutFeature):
     name: str = "locomotion_bout_distance_m"
@@ -259,6 +267,7 @@ class LocomotionBoutDistanceM(LocomotionBoutFeature):
         return float(np.nanmean(distances_m)) if distances_m else np.nan
 
 
+@register_feature
 @dataclass(frozen=True)
 class LocomotionBoutDurationS(LocomotionBoutFeature):
     name: str = "locomotion_bout_duration_s"

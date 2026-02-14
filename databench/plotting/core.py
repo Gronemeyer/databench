@@ -6,9 +6,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from ..analysis import longitudinal_summary
-from ..features import FeatureFn
-from .base import Plotter
+from databench.analysis.longitudinal import longitudinal_summary
+from databench.features.base import FeatureFn
+from databench.plotting.base import Plotter
+from databench.registry import register_plotter
 
 _COLORS = {"primary": "#1f77b4", "secondary": "#9467bd", "accent": "#2ca02c"}
 
@@ -202,6 +203,7 @@ def plot_feature(
     x: str = "session_n",
     color: Optional[str] = None,
     x_label: Optional[str] = None,
+    **kwargs,
 ):
     """Route plotting based on the feature's plotter hint and label."""
     plotter = _resolve_plotter(feature.plotter)
@@ -214,9 +216,11 @@ def plot_feature(
         color=use_color,
         y_label=feature.label,
         x_label=x_label,
+        **kwargs,
     )
 
 
+@register_plotter
 @dataclass(frozen=True)
 class FeaturePlotter(Plotter):
     name: str = "feature"
@@ -225,6 +229,7 @@ class FeaturePlotter(Plotter):
         return plot_feature(wide, feature, **kwargs)
 
 
+@register_plotter
 @dataclass(frozen=True)
 class LongitudinalPlotter(Plotter):
     name: str = "longitudinal"

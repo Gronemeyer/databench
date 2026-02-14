@@ -43,3 +43,58 @@ session_table = summary.data
 # Example: plot using plotting submodule
 fig, _ = bench.plot("feature", session_table, feature=feature_fns[0])
 ```
+
+## Adding a new analysis/plotter/feature
+
+Registration is explicit and local to the class via decorators. Define your class once and import it before you create a `Bench` instance.
+
+```python
+from dataclasses import dataclass
+
+from databench.registry import register_analysis
+from databench.analysis.base import Analysis, AnalysisResult
+from databench import Bench
+
+
+@register_analysis
+@dataclass(frozen=True)
+class MyAnalysis(Analysis):
+    name: str = "my_analysis"
+
+    def run(self, wide, **kwargs) -> AnalysisResult:
+        result = wide.describe()
+        return AnalysisResult(name=self.name, data=result)
+
+
+# Make sure this module is imported before Bench() so registration runs.
+bench = Bench()
+```
+
+Same idea for plotters and features:
+
+```python
+from dataclasses import dataclass
+
+from databench.registry import register_plotter, register_feature
+from databench.plotting.base import Plotter
+from databench.features.base import FeatureFn
+
+
+@register_plotter
+@dataclass(frozen=True)
+class MyPlotter(Plotter):
+    name: str = "my_plotter"
+
+    def plot(self, *args, **kwargs):
+        ...
+
+
+@register_feature
+@dataclass(frozen=True)
+class MyFeature(FeatureFn):
+    name: str = "my_feature"
+    label: str = "My Feature"
+
+    def _run_impl(self, row) -> float:
+        ...
+```

@@ -6,63 +6,31 @@ import json
 from dataclasses import asdict
 import subprocess
 
+import numpy as np
 import pandas as pd
 
-from .config import FilterConfig, IOConfig, OutputPaths
-from .analysis import (
-    Analysis,
-    AnalysisResult,
-    LongitudinalAnalysis,
-    OscillationDetectorAnalysis,
-)
-from .features import (
-    FeatureFn,
-    MeanSpeedCMS,
-    StdSpeedCMS,
-    TotalDistanceM,
-    LocomotionBoutsCount,
-    LocomotionBoutSpeedMeanCMS,
-    LocomotionBoutDistanceM,
-    LocomotionBoutDurationS,
-    MeanPupilMM,
-    StdPupilMM,
-    MeanMeso,
-    StdMeso,
-)
-from .plotting import Plotter, FeaturePlotter, LongitudinalPlotter
-from .utils import drop_rows, session_to_int
-from .debug import get_row, log_context
-
-
-DEFAULT_FEATURE_CLASSES: tuple[Type[FeatureFn], ...] = (
-    MeanSpeedCMS,
-    StdSpeedCMS,
-    TotalDistanceM,
-    LocomotionBoutsCount,
-    LocomotionBoutSpeedMeanCMS,
-    LocomotionBoutDistanceM,
-    LocomotionBoutDurationS,
-    MeanPupilMM,
-    StdPupilMM,
-    MeanMeso,
-    StdMeso,
-)
-
-
-DEFAULT_ANALYSIS_CLASSES: tuple[Type[Analysis], ...] = (
-    LongitudinalAnalysis,
-    OscillationDetectorAnalysis,
-)
-
-
-DEFAULT_PLOTTER_CLASSES: tuple[Type[Plotter], ...] = (
-    FeaturePlotter,
-    LongitudinalPlotter,
-)
+from databench.analysis import Analysis, AnalysisResult
+from databench.config import FilterConfig, IOConfig, OutputPaths
+from databench.features import FeatureFn
+from databench.plotting import Plotter
+from databench.registry import ANALYSIS_CLASSES, FEATURE_CLASSES, PLOTTER_CLASSES
+from databench.utils import drop_rows, session_to_int
+from databench.debug import get_row, log_context
 
 
 class Bench:
-    """Centralized entry point for configuring datasets, outputs, and features."""
+    """User-facing entry point for loading data, running analyses, and making plots.
+
+    Typical flow:
+    1) Create a `Bench()` instance.
+    2) Call `setup()` to define input/output paths.
+    3) `load()` your dataset.
+    4) Build feature tables with `build_session_table()`.
+    5) Use `analyze()` and `plot()` to generate results and figures.
+
+    Features, analyses, and plotters are registered explicitly with decorators.
+    Import any custom modules before creating `Bench()` so registration runs.
+    """
 
     def __init__(
         self,
@@ -70,6 +38,11 @@ class Bench:
         analyses: Optional[Iterable[Union[Analysis, Type[Analysis]]]] = None,
         plotters: Optional[Iterable[Union[Plotter, Type[Plotter]]]] = None,
     ) -> None:
+        """Create a Bench and register default components.
+
+        Example:
+            bench = Bench()
+        """
         self._features: Dict[str, FeatureFn] = {}
         self._analyses: Dict[str, Analysis] = {}
         self._plotters: Dict[str, Plotter] = {}
@@ -78,14 +51,19 @@ class Bench:
         self.output_paths: Optional[OutputPaths] = None
         self._usage: Dict[str, list] = {"features": [], "analyses": [], "plots": []}
 
-        for feat in (features or DEFAULT_FEATURE_CLASSES):
+        for feat in (features or FEATURE_CLASSES):
             self.register_feature(feat)
-        for analysis in (analyses or DEFAULT_ANALYSIS_CLASSES):
+        for analysis in (analyses or ANALYSIS_CLASSES):
             self.register_analysis(analysis)
-        for plotter in (plotters or DEFAULT_PLOTTER_CLASSES):
+        for plotter in (plotters or PLOTTER_CLASSES):
             self.register_plotter(plotter)
 
     def register_feature(self, feat: Union[FeatureFn, Type[FeatureFn]]) -> "Bench":
+        """Register a feature class or instance.
+
+        Example:
+            bench.register_feature(MyFeature)
+        """
         if isinstance(feat, type):
             if not issubclass(feat, FeatureFn):
                 raise TypeError("Feature class must subclass FeatureFn")
@@ -95,10 +73,17 @@ class Bench:
         else:
             raise TypeError("Feature must be a FeatureFn or FeatureFn class")
 
+        if instance.name in self._features:
+            raise ValueError(f"Feature already registered: {instance.name!r}")
         self._features[instance.name] = instance
         return self
 
     def register_analysis(self, analysis: Union[Analysis, Type[Analysis]]) -> "Bench":
+        """Register an analysis class or instance.
+
+        Example:
+            bench.register_analysis(MyAnalysis)
+        """
         if isinstance(analysis, type):
             if not issubclass(analysis, Analysis):
                 raise TypeError("Analysis class must subclass Analysis")
@@ -108,10 +93,21 @@ class Bench:
         else:
             raise TypeError("Analysis must be an Analysis or Analysis class")
 
+        if instance.name in self._analyses:
+            raise ValueError(f"Analysis already registered: {instance.name!r}")
+        if instance.name in self._plotters:
+            raise ValueError(
+                f"Analysis name conflicts with plotter: {instance.name!r}"
+            )
         self._analyses[instance.name] = instance
         return self
 
     def register_plotter(self, plotter: Union[Plotter, Type[Plotter]]) -> "Bench":
+        """Register a plotter class or instance.
+
+        Example:
+            bench.register_plotter(MyPlotter)
+        """
         if isinstance(plotter, type):
             if not issubclass(plotter, Plotter):
                 raise TypeError("Plotter class must subclass Plotter")
@@ -121,24 +117,50 @@ class Bench:
         else:
             raise TypeError("Plotter must be a Plotter or Plotter class")
 
+        if instance.name in self._plotters:
+            raise ValueError(f"Plotter already registered: {instance.name!r}")
+        if instance.name in self._analyses:
+            raise ValueError(
+                f"Plotter name conflicts with analysis: {instance.name!r}"
+            )
         self._plotters[instance.name] = instance
         return self
 
     @property
     def data(self) -> List[FeatureFn]:
+        """Return registered feature instances.
+
+        Example:
+            feature_fns = bench.data
+        """
         return list(self._features.values())
 
     @property
     def feature_names(self) -> List[str]:
+        """Return registered feature names.
+
+        Example:
+            names = bench.feature_names
+        """
         return list(self._features.keys())
 
     def get_feature(self, name: str) -> FeatureFn:
+        """Fetch a feature by name.
+
+        Example:
+            speed = bench.get_feature("speed_mean_cms")
+        """
         try:
             return self._features[name]
         except KeyError as exc:
             raise KeyError(f"Unknown feature: {name!r}") from exc
 
     def analyze(self, name: str, *args, **kwargs) -> AnalysisResult:
+        """Run a named analysis and return its result.
+
+        Example:
+            result = bench.analyze("longitudinal_summary", table, y="speed_mean_cms")
+        """
         try:
             analysis = self._analyses[name]
         except KeyError as exc:
@@ -147,6 +169,11 @@ class Bench:
         return analysis.run(*args, **kwargs)
 
     def plot(self, name: str, *args, **kwargs):
+        """Run a named plotter or analysis plot.
+
+        Example:
+            fig, _ = bench.plot("feature", table, feature=bench.data[0])
+        """
         if name in self._plotters:
             self._usage["plots"].append({"name": name, "kwargs": kwargs})
             return self._plotters[name].plot(*args, **kwargs)
@@ -156,6 +183,11 @@ class Bench:
         raise KeyError(f"Unknown plotter or analysis: {name!r}")
 
     def save(self, result: AnalysisResult, **kwargs) -> list:
+        """Save a result using the originating analysis.
+
+        Example:
+            bench.save(result, stats_dir=paths.stats, plots_dir=paths.plots)
+        """
         try:
             analysis = self._analyses[result.name]
         except KeyError as exc:
@@ -163,6 +195,11 @@ class Bench:
         return analysis.save(result, **kwargs)
 
     def set_filters(self, drop_rows: tuple = ()) -> FilterConfig:
+        """Set dataset filters for later use with `filter_data()`.
+
+        Example:
+            bench.set_filters(drop_rows=(("GS29", "ses-04", "task-movies"),))
+        """
         cfg = FilterConfig(drop_rows=drop_rows)
         self.filter_config = cfg
         return cfg
@@ -174,6 +211,11 @@ class Bench:
         run_name: str = "databench",
         tag: Optional[str] = None,
     ) -> tuple[IOConfig, OutputPaths]:
+        """Define input/output paths and create output folders.
+
+        Example:
+            io_cfg, paths = bench.setup("/path/to/input.pkl")
+        """
         if tag:
             cfg = IOConfig(input_path=Path(input_path), output_root=output_root, run_name=run_name, tag=tag)
         else:
@@ -184,6 +226,11 @@ class Bench:
         return cfg, paths
 
     def load(self, input_path: Optional[Path] = None) -> pd.DataFrame:
+        """Load the dataset from the configured input path.
+
+        Example:
+            df = bench.load()
+        """
         if input_path is None:
             if self.io_config is None:
                 raise ValueError("Call setup() or pass input_path before loading.")
@@ -195,6 +242,11 @@ class Bench:
         df: pd.DataFrame,
         features: Optional[Iterable[FeatureFn]] = None,
     ) -> pd.DataFrame:
+        """Compute a wide feature table from a raw dataset.
+
+        Example:
+            table = bench.build_session_table(df)
+        """
         use_features = list(features) if features is not None else self.data
         self._usage["features"].append({"names": [f.name for f in use_features]})
         rows = []
@@ -216,6 +268,11 @@ class Bench:
 		task: Optional[str] = None,
 		debug: bool = False,
     ):
+        """Compute one feature for a single row selection.
+
+        Example:
+                val = bench.run_feature_on_row(df, bench.data[0], subject="GS29", session="ses-01")
+        """
         idx, row = get_row(df, subject, session, task)
         val = feature.run(row)
         if debug:
@@ -223,11 +280,21 @@ class Bench:
         return val
 
     def filter_data(self, df: pd.DataFrame, drop_rows_list: Optional[tuple] = None) -> pd.DataFrame:
+        """Filter rows using stored or provided drop rules.
+
+        Example:
+            df = bench.filter_data(df)
+        """
         if drop_rows_list is None and self.filter_config is not None:
             drop_rows_list = self.filter_config.drop_rows
         return drop_rows(df, drop_rows_list or ())
 
     def save_table(self, df: pd.DataFrame, name: str = "table.csv", folder: str = "stats") -> Path:
+        """Save a table to the configured output folders.
+
+        Example:
+            path = bench.save_table(table, name="summary.csv")
+        """
         if self.output_paths is None:
             raise ValueError("Call setup() before save_table().")
         if not hasattr(self.output_paths, folder):
@@ -245,6 +312,11 @@ class Bench:
         return path
 
     def save_provenance(self, name: str = "provenance.json") -> Path:
+        """Write a lightweight provenance record for the current run.
+
+        Example:
+            path = bench.save_provenance()
+        """
         if self.output_paths is None:
             raise ValueError("Call setup() before save_provenance().")
         config_dir = self.output_paths.config
@@ -301,6 +373,11 @@ class Bench:
         dpi: int = 300,
         bbox_inches: str = "tight",
     ) -> Path:
+        """Save a matplotlib figure to the output folders.
+
+        Example:
+            path = bench.save_figure(fig, name="overview.png")
+        """
         if self.output_paths is None:
             raise ValueError("Call setup() before save_figure().")
         if not hasattr(self.output_paths, folder):
@@ -320,6 +397,11 @@ class Bench:
         folder: str = "stats",
         id_sep: str = "_",
     ) -> Path:
+        """Export a per-row feature report from a nested signal column.
+
+        Example:
+            path = bench.export_feature_report(df, source="meso", feature="meso_tiff")
+        """
         if self.output_paths is None:
             raise ValueError("Call setup() before export_feature_report().")
         if not isinstance(df.index, pd.MultiIndex):

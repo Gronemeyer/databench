@@ -6,10 +6,10 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from .base import AnalysisFn, Analysis, AnalysisResult
-from ..debug import log_context
-from ..utils import strip_prefix
-from ..plotting import plot_stacked_envelopes, plot_spectrogram_panel
+from databench.analysis.base import AnalysisFn, Analysis, AnalysisResult
+from databench.debug import log_context
+from databench.utils import strip_prefix
+from databench.plotting import plot_stacked_envelopes, plot_spectrogram_panel
 from scipy import signal
 
 

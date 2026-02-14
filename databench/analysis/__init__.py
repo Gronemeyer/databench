@@ -1,10 +1,10 @@
 """Analysis/stats module organized like features (minimal classes + core funcs)."""
 from __future__ import annotations
 
-from .base import StatFn, AxisFn, AnalysisFn, Analysis, AnalysisResult
-from .longitudinal import MeanSEM, longitudinal_summary, LongitudinalAnalysis
-from .mesomap_hilbert import MesomapHilbertConfig, run_mesomap_hilbert, export_hilbert_envelopes
-from .oscillation_detector import (
+from databench.analysis.base import StatFn, AxisFn, AnalysisFn, Analysis, AnalysisResult
+from databench.analysis.longitudinal import MeanSEM, longitudinal_summary, LongitudinalAnalysis
+from databench.analysis.mesomap_hilbert import MesomapHilbertConfig, run_mesomap_hilbert, export_hilbert_envelopes
+from databench.analysis.oscillation_detector import (
     OscillationDetectorConfig,
     OscillationContext,
     OscillationResult,

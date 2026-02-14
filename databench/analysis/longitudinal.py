@@ -5,7 +5,8 @@ from typing import Iterable, Tuple, Optional
 
 import pandas as pd
 
-from .base import StatFn, Analysis, AnalysisResult
+from databench.analysis.base import StatFn, Analysis, AnalysisResult
+from databench.registry import register_analysis
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,7 @@ def longitudinal_summary(
     return out, stats
 
 
+@register_analysis
 @dataclass(frozen=True)
 class LongitudinalAnalysis(Analysis):
     name: str = "longitudinal_summary"
@@ -76,6 +78,6 @@ class LongitudinalAnalysis(Analysis):
         title = kwargs.pop("title", f"{y} across sessions")
         color = kwargs.pop("color", "#1f77b4")
         y_label = kwargs.pop("y_label", y)
-        from ..plotting.core import plot_mean_sem
+        from databench.plotting.core import plot_mean_sem
 
         return plot_mean_sem(result.table, x=x, y_label=y_label, title=title, color=color, **kwargs)
