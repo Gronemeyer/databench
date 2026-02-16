@@ -1,36 +1,36 @@
 from __future__ import annotations
 
 from pathlib import Path
+import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 from databench import Bench
-from databench.features.treadmill import detect_locomotion_bouts
-from databench.plotting import plot_locomotion_bouts
+from databench.features.treadmill import locomotion_bout_events
+from databench.plotting import FeaturePlotter, plot_locomotion_bouts
 from databench.utils import clean_xy, get_first, strip_prefix
 
 
-DATASET = Path(r"C:\dev\datakit\260129_HFSA-full.pkl")
-RUN_NAME = "new-plots"
+DATASET = Path(r"D:\4jake\260211_ETOH_dataset.pkl")
+RUN_NAME = "test-new-bouts"
 EXPORT_SVG = True
+TASK_FILTER = "task-spont"
 
 
 def main() -> None:
     bench = Bench()
-    bench.setup(input_path=DATASET, run_name=RUN_NAME, tag="HFSA_locomotion_bouts-5-seconds")
+    bench.setup(input_path=DATASET, run_name=RUN_NAME, tag="ETOH_locomotion_bouts-5-seconds")
     df = bench.load()
-    df = bench.filter_data(df, drop_rows_list=[
-		("STREHAB07", "ses-11", "task-widefield"),])
+    df = df[df.index.get_level_values("Task") == TASK_FILTER]
 
-    if bench.output_paths is None:
-        raise ValueError("Output paths not initialized. Call setup() first.")
     paths = bench.output_paths
+    feature_plotter = FeaturePlotter()
 
-    bouts_feature = bench.get_feature("locomotion_bouts_n")
     features = [
         bench.get_feature("speed_mean_cms"),
+        bench.get_feature("speed_std_cms"),
         bench.get_feature("distance_m"),
-        bouts_feature,
+        bench.get_feature("locomotion_bouts_n"),
         bench.get_feature("locomotion_bout_speed_mean_cms"),
         bench.get_feature("locomotion_bout_distance_m"),
         bench.get_feature("locomotion_bout_duration_s"),
@@ -41,7 +41,7 @@ def main() -> None:
 
     for feat in features:
         fig, _ = bench.plot(
-            "feature",
+            feature_plotter,
             session_table,
             feature=feat,
             x_label="Session (days)",
@@ -55,6 +55,8 @@ def main() -> None:
     report_path = paths.reports / "locomotion_bouts_report.pdf"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(report_path) as pdf:
+        all_bout_speeds = []
+        all_bout_durations = []
         for idx, row in df.iterrows():
             if not isinstance(idx, tuple) or len(idx) < 3:
                 continue
@@ -70,16 +72,42 @@ def main() -> None:
             if t is None:
                 continue
             speed_cms = spd_mm / 10.0
-            bouts = detect_locomotion_bouts(
+            bouts, _, _, _, _ = locomotion_bout_events(
                 t,
                 speed_cms,
-                min_speed_cms=bouts_feature.min_speed_cms,
+                min_speed_cms=bench.get_feature("locomotion_bouts_n").min_speed_cms,
                 min_duration_s=bouts_feature.min_duration_s,
                 merge_gap_s=bouts_feature.merge_gap_s,
             )
+            if bouts:
+                dt_med = float(np.nanmedian(np.diff(t))) if t.size > 1 else 0.0
+                for s, e in bouts:
+                    if e < s:
+                        continue
+                    duration = float(t[e] - t[s] + dt_med)
+                    all_bout_durations.append(duration)
+                    all_bout_speeds.append(float(np.nanmean(np.abs(speed_cms[s : e + 1]))))
 
             title = f"Subject={subject_id} | Session={session_id} | Task={task_id}"
             fig, _ = plot_locomotion_bouts(t, speed_cms, bouts, title=title)
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+
+        if all_bout_durations:
+            fig, ax = plt.subplots(figsize=(7, 4))
+            ax.hist(all_bout_durations, bins=30, color="#4c72b0", edgecolor="white")
+            ax.set_title("Bout duration distribution")
+            ax.set_xlabel("Duration (s)")
+            ax.set_ylabel("Count")
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+
+        if all_bout_speeds:
+            fig, ax = plt.subplots(figsize=(7, 4))
+            ax.hist(all_bout_speeds, bins=30, color="#55a868", edgecolor="white")
+            ax.set_title("Bout mean speed distribution")
+            ax.set_xlabel("Speed (cm/s)")
+            ax.set_ylabel("Count")
             pdf.savefig(fig, bbox_inches="tight")
             plt.close(fig)
 

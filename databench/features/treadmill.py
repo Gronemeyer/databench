@@ -82,22 +82,204 @@ def _locomotion_bouts(
     return segments
 
 
-def detect_locomotion_bouts(
-    t: np.ndarray,
-    speed_cms: np.ndarray,
+def locomotion_bout_events(
+    t: np.ndarray | pd.DataFrame,
+    speed_cms: np.ndarray | None = None,
     *,
     min_speed_cms: float = 0.5,
     min_duration_s: float = 1.0,
     merge_gap_s: float = 0.5,
-) -> list[Tuple[int, int]]:
-    """Detect locomotion bouts from a speed trace in cm/s."""
-    return _locomotion_bouts(
+    as_table: bool = False,
+    context: Mapping[str, Any] | None = None,
+    group_cols: tuple[str, ...] = ("Subject", "Session", "Task"),
+    time_col: str = "time_elapsed_s",
+    speed_col: str = "speed_mm",
+    speed_scale_to_cms: float = 10.0,
+) -> tuple[list[Tuple[int, int]], np.ndarray, np.ndarray, np.ndarray, np.ndarray] | pd.DataFrame:
+    """
+    Return bouts with onset/offset indices and times.
+
+    Parameters
+    ----------
+    as_table : bool
+        If True, return a DataFrame with one row per bout and columns:
+        ['bout_id', 'onset_idx', 'offset_idx', 'onset_t', 'offset_t'].
+        If False (default), return the legacy tuple
+        (bouts, onset_idx, offset_idx, onset_t, offset_t).
+    context : mapping[str, Any] | None
+        Optional constant columns to append to each returned bout row when
+        `as_table=True` (e.g., Subject/Session/Task identifiers).
+    group_cols, time_col, speed_col, speed_scale_to_cms
+        Used only when `t` is a pandas DataFrame. The function groups by
+        `group_cols`, reads per-group time/speed arrays from `time_col` and
+        `speed_col`, converts speed to cm/s by dividing by `speed_scale_to_cms`,
+        and returns one concatenated events table.
+    """
+    if isinstance(t, pd.DataFrame):
+        if not as_table:
+            raise ValueError("DataFrame input requires as_table=True.")
+        if speed_cms is not None:
+            raise ValueError("Do not pass speed_cms when t is a DataFrame.")
+
+        required_cols = set(group_cols) | {time_col, speed_col}
+        missing_cols = required_cols.difference(t.columns)
+        if missing_cols:
+            missing = ", ".join(sorted(missing_cols))
+            raise ValueError(f"DataFrame missing required columns: {missing}")
+
+        tables: list[pd.DataFrame] = []
+        for key, group in t.groupby(list(group_cols), sort=False):
+            group = group.sort_values(time_col)
+            t_raw = group[time_col].to_numpy()
+            v_raw = group[speed_col].to_numpy()
+            valid = np.isfinite(t_raw) & np.isfinite(v_raw)
+            tt = t_raw[valid]
+            vv = v_raw[valid]
+            if tt.size < 3:
+                continue
+
+            local_context = {col: val for col, val in zip(group_cols, key if isinstance(key, tuple) else (key,))}
+            if context:
+                local_context.update(dict(context))
+
+            bout_table = locomotion_bout_events(
+                tt,
+                vv / speed_scale_to_cms,
+                min_speed_cms=min_speed_cms,
+                min_duration_s=min_duration_s,
+                merge_gap_s=merge_gap_s,
+                as_table=True,
+                context=local_context,
+            )
+            if bout_table.empty:
+                continue
+            tables.append(bout_table)
+
+        base_cols = ["bout_id", "onset_idx", "offset_idx", "onset_t", "offset_t"]
+        extra_cols = list(group_cols)
+        if context:
+            extra_cols.extend([c for c in context.keys() if c not in extra_cols])
+        out_cols = base_cols + extra_cols
+        if not tables:
+            return pd.DataFrame(columns=out_cols)
+        out = pd.concat(tables, ignore_index=True)
+        for col in out_cols:
+            if col not in out.columns:
+                out[col] = np.nan
+        return out[out_cols]
+
+    if speed_cms is None:
+        raise ValueError("speed_cms is required when t is an array.")
+
+    """Detect locomotion bouts and return bout indices + onset/offset times."""
+    bouts = _locomotion_bouts(
         t,
         speed_cms,
         min_speed_cms=min_speed_cms,
         min_duration_s=min_duration_s,
         merge_gap_s=merge_gap_s,
     )
+    if not bouts:
+        if as_table:
+            table = pd.DataFrame(
+                columns=["bout_id", "onset_idx", "offset_idx", "onset_t", "offset_t"]
+            )
+            if context:
+                for key, value in context.items():
+                    table[key] = value
+            return table
+        empty = np.array([], dtype=int)
+        empty_t = np.array([], dtype=float)
+        return [], empty, empty, empty_t, empty_t
+    onset_idx = np.array([s for s, _ in bouts], dtype=int)
+    offset_idx = np.array([e for _, e in bouts], dtype=int)
+    onset_t = t[onset_idx].astype(float)
+    offset_t = t[offset_idx].astype(float)
+    if as_table:
+        table = pd.DataFrame(
+            {
+                "bout_id": np.arange(len(bouts), dtype=int),
+                "onset_idx": onset_idx,
+                "offset_idx": offset_idx,
+                "onset_t": onset_t,
+                "offset_t": offset_t,
+            }
+        )
+        if context:
+            for key, value in context.items():
+                table[key] = value
+        return table
+    return bouts, onset_idx, offset_idx, onset_t, offset_t
+
+
+@dataclass(frozen=True)
+class LocomotionBoutEventsExtractor:
+    """Reusable, explicit bout-event extractor for long-table pipelines."""
+
+    min_speed_cms: float = 0.5
+    min_duration_s: float = 1.0
+    merge_gap_s: float = 0.5
+    group_cols: tuple[str, ...] = ("Subject", "Session", "Task")
+    time_col: str = "time_elapsed_s"
+    speed_col: str = "speed_mm"
+    speed_scale_to_cms: float = 10.0
+
+    def run(self, long: pd.DataFrame) -> pd.DataFrame:
+        return locomotion_bout_events(
+            long,
+            min_speed_cms=self.min_speed_cms,
+            min_duration_s=self.min_duration_s,
+            merge_gap_s=self.merge_gap_s,
+            as_table=True,
+            group_cols=self.group_cols,
+            time_col=self.time_col,
+            speed_col=self.speed_col,
+            speed_scale_to_cms=self.speed_scale_to_cms,
+        )
+
+    def __call__(self, long: pd.DataFrame) -> pd.DataFrame:
+        return self.run(long)
+
+
+def epoch_indices(
+    t: np.ndarray,
+    t0: float,
+    *,
+    window: tuple[float, float] = (-2.0, 1.0),
+) -> Tuple[int, int] | None:
+    """Return inclusive index bounds for an epoch; None if window exceeds data range."""
+    t_start = t0 + window[0]
+    t_end = t0 + window[1]
+    if t.size == 0 or t_start < t.min() or t_end > t.max():
+        return None
+    i0 = int(np.searchsorted(t, t_start, side="left"))
+    i1 = int(np.searchsorted(t, t_end, side="right") - 1)
+    if i1 < i0:
+        return None
+    return i0, i1
+
+
+def extract_epoch_interpolated(
+    t: np.ndarray,
+    y: np.ndarray,
+    t0: float,
+    *,
+    window: tuple[float, float] = (-2.0, 1.0),
+    dt: float = 0.02,
+) -> tuple[np.ndarray, np.ndarray] | tuple[None, None]:
+    """Interpolate an epoch onto a uniform grid; returns (rel_t, y_interp)."""
+    valid = np.isfinite(t) & np.isfinite(y)
+    if valid.sum() < 5:
+        return None, None
+    t_valid = t[valid]
+    y_valid = y[valid]
+    bounds = epoch_indices(t_valid, t0, window=window)
+    if bounds is None:
+        return None, None
+    rel_t = np.arange(window[0], window[1] + 1e-12, dt)
+    tgt = t0 + rel_t
+    yy = np.interp(tgt, t_valid, y_valid)
+    return rel_t, yy
 
 
 def _bout_stats(
@@ -201,6 +383,13 @@ class LocomotionBoutFeature(FeatureFn):
     min_duration_s: float = 1.5
     merge_gap_s: float = 1.5
 
+    def _bout_params(self) -> dict[str, float]:
+        return {
+            "min_speed_cms": self.min_speed_cms,
+            "min_duration_s": self.min_duration_s,
+            "merge_gap_s": self.merge_gap_s,
+        }
+
     def _get_bouts(self, row):
         t, spd_mm = clean_xy(
             get_first(row, [("treadmill", "time_elapsed_s"), ("encoder", "time_elapsed_s")]),
@@ -209,14 +398,19 @@ class LocomotionBoutFeature(FeatureFn):
         if t is None:
             return None
         speed_cms = spd_mm / 10.0
-        bouts = _locomotion_bouts(
+        bouts, _, _, _, _ = locomotion_bout_events(t, speed_cms, **self._bout_params())
+        return t, speed_cms, bouts
+
+    def _get_bout_events(self, row):
+        out = self._get_bouts(row)
+        if out is None:
+            return None
+        t, speed_cms, _ = out
+        return locomotion_bout_events(
             t,
             speed_cms,
-            min_speed_cms=self.min_speed_cms,
-            min_duration_s=self.min_duration_s,
-            merge_gap_s=self.merge_gap_s,
+            **self._bout_params(),
         )
-        return t, speed_cms, bouts
 
 
 @register_feature

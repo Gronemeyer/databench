@@ -7,6 +7,7 @@ from databench.plotting.core import (
     plot_feature_boxplot,
     plot_two_panel_longitudinal,
     plot_feature,
+    DerivedColumnSpec,
     FeaturePlotter,
     LongitudinalPlotter,
 )
@@ -21,6 +22,7 @@ __all__ = [
     "plot_feature_boxplot",
     "plot_two_panel_longitudinal",
     "plot_feature",
+    "DerivedColumnSpec",
     "Plotter",
     "FeaturePlotter",
     "LongitudinalPlotter",

@@ -5,6 +5,7 @@ from typing import Optional
 
 from databench import Bench
 from databench.analysis import (
+    OscillationDetectorAnalysis,
     OscillationDetectorConfig,
     context_from_index,
 )
@@ -56,8 +57,9 @@ def main():
     )
 
     ctx = context_from_index(idx, source=ROI_SOURCE, signal_key=ROI_NAME, time_key=TIME_KEY)
+    analysis = OscillationDetectorAnalysis()
     result = bench.analyze(
-        "oscillation_detector",
+        analysis,
         row,
         cfg,
         source=ROI_SOURCE,

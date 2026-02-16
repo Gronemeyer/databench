@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Type, Union
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Type, Union
 import json
 from dataclasses import asdict
 import subprocess
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -50,6 +51,12 @@ class Bench:
         self.filter_config: Optional[FilterConfig] = None
         self.output_paths: Optional[OutputPaths] = None
         self._usage: Dict[str, list] = {"features": [], "analyses": [], "plots": []}
+        self._derived_column_meta: Dict[str, Dict[str, Any]] = {}
+        self._saved_outputs: Dict[str, List[str]] = {
+            "tables": [],
+            "figures": [],
+            "other": [],
+        }
 
         for feat in (features or FEATURE_CLASSES):
             self.register_feature(feat)
@@ -155,32 +162,154 @@ class Bench:
         except KeyError as exc:
             raise KeyError(f"Unknown feature: {name!r}") from exc
 
-    def analyze(self, name: str, *args, **kwargs) -> AnalysisResult:
+    @staticmethod
+    def _serialize_component(component: Any) -> Dict[str, Any]:
+        try:
+            return asdict(component)
+        except Exception:
+            return {"class": component.__class__.__name__}
+
+    def _resolve_analysis(
+        self,
+        analysis: Union[Analysis, Type[Analysis]],
+    ) -> Analysis:
+        if isinstance(analysis, type):
+            if not issubclass(analysis, Analysis):
+                raise TypeError("analysis class must subclass Analysis")
+            return analysis()
+        if isinstance(analysis, Analysis):
+            return analysis
+        raise TypeError("analysis must be an Analysis instance or Analysis class")
+
+    def _resolve_plotter_or_analysis(
+        self,
+        plotter: Union[Plotter, Type[Plotter], Analysis, Type[Analysis]],
+    ) -> Union[Plotter, Analysis]:
+        if isinstance(plotter, type):
+            if issubclass(plotter, Plotter):
+                return plotter()
+            if issubclass(plotter, Analysis):
+                return plotter()
+            raise TypeError("plotter class must subclass Plotter or Analysis")
+        if isinstance(plotter, (Plotter, Analysis)):
+            return plotter
+        raise TypeError("plotter must be a Plotter/Analysis instance or Plotter/Analysis class")
+
+    def list_features(self) -> List[str]:
+        """List registered first-order feature names."""
+        return sorted(self._features.keys())
+
+    def list_analyses(self) -> List[str]:
+        """List registered analysis names."""
+        return sorted(self._analyses.keys())
+
+    def list_plotters(self) -> List[str]:
+        """List registered plotter names."""
+        return sorted(self._plotters.keys())
+
+    def list_derived_columns(self) -> List[str]:
+        """List registered second-order (derived) column names."""
+        return sorted(self._derived_column_meta.keys())
+
+    def register_derived_column(
+        self,
+        name: str,
+        label: Optional[str] = None,
+        color: Optional[str] = None,
+        plotter: str = "longitudinal",
+    ) -> Dict[str, Any]:
+        """Register plotting metadata for a derived/second-order column."""
+        spec = {
+            "name": name,
+            "label": label or name,
+            "color": color,
+            "plotter": plotter,
+        }
+        self._derived_column_meta[name] = spec
+        return dict(spec)
+
+    def get_column_plot_spec(self, name: str) -> Union[FeatureFn, Dict[str, Any]]:
+        """Resolve first-order features or derived-column metadata for plotting."""
+        if name in self._features:
+            return self._features[name]
+        if name in self._derived_column_meta:
+            return dict(self._derived_column_meta[name])
+        known = sorted(set(self.list_features()) | set(self.list_derived_columns()))
+        raise KeyError(f"Unknown plottable column: {name!r}. Known: {', '.join(known)}")
+
+    @staticmethod
+    def _has_required_column(df: pd.DataFrame, col: str) -> bool:
+        if col in df.columns:
+            return True
+        if isinstance(df.columns, pd.MultiIndex):
+            for level in range(df.columns.nlevels):
+                if col in df.columns.get_level_values(level):
+                    return True
+        if col in df.index.names:
+            return True
+        return False
+
+    def preflight(
+        self,
+        *,
+        analysis: Optional[Union[Analysis, Type[Analysis]]] = None,
+        plotter: Optional[Union[Plotter, Type[Plotter], Analysis, Type[Analysis]]] = None,
+        feature: Optional[str] = None,
+        df: Optional[pd.DataFrame] = None,
+        required_columns: Optional[Iterable[str]] = None,
+    ) -> None:
+        """Validate names and required columns before expensive work."""
+        if analysis is not None:
+            self._resolve_analysis(analysis)
+        if plotter is not None:
+            self._resolve_plotter_or_analysis(plotter)
+
+        if feature is not None:
+            self.get_column_plot_spec(feature)
+
+        if df is not None and required_columns is not None:
+            missing = [c for c in required_columns if not self._has_required_column(df, c)]
+            if missing:
+                raise ValueError(f"Missing required columns: {', '.join(missing)}")
+
+    def analyze(self, analysis: Union[Analysis, Type[Analysis]], *args, **kwargs) -> AnalysisResult:
         """Run a named analysis and return its result.
 
         Example:
-            result = bench.analyze("longitudinal_summary", table, y="speed_mean_cms")
+            from databench.analysis import LongitudinalAnalysis
+            result = bench.analyze(LongitudinalAnalysis(), table, y="speed_mean_cms")
         """
-        try:
-            analysis = self._analyses[name]
-        except KeyError as exc:
-            raise KeyError(f"Unknown analysis: {name!r}") from exc
-        self._usage["analyses"].append({"name": name, "kwargs": kwargs})
-        return analysis.run(*args, **kwargs)
+        analysis_obj = self._resolve_analysis(analysis)
+        self._usage["analyses"].append(
+            {
+                "name": analysis_obj.name,
+                "kwargs": kwargs,
+                "config": self._serialize_component(analysis_obj),
+            }
+        )
+        return analysis_obj.run(*args, **kwargs)
 
-    def plot(self, name: str, *args, **kwargs):
+    def plot(self, plotter: Union[Plotter, Type[Plotter], Analysis, Type[Analysis]], *args, **kwargs):
         """Run a named plotter or analysis plot.
 
         Example:
-            fig, _ = bench.plot("feature", table, feature=bench.data[0])
+            from databench.plotting import FeaturePlotter
+            fig, _ = bench.plot(FeaturePlotter(), table, feature=bench.data[0])
         """
-        if name in self._plotters:
-            self._usage["plots"].append({"name": name, "kwargs": kwargs})
-            return self._plotters[name].plot(*args, **kwargs)
-        if name in self._analyses:
-            self._usage["plots"].append({"name": name, "kwargs": kwargs})
-            return self._analyses[name].plot(*args, **kwargs)
-        raise KeyError(f"Unknown plotter or analysis: {name!r}")
+        plot_obj = self._resolve_plotter_or_analysis(plotter)
+        if plot_obj.name == "feature":
+            if "feature" in kwargs and isinstance(kwargs["feature"], str):
+                kwargs["feature"] = self.get_column_plot_spec(kwargs["feature"])
+            elif "feature" not in kwargs and "y" in kwargs and isinstance(kwargs["y"], str):
+                kwargs["feature"] = self.get_column_plot_spec(kwargs.pop("y"))
+        self._usage["plots"].append(
+            {
+                "name": plot_obj.name,
+                "kwargs": kwargs,
+                "config": self._serialize_component(plot_obj),
+            }
+        )
+        return plot_obj.plot(*args, **kwargs)
 
     def save(self, result: AnalysisResult, **kwargs) -> list:
         """Save a result using the originating analysis.
@@ -223,7 +352,14 @@ class Bench:
         paths = self._make_output_paths(cfg)
         self.io_config = cfg
         self.output_paths = paths
+        self._saved_outputs = {"tables": [], "figures": [], "other": []}
         return cfg, paths
+
+    def _track_output(self, path: Path, category: str) -> None:
+        key = category if category in self._saved_outputs else "other"
+        as_str = str(path)
+        if as_str not in self._saved_outputs[key]:
+            self._saved_outputs[key].append(as_str)
 
     def load(self, input_path: Optional[Path] = None) -> pd.DataFrame:
         """Load the dataset from the configured input path.
@@ -258,6 +394,92 @@ class Bench:
         out = pd.DataFrame(rows, index=df.index)
         out["session_n"] = df.index.get_level_values("Session").map(session_to_int)
         return out.sort_values(["Subject", "session_n"])
+
+    @staticmethod
+    def _source_timeseries(
+        row: pd.Series,
+        source: str,
+        features: Iterable[str],
+    ) -> Optional[pd.DataFrame]:
+        t = np.float64(row[(source, "time_elapsed_s")])
+        if not isinstance(t, np.ndarray):
+            return None
+
+        out = pd.DataFrame({"time_elapsed_s": t})
+        for feature_name in features:
+            x = row.get((source, feature_name), None)
+            if isinstance(x, np.ndarray):
+                out[feature_name] = x
+            else:
+                out[feature_name] = np.nan
+        return out
+
+    def build_long(
+        self,
+        df: pd.DataFrame,
+        source_features: Iterable[tuple[str, Iterable[str]]],
+        tol: float = 0.25,
+    ) -> pd.DataFrame:
+        """Build a long table by aligning multiple source timeseries.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Input table with MultiIndex columns like (source, feature).
+        source_features : iterable[tuple[str, iterable[str]]]
+            Ordered list of (source, features) pairs. The first source is used
+            as the alignment reference. Every listed source is required to have
+            a `time_elapsed_s` column.
+        tol : float
+            Merge tolerance in seconds for nearest-neighbor `merge_asof` joins.
+        """
+        source_features_list = [
+            (source, list(features))
+            for source, features in source_features
+        ]
+        if not source_features_list:
+            raise ValueError("source_features must include at least one (source, features) pair.")
+        if not isinstance(df.columns, pd.MultiIndex) or df.columns.nlevels < 2:
+            raise ValueError("Expected MultiIndex columns with (source, feature).")
+
+        col_tuples = set(df.columns.tolist())
+        for source, _ in source_features_list:
+            if (source, "time_elapsed_s") not in col_tuples:
+                raise ValueError(
+                    f"Source {source!r} is missing required ('{source}', 'time_elapsed_s') column."
+                )
+
+        ref_source, ref_features = source_features_list[0]
+        frames = []
+
+        for idx, row in df.iterrows():
+            out = self._source_timeseries(row, ref_source, ref_features)
+            if out is None:
+                continue
+            out = out.sort_values("time_elapsed_s")
+
+            for source, features in source_features_list[1:]:
+                ts = self._source_timeseries(row, source, features)
+                if ts is not None:
+                    out = pd.merge_asof(
+                        out,
+                        ts.sort_values("time_elapsed_s"),
+                        on="time_elapsed_s",
+                        direction="nearest",
+                        tolerance=tol,
+                    )
+                else:
+                    for feature_name in features:
+                        out[feature_name] = np.nan
+
+            subj, ses, task = idx
+            out.insert(0, "Task", task)
+            out.insert(0, "Session", ses)
+            out.insert(0, "Subject", subj)
+
+            frames.append(out)
+
+        return pd.concat(frames, ignore_index=True)
 
     def run_feature_on_row(
 		self,
@@ -309,7 +531,37 @@ class Bench:
         else:
             path = path.with_suffix(".csv")
             df.to_csv(path)
+        self._track_output(path, "tables")
         return path
+
+    def save_analysis_result_tables(
+        self,
+        result: AnalysisResult,
+        prefix: Optional[str] = None,
+        folder: str = "stats",
+    ) -> Dict[str, Path]:
+        """Persist DataFrame outputs from an AnalysisResult using consistent names.
+
+        Saves:
+        - `result.table` as `<prefix>_table.csv`
+        - `result.data` if DataFrame as `<prefix>.csv`
+        - each DataFrame in `result.data` when dict-like as `<prefix>_<key>.csv`
+        """
+        base = prefix or result.name
+        saved: Dict[str, Path] = {}
+
+        if isinstance(result.table, pd.DataFrame):
+            saved["table"] = self.save_table(result.table, f"{base}_table.csv", folder=folder)
+
+        if isinstance(result.data, pd.DataFrame):
+            saved["data"] = self.save_table(result.data, f"{base}.csv", folder=folder)
+        elif isinstance(result.data, dict):
+            for key, value in result.data.items():
+                if isinstance(value, pd.DataFrame):
+                    safe_key = str(key).replace(" ", "_")
+                    saved[safe_key] = self.save_table(value, f"{base}_{safe_key}.csv", folder=folder)
+
+        return saved
 
     def save_provenance(self, name: str = "provenance.json") -> Path:
         """Write a lightweight provenance record for the current run.
@@ -363,6 +615,62 @@ class Bench:
         path = config_dir / name
         with path.open("w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, default=str)
+        self._track_output(path, "other")
+        return path
+
+    def save_run_summary(
+        self,
+        name: str = "run.json",
+        params: Optional[Mapping[str, Any]] = None,
+        notes: Optional[str] = None,
+        outputs: Optional[Mapping[str, Any]] = None,
+    ) -> Path:
+        """Write a compact run summary for small-team workflows.
+
+        Example:
+            bench.save_run_summary(params={"max_freq": 20}, notes="pilot run")
+        """
+        if self.output_paths is None:
+            raise ValueError("Call setup() before save_run_summary().")
+
+        config_dir = self.output_paths.config
+        config_dir.mkdir(parents=True, exist_ok=True)
+
+        if params is None:
+            params_payload: Dict[str, Any] = {
+                "analyses": [
+                    {"name": e.get("name"), "kwargs": e.get("kwargs", {})}
+                    for e in self._usage.get("analyses", [])
+                ],
+                "plots": [
+                    {"name": e.get("name"), "kwargs": e.get("kwargs", {})}
+                    for e in self._usage.get("plots", [])
+                ],
+            }
+        else:
+            params_payload = dict(params)
+
+        outputs_payload = dict(outputs) if outputs is not None else {
+            "tables": list(self._saved_outputs.get("tables", [])),
+            "figures": list(self._saved_outputs.get("figures", [])),
+            "other": list(self._saved_outputs.get("other", [])),
+        }
+
+        payload = {
+            "created_at": datetime.now().isoformat(),
+            "git_hash": self._get_git_hash(),
+            "params": params_payload,
+            "notes": notes,
+            "io_config": None if self.io_config is None else asdict(self.io_config),
+            "filter_config": None if self.filter_config is None else asdict(self.filter_config),
+            "usage": self._usage,
+            "outputs": outputs_payload,
+        }
+
+        path = config_dir / name
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, default=str)
+        self._track_output(path, "other")
         return path
 
     def save_figure(
@@ -386,6 +694,7 @@ class Bench:
         path = out_dir / name
         path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(path, dpi=dpi, bbox_inches=bbox_inches)
+        self._track_output(path, "figures")
         return path
 
     def export_feature_report(
@@ -435,6 +744,7 @@ class Bench:
         out_path = out_dir / name
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_df.to_csv(out_path, index=False)
+        self._track_output(out_path, "tables")
         return out_path
 
     @staticmethod

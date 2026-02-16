@@ -7,7 +7,9 @@ import pandas as pd
 
 from databench import Bench
 from databench.analysis import MesomapHilbertConfig, export_hilbert_envelopes
-from databench.plotting import plot_two_panel_longitudinal
+from databench.analysis.longitudinal import LongitudinalAnalysis
+from databench.analysis.mesomap_hilbert import MesomapHilbertAnalysis
+from databench.plotting import FeaturePlotter, plot_two_panel_longitudinal
 
 
 def main():
@@ -28,7 +30,7 @@ def main():
     feature_fns = [speed_mean, pupil_mean]
 
     session_table = bench.build_session_table(df, feature_fns)
-    summary = bench.analyze("longitudinal_summary", session_table, ycols=features)
+    summary = bench.analyze(LongitudinalAnalysis(), session_table, ycols=features)
     session_table = summary.data
 
     bench.save_table(session_table.reset_index(), "session_table.csv")
@@ -44,7 +46,7 @@ def main():
     # fig.savefig(paths.plots / "longitudinal_speed_pupil.png", dpi=300, bbox_inches="tight")
     # plt.close(fig)
 
-    # fig, _ = bench.plot("feature", session_table, feature=speed_mean, x_label="Session (days)")
+    # fig, _ = bench.plot(FeaturePlotter(), session_table, feature=speed_mean, x_label="Session (days)")
     # fig.savefig(paths.plots / "longitudinal_speed.png", dpi=300, bbox_inches="tight")
     # plt.close(fig)
 
@@ -54,11 +56,12 @@ def main():
     # Optional: mesomap Hilbert analysis for every session (if mesomap exists)
     if isinstance(df.columns, pd.MultiIndex) and "mesomap" in df.columns.get_level_values(0):
         cfg_h = MesomapHilbertConfig()
+        hilbert_analysis = MesomapHilbertAnalysis()
         hilbert_plot_dir = paths.plots / "mesomap_hilbert"
         hilbert_plot_dir.mkdir(parents=True, exist_ok=True)
 
         for idx, row in df.iterrows():
-            result = bench.analyze("mesomap_hilbert", row, cfg_h, source="mesomap")
+            result = bench.analyze(hilbert_analysis, row, cfg_h, source="mesomap")
             if not result.data:
                 continue
 
@@ -73,7 +76,7 @@ def main():
             if "GLOBAL" in out["specs"]:
                 keys.append("GLOBAL")
 
-            fig = bench.plot("mesomap_hilbert", result, kind="envelopes", keys=keys)
+            fig = bench.plot(hilbert_analysis, result, kind="envelopes", keys=keys)
             fig.savefig(
                 hilbert_plot_dir / f"sub-{subject}_ses-{session}_task-{task}_hilbert_envelopes.png",
                 dpi=200,
@@ -81,7 +84,7 @@ def main():
             )
             plt.close(fig)
 
-            fig = bench.plot("mesomap_hilbert", result, kind="spectrograms", keys=keys)
+            fig = bench.plot(hilbert_analysis, result, kind="spectrograms", keys=keys)
             fig.savefig(
                 hilbert_plot_dir / f"sub-{subject}_ses-{session}_task-{task}_hilbert_spectrograms.png",
                 dpi=200,
