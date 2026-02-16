@@ -377,7 +377,13 @@ df = bench.load()
 bouts_feature = bench.get_feature("locomotion_bouts_n")
 
 source_features = [("treadmill", ["speed_mm"])]
-long = bench.build_long(df, source_features=source_features, tol=0.25)
+long = bench.build_long(
+    df,
+    source_features=source_features,
+    tol=0.25,
+    time_column="time_elapsed_s",
+    reference_source="treadmill",
+)
 
 ses_to_cond = {
     "ses-01": "baseline",

@@ -396,29 +396,49 @@ class Bench:
         return out.sort_values(["Subject", "session_n"])
 
     @staticmethod
+    def _extract_trace(
+        row: pd.Series,
+        source: str,
+        feature: str,
+        index: Optional[int],
+        label: str,
+    ) -> Optional[np.ndarray]:
+        x = row.get((source, feature), None)
+        if not isinstance(x, np.ndarray):
+            return None
+        if x.ndim > 1:
+            if index is None:
+                raise ValueError(
+                    f"{label} {source!r}.{feature!r} has nested arrays. "
+                    "Provide an index to select a trace."
+                )
+            x = x[index]
+        return x
+
+    @staticmethod
     def _source_timeseries(
         row: pd.Series,
         source: str,
         features: Iterable[str],
+        time_column: str,
+        index: Optional[int] = None,
     ) -> Optional[pd.DataFrame]:
-        t = np.float64(row[(source, "time_elapsed_s")])
-        if not isinstance(t, np.ndarray):
+        t = Bench._extract_trace(row, source, time_column, index, "Source")
+        if t is None:
             return None
-
-        out = pd.DataFrame({"time_elapsed_s": t})
+        data = {time_column: np.float64(t)}
         for feature_name in features:
-            x = row.get((source, feature_name), None)
-            if isinstance(x, np.ndarray):
-                out[feature_name] = x
-            else:
-                out[feature_name] = np.nan
-        return out
+            x = Bench._extract_trace(row, source, feature_name, index, "Feature")
+            data[feature_name] = x if x is not None else np.nan
+        return pd.DataFrame(data)
 
     def build_long(
         self,
         df: pd.DataFrame,
         source_features: Iterable[tuple[str, Iterable[str]]],
         tol: float = 0.25,
+        time_column: str = "time_elapsed_s",
+        reference_source: Optional[str] = None,
     ) -> pd.DataFrame:
         """Build a long table by aligning multiple source timeseries.
 
@@ -427,44 +447,143 @@ class Bench:
         df : pd.DataFrame
             Input table with MultiIndex columns like (source, feature).
         source_features : iterable[tuple[str, iterable[str]]]
-            Ordered list of (source, features) pairs. The first source is used
-            as the alignment reference. Every listed source is required to have
-            a `time_elapsed_s` column.
+            Ordered list of (source, features) or (source, features, indices) pairs.
+            The reference source is used as the alignment anchor. When indices
+            are provided for the reference source, ROI-specific columns are
+            created as `{feature}_roi{index}`. Every listed source is required
+            to have the `time_column`, and indexed reference traces must share
+            a common timebase.
         tol : float
             Merge tolerance in seconds for nearest-neighbor `merge_asof` joins.
+        time_column : str
+            Column name used for time alignment within each source.
+        reference_source : str | None
+            Optional source name to use as the alignment reference. Defaults to
+            the first source in source_features.
         """
-        source_features_list = [
-            (source, list(features))
-            for source, features in source_features
-        ]
+        source_features_list = []
+        for entry in source_features:
+            if len(entry) == 2:
+                source, features = entry
+                indices = None
+            elif len(entry) == 3:
+                source, features, indices = entry
+            else:
+                raise ValueError(
+                    "source_features entries must be (source, features) or (source, features, indices)."
+                )
+            source_features_list.append((source, list(features), indices))
         if not source_features_list:
             raise ValueError("source_features must include at least one (source, features) pair.")
         if not isinstance(df.columns, pd.MultiIndex) or df.columns.nlevels < 2:
             raise ValueError("Expected MultiIndex columns with (source, feature).")
 
         col_tuples = set(df.columns.tolist())
-        for source, _ in source_features_list:
-            if (source, "time_elapsed_s") not in col_tuples:
+        for source, _, _ in source_features_list:
+            if (source, time_column) not in col_tuples:
                 raise ValueError(
-                    f"Source {source!r} is missing required ('{source}', 'time_elapsed_s') column."
+                    f"Source {source!r} is missing required ('{source}', '{time_column}') column."
                 )
 
-        ref_source, ref_features = source_features_list[0]
+        if reference_source is None:
+            ref_idx = 0
+        else:
+            ref_idx = next(
+                (i for i, (source, _, _) in enumerate(source_features_list) if source == reference_source),
+                None,
+            )
+            if ref_idx is None:
+                raise ValueError(
+                    f"reference_source {reference_source!r} is not in source_features."
+                )
+
+        ref_source, ref_features, ref_indices = source_features_list[ref_idx]
+        indexed_sources = [
+            source for source, _, indices in source_features_list if indices is not None
+        ]
+        if len(indexed_sources) > 1:
+            raise ValueError(
+                "Only one source may specify indices when building long tables."
+            )
+        if indexed_sources and indexed_sources[0] != ref_source:
+            raise ValueError(
+                "The indexed source must be the reference source in source_features."
+            )
+
+        merge_sources = [
+            entry for i, entry in enumerate(source_features_list) if i != ref_idx
+        ]
+
         frames = []
+        if ref_indices is None:
+            ref_index_list = []
+        elif isinstance(ref_indices, (list, tuple, np.ndarray)):
+            ref_index_list = list(ref_indices)
+        else:
+            ref_index_list = [ref_indices]
 
         for idx, row in df.iterrows():
-            out = self._source_timeseries(row, ref_source, ref_features)
-            if out is None:
-                continue
-            out = out.sort_values("time_elapsed_s")
+            if ref_indices is None:
+                out = self._source_timeseries(
+                    row,
+                    ref_source,
+                    ref_features,
+                    time_column,
+                    index=None,
+                )
+                if out is None:
+                    continue
+            else:
+                roi_frames = []
+                base_time = None
+                for ref_index in ref_index_list:
+                    roi_df = self._source_timeseries(
+                        row,
+                        ref_source,
+                        ref_features,
+                        time_column,
+                        index=ref_index,
+                    )
+                    if roi_df is None:
+                        continue
 
-            for source, features in source_features_list[1:]:
-                ts = self._source_timeseries(row, source, features)
+                    if base_time is None:
+                        base_time = roi_df[time_column].to_numpy()
+                    elif not np.array_equal(roi_df[time_column].to_numpy(), base_time):
+                        raise ValueError(
+                            f"Source {ref_source!r} ROI timebases differ; cannot align per-ROI columns."
+                        )
+
+                    rename = {
+                        feature_name: f"{feature_name}_roi{ref_index}"
+                        for feature_name in ref_features
+                    }
+                    roi_frames.append(roi_df.rename(columns=rename))
+
+                if base_time is None:
+                    continue
+
+                out = pd.concat(
+                    [roi_frames[0][[time_column]]]
+                    + [frame.drop(columns=[time_column]) for frame in roi_frames],
+                    axis=1,
+                )
+
+            out = out.sort_values(time_column)
+
+            for source, features, _ in merge_sources:
+                ts = self._source_timeseries(
+                    row,
+                    source,
+                    features,
+                    time_column,
+                    index=None,
+                )
                 if ts is not None:
                     out = pd.merge_asof(
                         out,
-                        ts.sort_values("time_elapsed_s"),
-                        on="time_elapsed_s",
+                        ts.sort_values(time_column),
+                        on=time_column,
                         direction="nearest",
                         tolerance=tol,
                     )

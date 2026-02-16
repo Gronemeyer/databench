@@ -528,7 +528,13 @@ source_features = [
     ("mesomap", roi_cols),
     ("treadmill", ["speed_mm"]),
 ]
-long = bench.build_long(df, source_features=source_features, tol=0.25)
+long = bench.build_long(
+    df,
+    source_features=source_features,
+    tol=0.25,
+    time_column="time_elapsed_s",
+    reference_source="mesomap",
+)
 
 bench.preflight(
     analysis=analysis,

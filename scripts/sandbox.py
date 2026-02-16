@@ -10,10 +10,11 @@ from databench import Bench
 
 
 #%%
-pickle = Path(r"/Volumes/ake.bin/4jake/260211_ETOH_dataset.pkl")
+#pickle = Path(r"/Volumes/ake.bin/4jake/260211_ETOH_dataset.pkl")
 
 bench = Bench()
-bench.setup(pickle, run_name="sandbox", tag="groups")
+bench.setup(input_path=Path(r'/Users/jakegronemeyer/Desktop/4jake/260212_ACUTEVIS_dataset.pkl'),
+            run_name="sandbox", tag="groups")
 
 paths = bench.output_paths
 df = bench.load()
@@ -43,14 +44,14 @@ df.index.to_frame(index=False).value_counts(["Subject","Session","Task"])
 def col(df, source, feature):
     return df[(source, feature)]
 
-t_meso = col(df, "mesomap", "time_elapsed_s")
+t_meso = col(df, "suite2p", "time_elapsed_s")
 t_pupil = col(df, "pupil", "time_elapsed_s")
 pupil = col(df, "pupil", "pupil_diameter_mm")
 
 speed = col(df, "treadmill", "speed_mm").dropna()
 t_tm = col(df, "treadmill", "time_elapsed_s").dropna()
 
-roi = col(df, "mesomap", "L_VISp")
+roi = col(df, "suite2p", "L_VISp")
 
 len_check = (
 	df.assign(
@@ -130,7 +131,13 @@ source_features = [
     ('pupil', ['pupil_diameter_mm']),
     ('treadmill', ['speed_mm']),
 ]
-long = bench.build_long(df, source_features=source_features, tol=0.25)
+long = bench.build_long(
+    df,
+    source_features=source_features,
+    tol=0.25,
+    time_column="time_elapsed_s",
+    reference_source="mesomap",
+)
 long
 # %%
 

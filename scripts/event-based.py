@@ -270,7 +270,13 @@ source_features = [
     ("pupil", ["pupil_diameter_mm"]),
     ("treadmill", ["speed_mm"]),
 ]
-long = bench.build_long(df, source_features=source_features, tol=0.25)
+long = bench.build_long(
+    df,
+    source_features=source_features,
+    tol=0.25,
+    time_column="time_elapsed_s",
+    reference_source="mesomap",
+)
 
 ses_to_cond = {
     "ses-01": "baseline",
