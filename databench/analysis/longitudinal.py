@@ -31,22 +31,19 @@ def longitudinal_summary(
     """
     out = wide.copy()
     if ycols:
-        cols = [c for c in ycols if c in out.columns]
-        if cols:
-            baseline = out.groupby("Subject")[cols].transform("first")
-            out = pd.concat(
-                [
-                    out,
-                    (out[cols] - baseline).add_prefix("d_"),
-                    (out[cols] / baseline - 1.0).add_prefix("pct_"),
-                ],
-                axis=1,
-            )
+        cols = list(ycols)
+        baseline = out.groupby("Subject")[cols].transform("first")
+        out = pd.concat(
+            [
+                out,
+                (out[cols] - baseline).add_prefix("d_"),
+                (out[cols] / baseline - 1.0).add_prefix("pct_"),
+            ],
+            axis=1,
+        )
 
     if y is None:
         return out, None
-    if y not in out.columns:
-        raise KeyError(f"{y!r} not in wide.columns")
     g = out[[x, y]].dropna().groupby(x)[y]
     stats = g.agg(mean="mean", sem="sem", n="count").reset_index().sort_values(x)
     return out, stats
@@ -69,12 +66,8 @@ class LongitudinalAnalysis(Analysis):
         return AnalysisResult(name=self.name, data=out, table=stats, meta=meta)
 
     def plot(self, result: AnalysisResult, **kwargs):
-        if result.table is None:
-            return None
         x = kwargs.pop("x", result.meta.get("x", "session_n"))
         y = kwargs.pop("y", result.meta.get("y"))
-        if y is None:
-            raise ValueError("Provide y for plotting longitudinal summary.")
         title = kwargs.pop("title", f"{y} across sessions")
         color = kwargs.pop("color", "#1f77b4")
         y_label = kwargs.pop("y_label", y)

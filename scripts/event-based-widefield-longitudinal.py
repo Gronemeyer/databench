@@ -446,13 +446,12 @@ def _infer_default_rois(df: pd.DataFrame, preferred: list[str], fallback_n: int 
 
 #%%
 # Procedural workflow
-
-pickle_path = Path(r"D:\4jake\260212_ETOH-HFSA_dataset.pkl")
+pickle_path = Path(r"/Users/jakegronemeyer/Desktop/4jake/260212_ETOH-HFSA_dataset.pkl")
 project_root = Path(__file__).resolve().parents[1]
 output_root = project_root / "outputs"
 
 bench = Bench()
-bench.setup(pickle_path, output_root=output_root, run_name="260215", tag="widefield-10day-eta_2s")
+bench.setup(pickle_path, output_root=output_root, run_name="260217", tag="widefield-10day-eta_2s")
 
 paths = bench.output_paths
 print(f"[databench] run_dir: {paths.run_dir}")

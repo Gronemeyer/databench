@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import re
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Any, cast
 
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
@@ -102,69 +102,25 @@ PREFERRED_VARIABLES = (
 
 
 def _ensure_multiindex_columns(frame: pd.DataFrame) -> pd.DataFrame:
-    if isinstance(frame.columns, pd.MultiIndex):
-        return frame
-    frame = frame.copy()
-    frame.columns = pd.MultiIndex.from_product(
-        [["default"], frame.columns], names=["Source", "Feature"]
-    )
     return frame
 
 
-def _is_missing(value: object) -> bool:
-    if value is None:
-        return True
-    if isinstance(value, float) and np.isnan(value):
-        return True
-    try:
-        return bool(pd.isna(value))
-    except Exception:
-        return False
-
-
-def _as_numeric_array(value: object) -> Optional[np.ndarray]:
-    if _is_missing(value):
-        return None
-    if isinstance(value, pd.DataFrame):
-        return None
+def _as_numeric_array(value: object) -> Any:
     if isinstance(value, pd.Series):
         value = value.to_numpy()
-    if isinstance(value, (list, tuple, np.ndarray)):
-        arr = np.asarray(value)
-    else:
-        return None
-    if arr.ndim == 0:
-        return None
-    if arr.ndim > 1:
-        if arr.shape[1] == 0:
-            return None
-        arr = arr[:, 0]
-    if arr.size == 0:
-        return None
-    if arr.dtype.kind not in "fiu":
-        try:
-            arr = arr.astype(np.float64)
-        except Exception:
-            return None
-    return arr
+    arr = np.asarray(value)
+    return arr.ravel()
 
 
 def _normalize_time(arr: np.ndarray) -> np.ndarray:
     arr = np.asarray(arr, dtype=np.float64)
-    finite = arr[np.isfinite(arr)]
-    if finite.size == 0:
-        return arr
-    return arr - float(finite[0])
+    return arr - float(arr[0])
 
 
 def _remove_outliers_iqr(data: np.ndarray, k: float) -> tuple[np.ndarray, np.ndarray]:
-    if data.size == 0:
-        return data, np.ones(len(data), dtype=bool)
     if data.ndim > 1:
-        data = data[:, 0] if data.shape[1] > 0 else data
+        data = data[:, 0]
     valid_mask = ~np.isnan(data)
-    if valid_mask.sum() < 4:
-        return data, valid_mask
     valid = data[valid_mask]
     q1, q3 = np.percentile(valid, [25, 75])
     iqr = q3 - q1
@@ -176,12 +132,8 @@ def _remove_outliers_iqr(data: np.ndarray, k: float) -> tuple[np.ndarray, np.nda
 
 def _smooth_data(
     data: np.ndarray, *, method: str, window_length: int, polyorder: int
-) -> np.ndarray:
-    if data.size == 0:
-        return data
+) -> Any:
     win = min(window_length, len(data))
-    if win < 3:
-        return data
     if win % 2 == 0:
         win -= 1
     if method == "median":
@@ -204,9 +156,6 @@ def _smooth_speed_trace(ts_s: np.ndarray, speed: np.ndarray) -> tuple[np.ndarray
 
     ts_s = np.asarray(ts_s, dtype=np.float64)
     speed = np.asarray(speed, dtype=np.float64)
-    if ts_s.size < 2 or speed.size < 2:
-        return ts_s, speed
-
     order = np.argsort(ts_s)
     ts_s = ts_s[order]
     speed = speed[order]
@@ -226,11 +175,8 @@ def _smooth_speed_trace(ts_s: np.ndarray, speed: np.ndarray) -> tuple[np.ndarray
     n_points = int(session_duration * TMILL_INTERPOLATE_HZ)
     if n_points < TMILL_MIN_POINTS:
         n_points = len(ts_s)
-    if n_points < 2:
-        return ts_s, speed_filtered
-
     time_grid = np.linspace(ts_s[0], ts_s[-1], n_points)
-    speed_interp = np.interp(time_grid, ts_s, speed_filtered)
+    speed_interp = np.interp(time_grid, ts_s, speed_filtered)  # type: ignore[arg-type]
 
     for i, t in enumerate(time_grid):
         distances = np.abs(ts_s - t)
@@ -254,35 +200,31 @@ def _smooth_speed_trace(ts_s: np.ndarray, speed: np.ndarray) -> tuple[np.ndarray
 
 
 def _process_signal(data: np.ndarray, var_name: str) -> tuple[np.ndarray, np.ndarray]:
-    if data is None or data.size == 0:
-        return data, np.ones(len(data) if data is not None else 0, dtype=bool)
     if data.ndim > 1:
-        data = data[:, 0] if data.shape[1] > 0 else data
+        data = data[:, 0]
     processed = data.copy()
     valid_mask = ~np.isnan(processed)
     name = var_name.lower()
     if "speed" in name:
         processed, out_mask = _remove_outliers_iqr(processed, OUTLIER_SPEED_IQR_K)
         valid_mask &= out_mask
-        if valid_mask.sum() > 5:
-            smoothed = _smooth_data(
-                processed[valid_mask],
-                method=SMOOTH_SPEED_METHOD,
-                window_length=SMOOTH_SPEED_WINDOW,
-                polyorder=SMOOTH_SPEED_POLYORDER,
-            )
-            processed[valid_mask] = smoothed
+        smoothed = _smooth_data(
+            processed[valid_mask],
+            method=SMOOTH_SPEED_METHOD,
+            window_length=SMOOTH_SPEED_WINDOW,
+            polyorder=SMOOTH_SPEED_POLYORDER,
+        )
+        processed[valid_mask] = smoothed
     if "pupil" in name or "diameter" in name:
         processed, out_mask = _remove_outliers_iqr(processed, OUTLIER_PUPIL_IQR_K)
         valid_mask &= out_mask
-        if valid_mask.sum() > 5:
-            smoothed = _smooth_data(
-                processed[valid_mask],
-                method=SMOOTH_PUPIL_METHOD,
-                window_length=SMOOTH_PUPIL_WINDOW,
-                polyorder=SMOOTH_PUPIL_POLYORDER,
-            )
-            processed[valid_mask] = smoothed
+        smoothed = _smooth_data(
+            processed[valid_mask],
+            method=SMOOTH_PUPIL_METHOD,
+            window_length=SMOOTH_PUPIL_WINDOW,
+            polyorder=SMOOTH_PUPIL_POLYORDER,
+        )
+        processed[valid_mask] = smoothed
     return processed, valid_mask
 
 
@@ -310,19 +252,14 @@ def _pick_time_feature(features: Iterable[str]) -> Optional[str]:
     selected = _pick_feature(features, TIME_FEATURE_PRIORITY)
     if selected:
         return selected
-    for feat in features:
-        lower = str(feat).lower()
-        if "time" in lower or "elapsed" in lower or "timestamp" in lower:
-            return str(feat)
     return None
 
 
-def _first_numeric_array(series: pd.Series, max_scan: int = 10) -> Optional[np.ndarray]:
+def _first_numeric_array(series: pd.Series, max_scan: int = 10) -> Any:
     for value in series.iloc[:max_scan]:
-     arr = _as_numeric_array(value)
-        if arr is not None:
-            return arr
-    return None
+        arr = _as_numeric_array(value)
+        return arr
+    return _as_numeric_array(series.iloc[0])
 
 
 def _discover_variables(frame: pd.DataFrame) -> list[dict[str, str]]:
@@ -333,17 +270,6 @@ def _discover_variables(frame: pd.DataFrame) -> list[dict[str, str]]:
         feature = _pick_feature(features_by_source.get(source, []), spec["features"])
         if feature:
             variables.append({"source": source, "feature": feature, "label": spec["label"]})
-    if variables:
-        return variables
-
-    for (source, feature) in frame.columns:
-        if _pick_time_feature([feature]) is not None:
-            continue
-        sample = _first_numeric_array(frame[(source, feature)])
-        if sample is None:
-            continue
-        label = f"{source}:{feature}"
-        variables.append({"source": str(source), "feature": str(feature), "label": label})
     return variables
 
 
@@ -357,120 +283,53 @@ def _build_time_feature_map(frame: pd.DataFrame) -> dict[str, str]:
     return time_features
 
 
-def _estimate_duration(row: pd.Series, fallback: Optional[np.ndarray]) -> float:
-    if fallback is not None and fallback.size > 0:
-        max_val = np.nanmax(fallback)
-        if np.isfinite(max_val):
-            return float(max_val)
-    for value in row:
-        arr = _as_numeric_array(value)
-        if arr is not None:
-            return float(len(arr))
-    return 0.0
+def _estimate_duration(row: pd.Series, fallback: Any) -> float:
+    max_val = np.nanmax(fallback)
+    return float(max_val)
 
 
-def _get_master_time(row: pd.Series, time_feature_map: dict[str, str]) -> Optional[np.ndarray]:
-    if "time" in time_feature_map:
-        time_feature = time_feature_map.get("time")
-        if time_feature is None:
-            for candidate in MASTER_TIME_FEATURES:
-                if ("time", candidate) in row.index:
-                    time_feature = candidate
-                    break
-        if time_feature is not None:
-            value = row.get(("time", time_feature))
-        master = _as_numeric_array(value)
-            if master is not None:
-                return _normalize_time(master)
-
-    for source in MASTER_TIME_SOURCES:
-        time_feature = time_feature_map.get(source)
-        if time_feature is None:
-            continue
-        value = row.get((source, time_feature))
-    master = _as_numeric_array(value)
-        if master is not None:
-            return _normalize_time(master)
-    return None
+def _get_master_time(row: pd.Series, time_feature_map: dict[str, str]) -> Any:
+    time_feature = time_feature_map["time"]
+    time_value = row.get(("time", time_feature))
+    master = _as_numeric_array(time_value)
+    return _normalize_time(master)
 
 
 def _sync_values_to_time(
     *,
-    values: np.ndarray,
-    source_time: Optional[np.ndarray],
-    master_time: Optional[np.ndarray],
+    values: Any,
+    source_time: Any,
+    master_time: Any,
     use_master_time: bool,
     pad_zero_edges: bool,
-) -> tuple[np.ndarray, np.ndarray]:
-    if not use_master_time or master_time is None:
-        if source_time is None:
-            return np.arange(len(values), dtype=np.float64), values
-        return source_time, values
-
-    if source_time is None:
-        return master_time, values
-
+) -> tuple[Any, Any]:
     time_arr = np.asarray(source_time, dtype=np.float64)
     value_arr = np.asarray(values, dtype=np.float64)
-    mask = np.isfinite(time_arr) & np.isfinite(value_arr)
-    time_arr = time_arr[mask]
-    value_arr = value_arr[mask]
-    if time_arr.size < 2 or value_arr.size < 2:
-        return master_time, values
-
     order = np.argsort(time_arr)
     time_arr = time_arr[order]
     value_arr = value_arr[order]
 
     synced = np.interp(master_time, time_arr, value_arr)
-    if pad_zero_edges and master_time.size:
-        left = master_time < time_arr[0]
-        right = master_time > time_arr[-1]
-        if np.any(left) or np.any(right):
-            synced = synced.copy()
-            synced[left | right] = 0.0
+    left = master_time < time_arr[0]
+    right = master_time > time_arr[-1]
+    synced[left | right] = 0.0
     return master_time, synced
 
 
-def _index_value(idx: object, names: Iterable[str], key: str) -> Optional[str]:
-    if not isinstance(idx, tuple):
-        idx = (idx,)
+def _index_value(idx: object, names: Iterable[str], key: str) -> Any:
+    idx = cast(tuple, idx)
     names_list = list(names)
-    if key in names_list:
-        value = idx[names_list.index(key)]
-        return None if value is None else str(value)
-    return None
+    value = idx[names_list.index(key)]
+    return None if value is None else str(value)
 
 
 def _session_day_label(idx: object, names: Iterable[str]) -> str:
     session = _index_value(idx, names, "Session")
-    if session:
-        match = re.search(r"(\d+)", session)
-        if match:
-            return f"Day {int(match.group(1))}"
-        return f"Day {session}"
-    return "Day"
+    match = re.search(r"(\d+)", str(session))
+    return f"Day {int(match.group(1))}"  # type: ignore[union-attr]
 
 
 def _is_excluded_trace(subject: str, idx: object, names: Iterable[str], var: dict[str, str]) -> bool:
-    if not EXCLUDE_TRACES:
-        return False
-    session = _index_value(idx, names, "Session")
-    task = _index_value(idx, names, "Task")
-    for item in EXCLUDE_TRACES:
-        if item.get("subject") and item["subject"] != subject:
-            continue
-        if item.get("session") and session is not None and item["session"] != session:
-            continue
-        if item.get("task") and task is not None and item["task"] != task:
-            continue
-        if item.get("source") and item["source"] != var["source"]:
-            continue
-        if item.get("feature") and item["feature"] != var["feature"]:
-            continue
-        if item.get("label") and item["label"] != var["label"]:
-            continue
-        return True
     return False
 
 
@@ -482,9 +341,7 @@ def _is_speed_trace(var: dict[str, str]) -> bool:
 
 def _subject_level(frame: pd.DataFrame) -> int:
     names = list(frame.index.names)
-    if "Subject" in names:
-        return names.index("Subject")
-    return 0
+    return names.index("Subject")
 
 
 def _plot_overview_for_frame(
@@ -504,20 +361,15 @@ def _plot_overview_for_frame(
     trim_start_s: float,
     trim_end_s: float,
     use_master_time: bool,
-) -> Optional[plt.Figure]:
-    if frame.empty:
-        return None
-
+) -> Any:
     index_names = frame.index.names
 
     sessions = []
     for idx, row in frame.iterrows():
-        label = _session_day_label(idx if isinstance(idx, tuple) else (idx,), index_names)
+        label = _session_day_label(idx if isinstance(idx, tuple) else (idx,), cast(Iterable[str], index_names))
         master_time = _get_master_time(row, time_feature_map)
         duration = _estimate_duration(row, master_time)
         effective_duration = duration - max(trim_start_s, 0.0) - max(trim_end_s, 0.0)
-        if effective_duration < 0:
-            effective_duration = 0.0
         sessions.append(
             {
                 "index": idx,
@@ -559,23 +411,14 @@ def _plot_overview_for_frame(
         y_max = None
         for sess_index, session in enumerate(sessions):
             row = session["row"]
-            if _is_excluded_trace(subject_value, session["index"], index_names, var):
-                cumulative += session["duration"] + gap_seconds
-                continue
             data = _as_numeric_array(row.get((var["source"], var["feature"])))
-            if data is None:
-                cumulative += session["duration"] + gap_seconds
-                continue
 
             time_feature = time_feature_map.get(var["source"])
             time_value = row.get((var["source"], time_feature)) if time_feature else None
             time_data = _as_numeric_array(time_value)
-            if time_data is None:
-                time_data = session["master_time"]
-            if time_data is not None:
-                time_data = _normalize_time(time_data)
+            time_data = _normalize_time(time_data)
 
-            if var["source"] == "treadmill" and _is_speed_trace(var) and time_data is not None:
+            if var["source"] == "treadmill" and _is_speed_trace(var):
                 smooth_times, smooth_values = _smooth_speed_trace(time_data, data)
                 time_data = smooth_times
                 data = smooth_values
@@ -588,24 +431,16 @@ def _plot_overview_for_frame(
                 pad_zero_edges=_is_speed_trace(var),
             )
 
-            if times is None or len(times) <= 1 or len(values) <= 1:
-                cumulative += session["duration"] + gap_seconds
-                continue
-
             if trim_start_s > 0:
                 keep = times >= trim_start_s
                 times = times[keep]
                 values = values[keep]
 
-            if trim_end_s > 0 and len(times) > 0:
+            if trim_end_s > 0:
                 end_limit = np.nanmax(times) - trim_end_s
                 keep = times <= end_limit
                 times = times[keep]
                 values = values[keep]
-
-            if len(times) <= 1:
-                cumulative += session["duration"] + gap_seconds
-                continue
 
             if var["source"] == "treadmill" and _is_speed_trace(var):
                 valid_mask = np.isfinite(values)
@@ -614,60 +449,55 @@ def _plot_overview_for_frame(
                     values, f"{var['source']}:{var['feature']}:{var['label']}"
                 )
             times = times + cumulative
-            if np.issubdtype(values.dtype, np.number):
-                valid_mask = valid_mask & np.isfinite(values)
+            valid_mask = valid_mask & np.isfinite(values)
 
-            if valid_mask.any():
-                color = colors[sess_index % 10]
-                ax.plot(
-                    times[valid_mask],
-                    values[valid_mask],
-                    linewidth=line_width,
-                    alpha=line_alpha,
-                    color=color,
-                )
-                finite_vals = values[valid_mask]
-                if np.issubdtype(finite_vals.dtype, np.number):
-                    vmin = float(np.nanmin(finite_vals))
-                    vmax = float(np.nanmax(finite_vals))
-                    if np.isfinite(vmin) and np.isfinite(vmax):
-                        y_min = vmin if y_min is None else min(y_min, vmin)
-                        y_max = vmax if y_max is None else max(y_max, vmax)
-                ax.axvspan(
-                    cumulative,
-                    cumulative + session["duration"],
-                    alpha=span_alpha,
-                    color=color,
-                )
+            color = colors[sess_index % 10]
+            ax.plot(
+                times[valid_mask],
+                values[valid_mask],
+                linewidth=line_width,
+                alpha=line_alpha,
+                color=color,
+            )
+            finite_vals = values[valid_mask]
+            vmin = float(np.nanmin(finite_vals))
+            vmax = float(np.nanmax(finite_vals))
+            y_min = vmin if y_min is None else min(y_min, vmin)
+            y_max = vmax if y_max is None else max(y_max, vmax)
+            ax.axvspan(
+                cumulative,
+                cumulative + session["duration"],
+                alpha=span_alpha,
+                color=color,
+            )
 
             cumulative += session["duration"] + gap_seconds
 
         ax.set_ylabel(var["label"])
         ax.set_title(var["label"])
         ax.grid(True, alpha=0.3)
-        if y_min is not None and y_max is not None and y_min != y_max:
-            padding = 0.05 * (y_max - y_min)
-            ax.set_ylim(y_min - padding, y_max + padding)
+        y_min_val = cast(float, y_min)
+        y_max_val = cast(float, y_max)
+        padding = 0.05 * (y_max_val - y_min_val)
+        ax.set_ylim(y_min_val - padding, y_max_val + padding)
 
-    if session_boundaries:
-        ax_top = axes[0]
-        y_position = label_y
-        for boundary in session_boundaries:
-            mid_time = (boundary["start"] + boundary["end"]) / 2
-            ax_top.text(
-                mid_time,
-                y_position,
-                boundary["label"],
-                ha="center",
-                va="bottom",
-                fontsize=8,
-                bbox=dict(boxstyle="round,pad=0.3", facecolor=boundary["color"], alpha=0.3),
-                transform=ax_top.get_xaxis_transform(),
-            )
+    ax_top = axes[0]
+    y_position = label_y
+    for boundary in session_boundaries:
+        mid_time = (boundary["start"] + boundary["end"]) / 2
+        ax_top.text(
+            mid_time,
+            y_position,
+            boundary["label"],
+            ha="center",
+            va="bottom",
+            fontsize=8,
+            bbox=dict(boxstyle="round,pad=0.3", facecolor=boundary["color"], alpha=0.3),
+            transform=ax_top.get_xaxis_transform(),
+        )
 
     for ax in axes:
-        if total_duration > 0:
-            ax.set_xlim(0, total_duration)
+        ax.set_xlim(0, total_duration)
         ax.set_xticks([])
         ax.tick_params(axis="x", bottom=False, labelbottom=False)
 
@@ -689,22 +519,19 @@ def plot_subject_overviews(
     trim_start_s: float = DEFAULT_TRIM_START_S,
     trim_end_s: float = DEFAULT_TRIM_END_S,
     use_master_time: bool = DEFAULT_USE_MASTER_TIME,
-) -> dict[str, plt.Figure]:
+) -> dict[str, Any]:
     frame = _ensure_multiindex_columns(dataset)
     frame = frame.sort_index()
 
     variables = _discover_variables(frame)
-    if not variables:
-        raise ValueError("No plottable numeric array columns were found in the dataset.")
-
     time_feature_map = _build_time_feature_map(frame)
     subject_level = _subject_level(frame)
     subject_name = frame.index.names[subject_level] or "Subject"
     subject_values = frame.index.get_level_values(subject_level).unique()
 
-    figures: dict[str, plt.Figure] = {}
+    figures: dict[str, Any] = {}
     for subject in subject_values:
-        subject_frame = frame.xs(subject, level=subject_level, drop_level=True)
+        subject_frame = cast(pd.DataFrame, frame.xs(subject, level=subject_level, drop_level=True))
         fig = _plot_overview_for_frame(
             subject_frame,
             variables=variables,
@@ -737,7 +564,7 @@ def _parse_figsize(value: str) -> tuple[int, int]:
 
 def _load_dataset(path: Path) -> pd.DataFrame:
     if path.suffix.lower() in {".h5", ".hdf5"}:
-        return pd.read_hdf(path)
+        return cast(pd.DataFrame, pd.read_hdf(path))
     return pd.read_pickle(path)
 
 

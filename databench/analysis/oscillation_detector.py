@@ -21,72 +21,11 @@ class OscillationDetectorConfig:
     k: float = 4.0
     min_duration_s: float = 0.5
     merge_gap_s: float = 0.25
-    signal_candidates: Tuple[str, ...] = ("roi", "signal", "value", "trace", "y")
-    time_candidates: Tuple[str, ...] = (
-        "sample",
-        "samples",
-        "frame",
-        "frames",
-        "t",
-        "time",
-        "timestamp",
-    )
 
 
-def _resolve_signal(
-    row: pd.Series,
-    source: Optional[str],
-    signal_key: Optional[str],
-    candidates: Sequence[str],
-):
-    if signal_key:
-        key = (source, signal_key) if source and isinstance(row.index, pd.MultiIndex) else signal_key
-        return row.get(key)
-
-    keys = [(source, c) for c in candidates] if source and isinstance(row.index, pd.MultiIndex) else list(candidates)
-    val = get_first(row, keys)
-    if val is not None:
-        return val
-
-    if not isinstance(row.index, pd.MultiIndex):
-        numeric_cols = [c for c in row.index if pd.api.types.is_numeric_dtype(row[c])]
-        if numeric_cols:
-            return row[numeric_cols[0]]
-    return None
-
-
-def _resolve_time(
-    row: pd.Series,
-    source: Optional[str],
-    time_key: Optional[str],
-    candidates: Sequence[str],
-):
-    if time_key:
-        key = (source, time_key) if source and isinstance(row.index, pd.MultiIndex) else time_key
-        return row.get(key)
-
-    keys = [(source, c) for c in candidates] if source and isinstance(row.index, pd.MultiIndex) else list(candidates)
-    return get_first(row, keys)
-
-
-def _as_time_vector(tt: Optional[np.ndarray], n: int, fs: float) -> np.ndarray:
-    if tt is None or n == 0:
-        return np.arange(n) / fs
-
-    tt = np.asarray(tt, dtype=float).ravel()
-    if tt.size < n:
-        n = tt.size
-    tt = tt[:n]
-
-    # If max close to n, likely sample indices
-    if np.nanmax(tt) >= (0.9 * n):
-        return tt / fs
-
-    # Heuristic: very large max implies timestamps (already in seconds)
-    if np.nanmax(tt) > 10 * n / fs:
-        return tt
-
-    return tt
+def _as_time_vector(tt: np.ndarray, n: int) -> np.ndarray:
+    t = np.asarray(tt, dtype=float).ravel()
+    return t[:n]
 
 
 def _bandpass_env(x: np.ndarray, fs: float, band: Tuple[float, float], order: int) -> Tuple[np.ndarray, np.ndarray]:
@@ -106,9 +45,6 @@ def _robust_threshold(env: np.ndarray, k: float) -> Tuple[float, float, float]:
 
 def _segments_from_mask(mask: np.ndarray) -> list[Tuple[int, int]]:
     idx = np.where(mask)[0]
-    if idx.size == 0:
-        return []
-
     segments = []
     start = idx[0]
     prev = idx[0]
@@ -167,24 +103,16 @@ class OscillationContext:
     time_key: Optional[str] = None
 
     def label(self) -> str:
-        parts = []
-        if self.subject is not None:
-            parts.append(f"Subject={self.subject}")
-        if self.session is not None:
-            parts.append(f"Session={self.session}")
-        if self.task is not None:
-            parts.append(f"Task={self.task}")
-        return " | ".join(parts) if parts else "Index=unknown"
+        return f"Subject={self.subject} | Session={self.session} | Task={self.task}"
 
     def slug(self) -> str:
-        parts = []
-        if self.subject is not None:
-            parts.append(f"sub-{strip_prefix(self.subject, 'sub-')}")
-        if self.session is not None:
-            parts.append(f"ses-{strip_prefix(self.session, 'ses-')}")
-        if self.task is not None:
-            parts.append(f"task-{strip_prefix(self.task, 'task-')}")
-        return "_".join(parts) if parts else "row"
+        return "_".join(
+            [
+                f"sub-{strip_prefix(self.subject, 'sub-')}",
+                f"ses-{strip_prefix(self.session, 'ses-')}",
+                f"task-{strip_prefix(self.task, 'task-')}",
+            ]
+        )
 
 
 @dataclass(frozen=True)
@@ -216,15 +144,16 @@ class OscillationDetector(AnalysisFn):
         debug: bool = False,
         context: Optional[str] = None,
     ):
-        raw = _resolve_signal(row, source, signal_key, cfg.signal_candidates)
-        x = as_1d(raw)
-        if x is None or x.size == 0:
-            if debug and context:
-                print(f"[oscillation_detector] No signal | {context}")
-            return {}
+        if source and isinstance(row.index, pd.MultiIndex):
+            signal_value = row.get((source, signal_key))
+            time_value = row.get((source, time_key))
+        else:
+            signal_value = row.get(signal_key)
+            time_value = row.get(time_key)
 
-        time_raw = _resolve_time(row, source, time_key, cfg.time_candidates)
-        t = _as_time_vector(as_1d(time_raw), len(x), cfg.fs)
+        x = as_1d(signal_value)
+        t_raw = as_1d(time_value)
+        t = _as_time_vector(t_raw, len(x))
         n = min(len(t), len(x))
         x = x[:n]
         t = t[:n]
@@ -240,7 +169,7 @@ class OscillationDetector(AnalysisFn):
 
         table = _burst_table(t, env, bursts, cfg.fs)
 
-        if debug and context:
+        if debug:
             print(f"[oscillation_detector] bursts={len(bursts)} | {context}")
 
         return {
@@ -262,10 +191,7 @@ def context_from_index(
     signal_key: Optional[str] = None,
     time_key: Optional[str] = None,
 ) -> OscillationContext:
-    if isinstance(index, tuple) and len(index) >= 3:
-        subject, session, task = index[:3]
-    else:
-        subject = session = task = None
+    subject, session, task = index[:3]
     return OscillationContext(
         subject=subject,
         session=session,
@@ -296,8 +222,6 @@ def analyze_oscillation_row(
         debug=debug,
         context=ctx.label(),
     )
-    if not out:
-        return None
     return OscillationResult(context=ctx, band=cfg.band, **out)
 
 
@@ -322,8 +246,7 @@ def analyze_oscillation_dataset(
             debug=debug,
             context=ctx,
         )
-        if out is not None:
-            results.append(out)
+        results.append(out)
     return results
 
 
@@ -354,7 +277,7 @@ def save_oscillation_plot(
     out_dir.mkdir(parents=True, exist_ok=True)
     signal_key = result.context.signal_key or "signal"
     name = filename or f"{result.context.slug()}_{signal_key}_bursts_overlay.png"
-    title = f"{result.context.label()} | Signal={signal_key}" if result.context else None
+    title = f"{result.context.label()} | Signal={signal_key}"
     fig, _ = plot_oscillation_overlay(
         result.t,
         result.x,
@@ -417,8 +340,6 @@ class OscillationDetectorAnalysis(Analysis):
         time_window: Optional[Tuple[float, float]] = None,
         title: Optional[str] = None,
     ):
-        if result.data is None:
-            return None
         res: OscillationResult = result.data
         return plot_oscillation_overlay(
             res.t,
@@ -446,18 +367,15 @@ class OscillationDetectorAnalysis(Analysis):
         time_window: Optional[Tuple[float, float]] = None,
         save_plot: bool = True,
     ) -> list[Path]:
-        if result.data is None:
-            return []
         res: OscillationResult = result.data
         paths: list[Path] = [save_oscillation_bursts(res, stats_dir)]
-        if save_plot and plots_dir is not None:
-            paths.append(
-                save_oscillation_plot(
-                    res,
-                    plots_dir,
-                    overlay=overlay,
-                    overlay_subplot=overlay_subplot,
-                    time_window=time_window,
-                )
+        paths.append(
+            save_oscillation_plot(
+                res,
+                plots_dir,
+                overlay=overlay,
+                overlay_subplot=overlay_subplot,
+                time_window=time_window,
             )
+        )
         return paths

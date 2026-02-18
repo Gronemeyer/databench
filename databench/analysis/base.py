@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from databench._utils._logger import log_this_fr
+
 
 @dataclass(frozen=True)
 class AnalysisResult:
@@ -19,12 +21,15 @@ class AnalysisResult:
 class Analysis:
     name: str
 
+    @log_this_fr
     def run(self, *args, **kwargs) -> AnalysisResult:  # pragma: no cover - interface
         raise NotImplementedError
 
+    @log_this_fr
     def plot(self, result: AnalysisResult, **kwargs):  # pragma: no cover - optional
         return None
 
+    @log_this_fr
     def save(self, result: AnalysisResult, **kwargs) -> list:  # pragma: no cover - optional
         return []
 
@@ -50,11 +55,12 @@ class AxisFn:
 class AnalysisFn:
     name: str
 
+    @log_this_fr
     def run(self, row, debug: bool = False, context: str | None = None, **kwargs):
-        if debug and context:
+        if debug:
             print(f"[{self.name}] start | {context}")
         out = self._run_impl(row, debug=debug, context=context, **kwargs)
-        if debug and context:
+        if debug:
             print(f"[{self.name}] done | {context}")
         return out
 

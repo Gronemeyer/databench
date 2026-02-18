@@ -1,11 +1,11 @@
 #%%
 """
-Event-based analysis in blessed databench style.
+Event-triggered averages for ROI traces aligned to locomotion onset/offset.
 
-This script demonstrates:
-1) explicit procedural flow (load -> preflight -> analyze -> plot -> save)
-2) decorator-registered custom analysis and plotter
-3) DataFrame-based locomotion bout event API
+This script mirrors the event-based workflow:
+- explicit procedural flow (load -> preflight -> analyze -> plot -> save)
+- databench Analysis + Plotter classes
+- locomotion bout event extraction
 """
 
 from __future__ import annotations
@@ -20,10 +20,7 @@ import pandas as pd
 
 from databench import Bench
 from databench.analysis.base import Analysis, AnalysisResult
-from databench.features.treadmill import (
-    LocomotionBoutEventsExtractor,
-    extract_epoch_interpolated,
-)
+from databench.features.treadmill import LocomotionBoutEventsExtractor, extract_epoch_interpolated
 from databench.plotting.base import Plotter
 
 
@@ -44,11 +41,13 @@ def eta_baselined(
     for event_id, event_time in enumerate(event_times):
         for roi in roi_columns:
             roi_values = df[roi].to_numpy()
-            relative_time_grid, roi_epoch = extract_epoch_interpolated(time_values, roi_values, event_time, window=window, dt=dt)
-            if relative_time_grid is None:
+            rel_time, roi_epoch = extract_epoch_interpolated(
+                time_values, roi_values, event_time, window=window, dt=dt
+            )
+            if rel_time is None:
                 continue
 
-            baseline_mask = (relative_time_grid >= baseline[0]) & (relative_time_grid <= baseline[1])
+            baseline_mask = (rel_time >= baseline[0]) & (rel_time <= baseline[1])
             baseline_value = np.nanmean(roi_epoch[baseline_mask]) if baseline_mask.any() else np.nan
             roi_epoch = roi_epoch - baseline_value
 
@@ -56,7 +55,7 @@ def eta_baselined(
                 pd.DataFrame(
                     {
                         "event_id": event_id,
-                        "rel_time": relative_time_grid,
+                        "rel_time": rel_time,
                         "ROI": roi,
                         "value": roi_epoch,
                     }
@@ -69,19 +68,26 @@ def eta_baselined(
 
 
 @dataclass(frozen=True)
-class EtaByConditionAnalysis(Analysis):
-    name: str = "eta_by_condition"
+class EtaByLocomotionAnalysis(Analysis):
+    name: str = "eta_by_locomotion"
     roi_cols: tuple[str, ...] = ()
     task: str = "task-spont"
     event_types: tuple[str, ...] = ("onset", "offset")
     window: tuple[float, float] = (-1.0, 3.0)
     dt: float = 0.05
-    baseline: tuple[float, float] = (-5.0, 0.0)
+    baseline: tuple[float, float] = (-2.0, -0.5)
     bout_events_extractor: Any = LocomotionBoutEventsExtractor()
 
     def run(self, long: pd.DataFrame) -> AnalysisResult:
         roi_cols = list(self.roi_cols)
-        required = ["Subject", "Session", "Task", "Condition", "time_elapsed_s", "speed_mm", *roi_cols]
+        required = [
+            "Subject",
+            "Session",
+            "Task",
+            "time_elapsed_s",
+            "speed_mm",
+            *roi_cols,
+        ]
         missing = [c for c in required if c not in long.columns]
         if missing:
             raise ValueError(f"Missing required columns in long table: {', '.join(missing)}")
@@ -130,7 +136,12 @@ class EtaByConditionAnalysis(Analysis):
         if eta_events.empty:
             return AnalysisResult(
                 name=self.name,
-                data={"events": events, "eta_events": eta_events, "eta_subj": pd.DataFrame(), "eta_group": pd.DataFrame()},
+                data={
+                    "events": events,
+                    "eta_events": eta_events,
+                    "eta_subj": pd.DataFrame(),
+                    "eta_group": pd.DataFrame(),
+                },
                 meta={"task": self.task, "baseline": self.baseline, "window": self.window, "dt": self.dt},
             )
 
@@ -160,45 +171,54 @@ class EtaByConditionAnalysis(Analysis):
 
 
 @dataclass(frozen=True)
-class EtaConditionPlotter(Plotter):
-    name: str = "eta_condition"
+class EtaLocomotionPlotter(Plotter):
+    name: str = "eta_locomotion"
     rois: tuple[str, ...] = ()
-    task: str = "task-movies"
+    task: str = "task-spont"
     event_type: str = "onset"
     baseline: tuple[float, float] | None = None
     ncols: int = 2
 
     def plot(self, result: AnalysisResult):
         rois = list(self.rois)
-        eta_group = result.data["eta_group"]
-        d = eta_group.query("Task == @self.task and EventType == @self.event_type and ROI in @rois").copy()
+        eta_subj = result.data["eta_subj"]
+        d = eta_subj.query("Task == @self.task and EventType == @self.event_type and ROI in @rois").copy()
 
         cond_colors = {
             "baseline": "#bbabab",
             "saline": "#4289e6",
             "ethanol_low": "#ffa251",
             "ethanol_high": "#ce1818",
+            "low": "#ffa251",
+            "high": "#ce1818",
         }
-        cond_order = ["baseline", "saline", "ethanol_low", "ethanol_high"]
+        cond_order = ["baseline", "saline", "low", "high"]
 
-        n = len(rois)
+        subjects = d["Subject"].dropna().unique().tolist()
+        n = len(rois) * len(subjects)
         nrows = int(np.ceil(n / self.ncols))
-        fig, axes = plt.subplots(nrows, self.ncols, figsize=(7 * self.ncols / 2, 3 * nrows), sharex=True, sharey="row") # sharey by row to allow better comparison of onset/offset across conditions within each ROI
+        fig, axes = plt.subplots(
+            nrows,
+            self.ncols,
+            figsize=(7 * self.ncols / 2, 3 * nrows),
+            sharex=True,
+            sharey="row",
+        )
         axes = np.atleast_1d(axes).ravel()
 
-        for ax, roi in zip(axes, rois):
-            dd = d[d["ROI"] == roi]
+        panel_specs = [(roi, subj) for roi in rois for subj in subjects]
+        for ax, (roi, subj) in zip(axes, panel_specs):
+            dd = d[(d["ROI"] == roi) & (d["Subject"] == subj)]
             for cond in cond_order:
                 g = dd[dd["Condition"] == cond]
                 if g.empty:
                     continue
                 color = cond_colors.get(cond)
-                ax.plot(g["rel_time"], g["mean"], label=cond, color=color)
-                ax.fill_between(g["rel_time"], g["mean"] - g["sem"], g["mean"] + g["sem"], alpha=0.2, color=color)
+                ax.plot(g["rel_time"], g["value"], label=cond, color=color)
 
             ax.axvline(0, color="k", lw=1)
             ax.axhline(0, color="k", lw=0.5, alpha=0.5)
-            ax.set_title(roi, fontsize=10)
+            ax.set_title(f"{subj} | {roi}", fontsize=10)
             ax.tick_params(axis="both", labelsize=9)
 
         for ax in axes[n:]:
@@ -206,59 +226,93 @@ class EtaConditionPlotter(Plotter):
 
         handles, labels = axes[0].get_legend_handles_labels()
         if handles:
-            fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.92), ncol=min(4, len(labels)), frameon=False)
+            fig.legend(
+                handles,
+                labels,
+                loc="upper center",
+                bbox_to_anchor=(0.5, 0.92),
+                ncol=min(4, len(labels)),
+                frameon=False,
+            )
 
-        baseline_label = "no baseline subtraction" if self.baseline is None else f"baseline-subtracted [{self.baseline[0]:g}, {self.baseline[1]:g}] s"
+        baseline_label = (
+            "no baseline subtraction"
+            if self.baseline is None
+            else f"baseline-subtracted [{self.baseline[0]:g}, {self.baseline[1]:g}] s"
+        )
         fig.supxlabel(f"Time relative to run {self.event_type} (s)", y=0.02)
-        fig.supylabel("Group mean ± SEM (subject-averaged)", x=0.03)
-        fig.suptitle(f"ETA across ROIs — {self.task} — run {self.event_type}\n{baseline_label}", y=0.98)
-        fig.subplots_adjust(left=0.14, right=0.98, bottom=0.09, top=0.84, hspace=0.28, wspace=0.35) # make spacing wider
+        fig.supylabel("Subject mean (event-averaged)", x=0.03)
+        fig.suptitle(f"ETA by subject - {self.task} - run {self.event_type}\n{baseline_label}", y=0.98)
+        fig.subplots_adjust(left=0.14, right=0.98, bottom=0.09, top=0.84, hspace=0.28, wspace=0.35)
         return fig, axes
 
 
 #%%
 # Procedural workflow
 
-pickle_path = Path(r"/Users/jakegronemeyer/Desktop/4jake/260211_ETOH_dataset.pkl")
+pickle_path = Path(r'/Users/jakegronemeyer/Desktop/4jake/260212_ACUTEVIS_dataset.pkl')
 project_root = Path(__file__).resolve().parents[1]
 output_root = project_root / "outputs"
 
 bench = Bench()
-bench.setup(pickle_path, output_root=output_root, run_name="260217", tag="spont-mop-eta")
+bench.setup(pickle_path, output_root=output_root, run_name="260217", tag="2p-locomotion-eta")
 
 paths = bench.output_paths
 print(f"[databench] run_dir: {paths.run_dir}")
-df = bench.load()
-bouts_feature = bench.get_feature("locomotion_bouts_n")
 
-roi_cols = ["L_MOp", "R_MOp", "L_MOs", "R_MOs"]#, "L_VISp", "R_VISp", "L_SSp-ll", "R_SSp-ll", "L_SSp-m", "R_SSp-m"]
-plot_rois = ["L_MOp", "R_MOp", "L_MOs", "R_MOs",]#] "L_VISp", "R_VISp", "L_SSp-ll", "R_SSp-ll", "L_SSp-m", "R_SSp-m",]
+# Load and prepare data
+raw = bench.load()
 
-analysis = EtaByConditionAnalysis(
+roi_feature = "deltaf_f"
+mean_feature = f"{roi_feature}_mean"
+roi_cols = [mean_feature]
+plot_rois = roi_cols
+
+mean_col = ("suite2p", mean_feature)
+if mean_col not in raw.columns:
+    def mean_suite2p_trace(row: pd.Series) -> np.ndarray | float:
+        trace_matrix = row.get(("suite2p", roi_feature))
+        if trace_matrix is None:
+            return np.nan
+        arr = np.asarray(trace_matrix)
+        if arr.ndim == 1:
+            return arr
+        if arr.ndim == 2:
+            return np.nanmean(arr, axis=0)
+        return np.nan
+
+    raw[mean_col] = raw.apply(mean_suite2p_trace, axis=1)
+
+task = "task-gratings"
+min_speed_cms = 0.05
+min_duration_s = 1.0
+merge_gap_s = 0.5
+
+analysis = EtaByLocomotionAnalysis(
     roi_cols=tuple(roi_cols),
-    task="task-spont",
+    task=task,
     event_types=("onset", "offset"),
     window=(-1.0, 3.0),
     dt=0.02,
     baseline=(-5.0, 0.0),
     bout_events_extractor=LocomotionBoutEventsExtractor(
-        min_speed_cms=bouts_feature.min_speed_cms,
-        min_duration_s=bouts_feature.min_duration_s,
-        merge_gap_s=bouts_feature.merge_gap_s,
         group_cols=("Subject", "Session", "Task"),
         time_col="time_elapsed_s",
         speed_col="speed_mm",
         speed_scale_to_cms=10.0,
+        min_speed_cms=min_speed_cms,
+        min_duration_s=min_duration_s,
+        merge_gap_s=merge_gap_s,
     ),
 )
 
-plot_onset = EtaConditionPlotter(
+plot_onset = EtaLocomotionPlotter(
     rois=tuple(plot_rois),
     task=analysis.task,
     event_type="onset",
     baseline=analysis.baseline,
 )
-plot_offset = EtaConditionPlotter(
+plot_offset = EtaLocomotionPlotter(
     rois=tuple(plot_rois),
     task=analysis.task,
     event_type="offset",
@@ -266,49 +320,96 @@ plot_offset = EtaConditionPlotter(
 )
 
 source_features = [
-    ("mesomap", roi_cols),
-    ("pupil", ["pupil_diameter_mm"]),
-    ("treadmill", ["speed_mm"]),
+    ("suite2p", [mean_feature]),
+    #("pupil", ["pupil_diameter_mm"]),
+    ("encoder", ["speed_mm"]),
 ]
+
 long = bench.build_long(
-    df,
-    source_features=source_features,
-    tol=0.25,
-    time_column="time_elapsed_s",
-    reference_source="mesomap",
+	raw,
+	source_features=source_features,
+	tol=0.25,
+	time_column="time_elapsed_s",
+	reference_source="suite2p",
 )
 
-ses_to_cond = {
-    "ses-01": "baseline",
-    "ses-02": "saline",
-    "ses-03": "ethanol_low",
-    "ses-04": "ethanol_high",
+# Pick which session_config columns you want
+config_cols = ["injection"]  # or ["Condition", "Drug", "Cohort"]
+
+cfg = raw["session_config"][config_cols].copy()
+cfg = cfg.rename(columns={"injection": "Condition"})
+cfg["Condition"] = cfg["Condition"].astype(str).str.strip().str.lower()
+condition_map = {
+    "baseline": "baseline",
+    "saline": "saline",
+    "ethanol_low": "low",
+    "ethanol_high": "high",
+    "low": "low",
+    "high": "high",
 }
-long["Condition"] = long["Session"].map(ses_to_cond)
-
-bench.preflight(
-    analysis=analysis,
-    plotter=plot_onset,
-    df=long,
-    required_columns=["Subject", "Session", "Task", "Condition", "time_elapsed_s", "speed_mm", *roi_cols],
+cfg["Condition"] = cfg["Condition"].map(condition_map)
+cfg["Condition"] = pd.Categorical(
+    cfg["Condition"],
+    categories=["baseline", "saline", "low", "high"],
+    ordered=True,
 )
+
+# Ensure index alignment with long's (Subject, Session, Task)
+long = long.join(cfg, on=["Subject", "Session", "Task"])
+
+print(f"[debug] long rows: {len(long)}")
+print(f"[debug] long tasks: {sorted(long['Task'].unique().tolist())}")
+print(f"[debug] roi columns present: {[c for c in roi_cols if c in long.columns]}")
+print(f"[debug] roi columns missing: {[c for c in roi_cols if c not in long.columns]}")
+if task not in set(long["Task"].unique()):
+    raise ValueError(f"Requested task {task!r} not found in long table.")
+
+task_conditions = (
+    long.loc[long["Task"] == task, "Condition"]
+    .dropna()
+    .astype(str)
+    .value_counts()
+    .to_dict()
+)
+print(f"[debug] condition counts ({task}): {task_conditions}")
+
+task_speed = long.loc[long["Task"] == task, "speed_mm"].astype(float)
+speed_valid = task_speed.replace([np.inf, -np.inf], np.nan).dropna()
+print(f"[debug] speed_mm range ({task}): {speed_valid.min():.4g}..{speed_valid.max():.4g}")
+if speed_valid.size:
+    speed_cms = speed_valid / 10.0
+    frac_moving = float((speed_cms >= min_speed_cms).mean())
+    print(f"[debug] fraction >= {min_speed_cms} cm/s: {frac_moving:.3f}")
+
+# bench.preflight(
+#     analysis=analysis,
+#     plotter=plot_onset,
+#     df=long,
+#     required_columns=[
+#         "Subject",
+#         "Session",
+#         "Task",
+#         "injection",
+#         "time_elapsed_s",
+#         "speed_mm",
+#     ],
+# )
 
 res = bench.analyze(analysis, long)
 
 fig_onset, _ = bench.plot(plot_onset, res)
-onset_plot_path = bench.save_figure(fig_onset, "eta_onset_rois.png")
+onset_plot_path = bench.save_figure(fig_onset, "eta_locomotion_onset.png")
 plt.close(fig_onset)
 
 fig_offset, _ = bench.plot(plot_offset, res)
-offset_plot_path = bench.save_figure(fig_offset, "eta_offset_rois.png")
+offset_plot_path = bench.save_figure(fig_offset, "eta_locomotion_offset.png")
 plt.close(fig_offset)
 
-saved_tables = bench.save_analysis_result_tables(res, prefix="eta")
+saved_tables = bench.save_analysis_result_tables(res, prefix="eta_locomotion")
 
 run_summary_path = bench.save_run_summary(
-    notes="Event-based ETA workflow using registered analysis/plotter and preflight guardrails.",
+    notes="Event-triggered ETA for ROI traces aligned to locomotion onset/offset.",
 )
-bench.save_provenance()
 
 saved_paths = [
     onset_plot_path,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import warnings
 from typing import Any, Iterable, Mapping, Tuple
 import numpy as np
 import pandas as pd
@@ -116,17 +117,6 @@ def locomotion_bout_events(
         and returns one concatenated events table.
     """
     if isinstance(t, pd.DataFrame):
-        if not as_table:
-            raise ValueError("DataFrame input requires as_table=True.")
-        if speed_cms is not None:
-            raise ValueError("Do not pass speed_cms when t is a DataFrame.")
-
-        required_cols = set(group_cols) | {time_col, speed_col}
-        missing_cols = required_cols.difference(t.columns)
-        if missing_cols:
-            missing = ", ".join(sorted(missing_cols))
-            raise ValueError(f"DataFrame missing required columns: {missing}")
-
         tables: list[pd.DataFrame] = []
         for key, group in t.groupby(list(group_cols), sort=False):
             group = group.sort_values(time_col)
@@ -160,18 +150,12 @@ def locomotion_bout_events(
         if context:
             extra_cols.extend([c for c in context.keys() if c not in extra_cols])
         out_cols = base_cols + extra_cols
-        if not tables:
-            return pd.DataFrame(columns=out_cols)
-        out = pd.concat(tables, ignore_index=True)
+        out = pd.concat(tables, ignore_index=True) if tables else pd.DataFrame(columns=out_cols)
         for col in out_cols:
             if col not in out.columns:
                 out[col] = np.nan
         return out[out_cols]
 
-    if speed_cms is None:
-        raise ValueError("speed_cms is required when t is an array.")
-
-    """Detect locomotion bouts and return bout indices + onset/offset times."""
     bouts = _locomotion_bouts(
         t,
         speed_cms,
@@ -179,18 +163,6 @@ def locomotion_bout_events(
         min_duration_s=min_duration_s,
         merge_gap_s=merge_gap_s,
     )
-    if not bouts:
-        if as_table:
-            table = pd.DataFrame(
-                columns=["bout_id", "onset_idx", "offset_idx", "onset_t", "offset_t"]
-            )
-            if context:
-                for key, value in context.items():
-                    table[key] = value
-            return table
-        empty = np.array([], dtype=int)
-        empty_t = np.array([], dtype=float)
-        return [], empty, empty, empty_t, empty_t
     onset_idx = np.array([s for s, _ in bouts], dtype=int)
     offset_idx = np.array([e for _, e in bouts], dtype=int)
     onset_t = t[onset_idx].astype(float)
@@ -250,12 +222,8 @@ def epoch_indices(
     """Return inclusive index bounds for an epoch; None if window exceeds data range."""
     t_start = t0 + window[0]
     t_end = t0 + window[1]
-    if t.size == 0 or t_start < t.min() or t_end > t.max():
-        return None
     i0 = int(np.searchsorted(t, t_start, side="left"))
     i1 = int(np.searchsorted(t, t_end, side="right") - 1)
-    if i1 < i0:
-        return None
     return i0, i1
 
 
@@ -269,13 +237,9 @@ def extract_epoch_interpolated(
 ) -> tuple[np.ndarray, np.ndarray] | tuple[None, None]:
     """Interpolate an epoch onto a uniform grid; returns (rel_t, y_interp)."""
     valid = np.isfinite(t) & np.isfinite(y)
-    if valid.sum() < 5:
-        return None, None
     t_valid = t[valid]
     y_valid = y[valid]
     bounds = epoch_indices(t_valid, t0, window=window)
-    if bounds is None:
-        return None, None
     rel_t = np.arange(window[0], window[1] + 1e-12, dt)
     tgt = t0 + rel_t
     yy = np.interp(tgt, t_valid, y_valid)
@@ -294,18 +258,19 @@ def _bout_stats(
     for s, e in bouts:
         s = int(s)
         e = int(e)
-        if e < s:
-            continue
         duration = float(t[e] - t[s] + dt_med)
         durations_s.append(duration)
         mean_speeds.append(float(np.nanmean(np.abs(speed_cms[s : e + 1]))))
-        if e == s:
-            distances_m.append(0.0)
-            continue
         dt = np.diff(t[s : e + 1])
         dist_cm = float(np.nansum(speed_cms[s + 1 : e + 1] * dt))
         distances_m.append(dist_cm / 100.0)
     return mean_speeds, distances_m, durations_s
+
+
+def _nanmean_no_warn(values) -> float:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        return float(np.nanmean(values))
 
 
 @register_feature
@@ -322,8 +287,6 @@ class MeanSpeedCMS(FeatureFn):
             get_first(row, [("treadmill", "time_elapsed_s"), ("encoder", "time_elapsed_s")]),
             get_first(row, [("treadmill", "speed_mm"), ("encoder", "speed")]),
         )
-        if t is None:
-            return np.nan
         return float(np.nanmean(spd_mm) / 10.0)
 
 
@@ -340,8 +303,6 @@ class StdSpeedCMS(FeatureFn):
             get_first(row, [("treadmill", "time_elapsed_s"), ("encoder", "time_elapsed_s")]),
             get_first(row, [("treadmill", "speed_mm"), ("encoder", "speed")]),
         )
-        if t is None:
-            return np.nan
         return float(np.nanstd(spd_mm) / 10.0)
 
 
@@ -356,10 +317,8 @@ class TotalDistanceM(FeatureFn):
 
     def _run_impl(self, row) -> float:
         dist_mm = as_1d(get_first(row, [("treadmill", "distance_mm"), ("encoder", "distance")]))
-        if dist_mm is not None and dist_mm.size >= 2:
-            dist_mm = dist_mm[np.isfinite(dist_mm)]
-            if dist_mm.size >= 2:
-                return float((dist_mm[-1] - dist_mm[0]) / 1000.0)
+        dist_mm = dist_mm[np.isfinite(dist_mm)]
+        return float((dist_mm[-1] - dist_mm[0]) / 1000.0)
 
         t, spd_mm = clean_xy(
             get_first(row, [("treadmill", "time_elapsed_s"), ("encoder", "time_elapsed_s")]),
@@ -395,16 +354,12 @@ class LocomotionBoutFeature(FeatureFn):
             get_first(row, [("treadmill", "time_elapsed_s"), ("encoder", "time_elapsed_s")]),
             get_first(row, [("treadmill", "speed_mm"), ("encoder", "speed")]),
         )
-        if t is None:
-            return None
         speed_cms = spd_mm / 10.0
         bouts, _, _, _, _ = locomotion_bout_events(t, speed_cms, **self._bout_params())
         return t, speed_cms, bouts
 
     def _get_bout_events(self, row):
         out = self._get_bouts(row)
-        if out is None:
-            return None
         t, speed_cms, _ = out
         return locomotion_bout_events(
             t,
@@ -421,8 +376,6 @@ class LocomotionBoutsCount(LocomotionBoutFeature):
 
     def _run_impl(self, row) -> float:
         out = self._get_bouts(row)
-        if out is None:
-            return np.nan
         _, _, bouts = out
         return float(len(bouts))
 
@@ -435,13 +388,9 @@ class LocomotionBoutSpeedMeanCMS(LocomotionBoutFeature):
 
     def _run_impl(self, row) -> float:
         out = self._get_bouts(row)
-        if out is None:
-            return np.nan
         t, speed_cms, bouts = out
-        if not bouts:
-            return np.nan
         mean_speeds, _, _ = _bout_stats(t, speed_cms, bouts)
-        return float(np.nanmean(mean_speeds)) if mean_speeds else np.nan
+        return _nanmean_no_warn(mean_speeds)
 
 
 @register_feature
@@ -452,13 +401,9 @@ class LocomotionBoutDistanceM(LocomotionBoutFeature):
 
     def _run_impl(self, row) -> float:
         out = self._get_bouts(row)
-        if out is None:
-            return np.nan
         t, speed_cms, bouts = out
-        if not bouts:
-            return np.nan
         _, distances_m, _ = _bout_stats(t, speed_cms, bouts)
-        return float(np.nanmean(distances_m)) if distances_m else np.nan
+        return _nanmean_no_warn(distances_m)
 
 
 @register_feature
@@ -469,10 +414,6 @@ class LocomotionBoutDurationS(LocomotionBoutFeature):
 
     def _run_impl(self, row) -> float:
         out = self._get_bouts(row)
-        if out is None:
-            return np.nan
         t, speed_cms, bouts = out
-        if not bouts:
-            return np.nan
         _, _, durations_s = _bout_stats(t, speed_cms, bouts)
-        return float(np.nanmean(durations_s)) if durations_s else np.nan
+        return _nanmean_no_warn(durations_s)

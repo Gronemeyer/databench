@@ -4,3 +4,5 @@
 /databench.egg-info
 /databench/__pycache__
 *.csv
+/.DS_Store
+*.log

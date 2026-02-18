@@ -20,8 +20,6 @@ class MeanPupilMM(FeatureFn):
 
     def _run_impl(self, row) -> float:
         pup = as_1d(get_first(row, [("pupil", "pupil_diameter_mm"), ("pupil", "diameter_mm")]))
-        if pup is None or pup.size == 0:
-            return np.nan
         return float(np.nanmean(pup))
 
 
@@ -35,6 +33,4 @@ class StdPupilMM(FeatureFn):
 
     def _run_impl(self, row) -> float:
         pup = as_1d(get_first(row, [("pupil", "pupil_diameter_mm"), ("pupil", "diameter_mm")]))
-        if pup is None or pup.size == 0:
-            return np.nan
         return float(np.nanstd(pup))

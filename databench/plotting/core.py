@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping, Optional, Tuple, Union
+from typing import Callable, Mapping, Optional, Tuple, Union
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -10,13 +10,10 @@ from databench.analysis.longitudinal import longitudinal_summary
 from databench.features.base import FeatureFn
 from databench.plotting.base import Plotter
 from databench.registry import register_plotter
+from databench._utils._logger import get_logger
 
 _COLORS = {"primary": "#1f77b4", "secondary": "#9467bd", "accent": "#2ca02c"}
-
-PLOTTERS = {
-    "longitudinal": "plot_feature_longitudinal",
-    "boxplot": "plot_feature_boxplot",
-}
+_LOGGER = get_logger("databench.plotting")
 
 
 def plot_mean_sem(stats, x: str, y_label: str, title: str, color: str, ax=None):
@@ -48,21 +45,14 @@ def plot_boxplot_mean_sem(
     subject_alpha: float = 0.25,
     ax=None,
 ):
+    _LOGGER.debug(
+        f"Boxplot: wide_shape={wide.shape} columns={list(wide.columns)[:12]} index_names={list(wide.index.names)}"
+    )
+    _LOGGER.debug(f"Boxplot: x={x} y={y}")
     data = wide[[x, y]].dropna()
-    if data.empty:
-        raise ValueError(f"No data to plot for {y!r}.")
-
-    if "Subject" in wide.columns:
-        data = data.copy()
-        data["Subject"] = wide.loc[data.index, "Subject"].values
-    elif isinstance(wide.index, pd.MultiIndex) and "Subject" in wide.index.names:
-        data = data.copy()
-        data["Subject"] = data.index.get_level_values("Subject")
-
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(8, 4))
-    else:
-        fig = None
+    data = data.copy()
+    data["Subject"] = data.index.get_level_values("Subject")
+    fig, ax = plt.subplots(figsize=(8, 4))
 
     color = color or _COLORS["primary"]
     title = title or f"{y} across sessions"
@@ -88,24 +78,21 @@ def plot_boxplot_mean_sem(
 
     rng = np.random.default_rng(0)
     for x0, vals in zip(x_vals, y_vals):
-        if vals.size == 0:
-            continue
         jitter_x = x0 + rng.uniform(-jitter, jitter, size=vals.size)
         ax.scatter(jitter_x, vals, s=20, alpha=0.7, color=color, edgecolors="none")
 
-    if connect_subjects and "Subject" in data.columns:
-        sub = data[["Subject", x, y]].dropna()
-        if "Subject" in sub.index.names:
-            sub = sub.reset_index(drop=True)
-        for _, sub_df in sub.groupby("Subject"):
-            sub_df = sub_df.sort_values(x)
-            ax.plot(
-                sub_df[x].to_numpy(),
-                sub_df[y].to_numpy(),
-                color="#555",
-                alpha=subject_alpha,
-                lw=1.0,
-            )
+    sub = data[["Subject", x, y]].dropna()
+    if "Subject" in sub.index.names:
+        sub = sub.reset_index(drop=True)
+    for _, sub_df in sub.groupby("Subject"):
+        sub_df = sub_df.sort_values(x)
+        ax.plot(
+            sub_df[x].to_numpy(),
+            sub_df[y].to_numpy(),
+            color="#555",
+            alpha=subject_alpha,
+            lw=1.0,
+        )
 
     means = np.array([np.nanmean(v) for v in y_vals], dtype=float)
     sems = np.array(
@@ -136,8 +123,7 @@ def plot_feature_longitudinal(
     color = color or _COLORS["primary"]
     title = title or f"{y} across sessions"
     fig, ax = plot_mean_sem(stats, x=x, y_label=y_label or y, title=title, color=color)
-    if x_label:
-        ax.set_xlabel(x_label)
+    ax.set_xlabel(x_label or x)
     return fig, ax
 
 
@@ -180,21 +166,20 @@ def plot_two_panel_longitudinal(
     _, stats2 = longitudinal_summary(wide, y=y2, x=x)
     plot_mean_sem(stats1, x, y_labels[0] or y1, t1, c1, ax=axes[0])
     plot_mean_sem(stats2, x, y_labels[1] or y2, t2, c2, ax=axes[1])
-    if x_label:
-        axes[0].set_xlabel(x_label)
-        axes[1].set_xlabel(x_label)
+    axes[0].set_xlabel(x_label or x)
+    axes[1].set_xlabel(x_label or x)
     fig.tight_layout()
     return fig, axes
 
 
+PLOTTERS: dict[str, Callable[..., tuple]] = {
+    "longitudinal": plot_feature_longitudinal,
+    "boxplot": plot_feature_boxplot,
+}
+
+
 def _resolve_plotter(name: str):
-    func_name = PLOTTERS.get(name)
-    if not func_name:
-        raise KeyError(f"Unknown plotter: {name!r}")
-    func = globals().get(func_name)
-    if func is None:
-        raise KeyError(f"Plotter not found: {func_name!r}")
-    return func
+    return PLOTTERS[name]
 
 
 def plot_feature(
@@ -246,14 +231,12 @@ def _coerce_plot_spec(feature: Union[FeatureFn, DerivedColumnSpec, Mapping[str, 
     if isinstance(feature, str):
         return DerivedColumnSpec(name=feature, label=feature)
     if isinstance(feature, Mapping):
-        if "name" not in feature:
-            raise ValueError("Derived column metadata requires a 'name' key.")
         name = str(feature["name"])
         label = str(feature.get("label", name))
         color = feature.get("color")
         plotter = str(feature.get("plotter", "longitudinal"))
         return DerivedColumnSpec(name=name, label=label, color=color, plotter=plotter)
-    raise TypeError("feature must be FeatureFn, DerivedColumnSpec, mapping, or string")
+    return feature
 
 
 @register_plotter

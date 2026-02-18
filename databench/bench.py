@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Type, Union
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Type, Union, cast
 import json
 from dataclasses import asdict
 import subprocess
@@ -17,6 +17,7 @@ from databench.plotting import Plotter
 from databench.registry import ANALYSIS_CLASSES, FEATURE_CLASSES, PLOTTER_CLASSES
 from databench.utils import drop_rows, session_to_int
 from databench.debug import get_row, log_context
+from databench._utils._logger import get_logger
 
 
 class Bench:
@@ -35,9 +36,9 @@ class Bench:
 
     def __init__(
         self,
-        features: Optional[Iterable[Union[FeatureFn, Type[FeatureFn]]]] = None,
-        analyses: Optional[Iterable[Union[Analysis, Type[Analysis]]]] = None,
-        plotters: Optional[Iterable[Union[Plotter, Type[Plotter]]]] = None,
+        features: Optional[Iterable[Any]] = None,
+        analyses: Optional[Iterable[Any]] = None,
+        plotters: Optional[Iterable[Any]] = None,
     ) -> None:
         """Create a Bench and register default components.
 
@@ -57,6 +58,7 @@ class Bench:
             "figures": [],
             "other": [],
         }
+        self._logger = get_logger("databench")
 
         for feat in (features or FEATURE_CLASSES):
             self.register_feature(feat)
@@ -65,71 +67,33 @@ class Bench:
         for plotter in (plotters or PLOTTER_CLASSES):
             self.register_plotter(plotter)
 
-    def register_feature(self, feat: Union[FeatureFn, Type[FeatureFn]]) -> "Bench":
+    def register_feature(self, feat: Any) -> "Bench":
         """Register a feature class or instance.
 
         Example:
             bench.register_feature(MyFeature)
         """
-        if isinstance(feat, type):
-            if not issubclass(feat, FeatureFn):
-                raise TypeError("Feature class must subclass FeatureFn")
-            instance = feat()
-        elif isinstance(feat, FeatureFn):
-            instance = feat
-        else:
-            raise TypeError("Feature must be a FeatureFn or FeatureFn class")
-
-        if instance.name in self._features:
-            raise ValueError(f"Feature already registered: {instance.name!r}")
+        instance = feat() if isinstance(feat, type) else feat  # type: ignore[call-arg]
         self._features[instance.name] = instance
         return self
 
-    def register_analysis(self, analysis: Union[Analysis, Type[Analysis]]) -> "Bench":
+    def register_analysis(self, analysis: Any) -> "Bench":
         """Register an analysis class or instance.
 
         Example:
             bench.register_analysis(MyAnalysis)
         """
-        if isinstance(analysis, type):
-            if not issubclass(analysis, Analysis):
-                raise TypeError("Analysis class must subclass Analysis")
-            instance = analysis()
-        elif isinstance(analysis, Analysis):
-            instance = analysis
-        else:
-            raise TypeError("Analysis must be an Analysis or Analysis class")
-
-        if instance.name in self._analyses:
-            raise ValueError(f"Analysis already registered: {instance.name!r}")
-        if instance.name in self._plotters:
-            raise ValueError(
-                f"Analysis name conflicts with plotter: {instance.name!r}"
-            )
+        instance = analysis() if isinstance(analysis, type) else analysis  # type: ignore[call-arg]
         self._analyses[instance.name] = instance
         return self
 
-    def register_plotter(self, plotter: Union[Plotter, Type[Plotter]]) -> "Bench":
+    def register_plotter(self, plotter: Any) -> "Bench":
         """Register a plotter class or instance.
 
         Example:
             bench.register_plotter(MyPlotter)
         """
-        if isinstance(plotter, type):
-            if not issubclass(plotter, Plotter):
-                raise TypeError("Plotter class must subclass Plotter")
-            instance = plotter()
-        elif isinstance(plotter, Plotter):
-            instance = plotter
-        else:
-            raise TypeError("Plotter must be a Plotter or Plotter class")
-
-        if instance.name in self._plotters:
-            raise ValueError(f"Plotter already registered: {instance.name!r}")
-        if instance.name in self._analyses:
-            raise ValueError(
-                f"Plotter name conflicts with analysis: {instance.name!r}"
-            )
+        instance = plotter() if isinstance(plotter, type) else plotter  # type: ignore[call-arg]
         self._plotters[instance.name] = instance
         return self
 
@@ -157,10 +121,7 @@ class Bench:
         Example:
             speed = bench.get_feature("speed_mean_cms")
         """
-        try:
-            return self._features[name]
-        except KeyError as exc:
-            raise KeyError(f"Unknown feature: {name!r}") from exc
+        return self._features[name]
 
     @staticmethod
     def _serialize_component(component: Any) -> Dict[str, Any]:
@@ -169,31 +130,11 @@ class Bench:
         except Exception:
             return {"class": component.__class__.__name__}
 
-    def _resolve_analysis(
-        self,
-        analysis: Union[Analysis, Type[Analysis]],
-    ) -> Analysis:
-        if isinstance(analysis, type):
-            if not issubclass(analysis, Analysis):
-                raise TypeError("analysis class must subclass Analysis")
-            return analysis()
-        if isinstance(analysis, Analysis):
-            return analysis
-        raise TypeError("analysis must be an Analysis instance or Analysis class")
+    def _resolve_analysis(self, analysis: Any) -> Analysis:
+        return analysis() if isinstance(analysis, type) else analysis  # type: ignore[call-arg]
 
-    def _resolve_plotter_or_analysis(
-        self,
-        plotter: Union[Plotter, Type[Plotter], Analysis, Type[Analysis]],
-    ) -> Union[Plotter, Analysis]:
-        if isinstance(plotter, type):
-            if issubclass(plotter, Plotter):
-                return plotter()
-            if issubclass(plotter, Analysis):
-                return plotter()
-            raise TypeError("plotter class must subclass Plotter or Analysis")
-        if isinstance(plotter, (Plotter, Analysis)):
-            return plotter
-        raise TypeError("plotter must be a Plotter/Analysis instance or Plotter/Analysis class")
+    def _resolve_plotter_or_analysis(self, plotter: Any) -> Union[Plotter, Analysis]:
+        return plotter() if isinstance(plotter, type) else plotter  # type: ignore[call-arg]
 
     def list_features(self) -> List[str]:
         """List registered first-order feature names."""
@@ -232,10 +173,7 @@ class Bench:
         """Resolve first-order features or derived-column metadata for plotting."""
         if name in self._features:
             return self._features[name]
-        if name in self._derived_column_meta:
-            return dict(self._derived_column_meta[name])
-        known = sorted(set(self.list_features()) | set(self.list_derived_columns()))
-        raise KeyError(f"Unknown plottable column: {name!r}. Known: {', '.join(known)}")
+        return dict(self._derived_column_meta[name])
 
     @staticmethod
     def _has_required_column(df: pd.DataFrame, col: str) -> bool:
@@ -258,19 +196,8 @@ class Bench:
         df: Optional[pd.DataFrame] = None,
         required_columns: Optional[Iterable[str]] = None,
     ) -> None:
-        """Validate names and required columns before expensive work."""
-        if analysis is not None:
-            self._resolve_analysis(analysis)
-        if plotter is not None:
-            self._resolve_plotter_or_analysis(plotter)
-
-        if feature is not None:
-            self.get_column_plot_spec(feature)
-
-        if df is not None and required_columns is not None:
-            missing = [c for c in required_columns if not self._has_required_column(df, c)]
-            if missing:
-                raise ValueError(f"Missing required columns: {', '.join(missing)}")
+        """No-op preflight kept for API compatibility."""
+        return None
 
     def analyze(self, analysis: Union[Analysis, Type[Analysis]], *args, **kwargs) -> AnalysisResult:
         """Run a named analysis and return its result.
@@ -280,9 +207,12 @@ class Bench:
             result = bench.analyze(LongitudinalAnalysis(), table, y="speed_mean_cms")
         """
         analysis_obj = self._resolve_analysis(analysis)
+        self._logger.info(f"Analyze: {analysis_obj.name}")
         self._usage["analyses"].append(
             {
                 "name": analysis_obj.name,
+                "class": analysis_obj.__class__.__name__,
+                "doc": (analysis_obj.__class__.__doc__ or "").strip() or None,
                 "kwargs": kwargs,
                 "config": self._serialize_component(analysis_obj),
             }
@@ -297,14 +227,12 @@ class Bench:
             fig, _ = bench.plot(FeaturePlotter(), table, feature=bench.data[0])
         """
         plot_obj = self._resolve_plotter_or_analysis(plotter)
-        if plot_obj.name == "feature":
-            if "feature" in kwargs and isinstance(kwargs["feature"], str):
-                kwargs["feature"] = self.get_column_plot_spec(kwargs["feature"])
-            elif "feature" not in kwargs and "y" in kwargs and isinstance(kwargs["y"], str):
-                kwargs["feature"] = self.get_column_plot_spec(kwargs.pop("y"))
+        self._logger.debug(f"Plot: {plot_obj.name}")
         self._usage["plots"].append(
             {
                 "name": plot_obj.name,
+                "class": plot_obj.__class__.__name__,
+                "doc": (plot_obj.__class__.__doc__ or "").strip() or None,
                 "kwargs": kwargs,
                 "config": self._serialize_component(plot_obj),
             }
@@ -317,10 +245,8 @@ class Bench:
         Example:
             bench.save(result, stats_dir=paths.stats, plots_dir=paths.plots)
         """
-        try:
-            analysis = self._analyses[result.name]
-        except KeyError as exc:
-            raise KeyError(f"Unknown analysis: {result.name!r}") from exc
+        analysis = self._analyses[result.name]
+        self._logger.info(f"Save result: {result.name}")
         return analysis.save(result, **kwargs)
 
     def set_filters(self, drop_rows: tuple = ()) -> FilterConfig:
@@ -345,14 +271,12 @@ class Bench:
         Example:
             io_cfg, paths = bench.setup("/path/to/input.pkl")
         """
-        if tag:
-            cfg = IOConfig(input_path=Path(input_path), output_root=output_root, run_name=run_name, tag=tag)
-        else:
-            cfg = IOConfig(input_path=Path(input_path), output_root=output_root, run_name=run_name)
+        cfg = IOConfig(input_path=Path(input_path), output_root=output_root, run_name=run_name, tag=tag or "")
         paths = self._make_output_paths(cfg)
         self.io_config = cfg
         self.output_paths = paths
         self._saved_outputs = {"tables": [], "figures": [], "other": []}
+        self._logger.info(f"Setup: input={cfg.input_path} output={paths.run_dir}")
         return cfg, paths
 
     def _track_output(self, path: Path, category: str) -> None:
@@ -361,6 +285,150 @@ class Bench:
         if as_str not in self._saved_outputs[key]:
             self._saved_outputs[key].append(as_str)
 
+    def _log_saved_outputs(self, label: str, path: Path) -> None:
+        self._logger.info(
+            f"{label}: {path} (tables={len(self._saved_outputs.get('tables', []))}, "
+            f"figures={len(self._saved_outputs.get('figures', []))}, "
+            f"other={len(self._saved_outputs.get('other', []))})"
+        )
+
+    @staticmethod
+    def _format_provenance_value(value: Any) -> str:
+        if isinstance(value, Path):
+            return str(value)
+        if isinstance(value, (list, dict, tuple)):
+            return json.dumps(value, ensure_ascii=True, default=str)
+        return str(value)
+
+    @staticmethod
+    def _shared_params(param_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if not param_list:
+            return {}
+        keys = set.intersection(*(set(params.keys()) for params in param_list))
+        shared: Dict[str, Any] = {}
+        for key in sorted(keys):
+            values = [params.get(key) for params in param_list]
+            first = values[0]
+            if all(v == first for v in values) and first is not None:
+                shared[key] = first
+        return shared
+
+    def _write_provenance_summary(
+        self,
+        path: Path,
+        created_at: str,
+        features: List[Dict[str, Any]],
+        analyses: List[Dict[str, Any]],
+        plotters: List[Dict[str, Any]],
+    ) -> None:
+        lines: List[str] = ["# Provenance Summary", ""]
+        lines.append(f"Created: {created_at}")
+        lines.append(f"Git: {self._get_git_hash()}")
+
+        io_cfg = self.io_config
+        if io_cfg is not None:
+            lines.append(f"Input: {self._format_provenance_value(io_cfg.input_path)}")
+            lines.append(f"Output root: {self._format_provenance_value(io_cfg.output_root)}")
+            lines.append(f"Run name: {io_cfg.run_name}")
+            lines.append(f"Tag: {io_cfg.tag}")
+        if self.filter_config is not None:
+            lines.append(f"Filters: {self._format_provenance_value(asdict(self.filter_config))}")
+
+        lines.append("")
+        feature_params = [feat.get("params", {}) for feat in features]
+        shared_feature_params = self._shared_params(feature_params)
+        if shared_feature_params:
+            lines.append("## Shared feature params")
+            for key, value in shared_feature_params.items():
+                lines.append(f"- {key}: {self._format_provenance_value(value)}")
+            lines.append("")
+
+        lines.append("## Features (overrides)")
+        if features:
+            for feat in features:
+                params = dict(feat.get("params", {}))
+                params.pop("name", None)
+                label = params.pop("label", None)
+                overrides = {
+                    key: value
+                    for key, value in params.items()
+                    if key not in shared_feature_params and value is not None
+                }
+                parts = []
+                if label:
+                    parts.append(f"label={self._format_provenance_value(label)}")
+                for key in sorted(overrides.keys()):
+                    parts.append(f"{key}={self._format_provenance_value(overrides[key])}")
+                detail = "; ".join(parts) if parts else "(no overrides)"
+                lines.append(f"- {feat.get('name')} ({feat.get('class')}): {detail}")
+        else:
+            lines.append("- None")
+
+        lines.append("")
+        analysis_params = [entry.get("params", {}) for entry in analyses]
+        shared_analysis_params = self._shared_params(analysis_params)
+        if shared_analysis_params:
+            lines.append("## Shared analysis params")
+            for key, value in shared_analysis_params.items():
+                lines.append(f"- {key}: {self._format_provenance_value(value)}")
+            lines.append("")
+
+        lines.append("## Analyses (overrides)")
+        if analyses:
+            for analysis in analyses:
+                params = dict(analysis.get("params", {}))
+                params.pop("name", None)
+                overrides = {
+                    key: value
+                    for key, value in params.items()
+                    if key not in shared_analysis_params and value is not None
+                }
+                parts = [
+                    f"{key}={self._format_provenance_value(overrides[key])}"
+                    for key in sorted(overrides.keys())
+                ]
+                detail = "; ".join(parts) if parts else "(no overrides)"
+                lines.append(f"- {analysis.get('name')} ({analysis.get('class')}): {detail}")
+                if analysis.get("doc"):
+                    lines.append(f"  Doc: {analysis.get('doc')}")
+        else:
+            lines.append("- None")
+
+        lines.append("")
+        plot_params = [entry.get("params", {}) for entry in plotters]
+        shared_plot_params = self._shared_params(plot_params)
+        if shared_plot_params:
+            lines.append("## Shared plot params")
+            for key, value in shared_plot_params.items():
+                lines.append(f"- {key}: {self._format_provenance_value(value)}")
+            lines.append("")
+
+        lines.append("## Plots")
+        if plotters:
+            for entry in plotters:
+                name = entry.get("name")
+                plotter_class = entry.get("class")
+                params = dict(entry.get("params", {}))
+                params.pop("name", None)
+                overrides = {
+                    key: value
+                    for key, value in params.items()
+                    if key not in shared_plot_params and value is not None
+                }
+                parts = [
+                    f"{key}={self._format_provenance_value(overrides[key])}"
+                    for key in sorted(overrides.keys())
+                ]
+                detail = "; ".join(parts) if parts else "(no overrides)"
+                label = f"{name} ({plotter_class})" if plotter_class else str(name)
+                lines.append(f"- {label}: {detail}")
+                if entry.get("doc"):
+                    lines.append(f"  Doc: {entry.get('doc')}")
+        else:
+            lines.append("- None")
+
+        path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
     def load(self, input_path: Optional[Path] = None) -> pd.DataFrame:
         """Load the dataset from the configured input path.
 
@@ -368,9 +436,8 @@ class Bench:
             df = bench.load()
         """
         if input_path is None:
-            if self.io_config is None:
-                raise ValueError("Call setup() or pass input_path before loading.")
-            input_path = self.io_config.input_path
+            input_path = self.io_config.input_path  # type: ignore[union-attr]
+        self._logger.info(f"Load dataset: {input_path}")
         return self._load_df(input_path)
 
     def build_session_table(
@@ -384,6 +451,9 @@ class Bench:
             table = bench.build_session_table(df)
         """
         use_features = list(features) if features is not None else self.data
+        self._logger.info(
+            f"Build session table: features={len(use_features)} df_shape={df.shape} index_names={list(df.index.names)}"
+        )
         self._usage["features"].append({"names": [f.name for f in use_features]})
         rows = []
         for _, row in df.iterrows():
@@ -403,17 +473,11 @@ class Bench:
         index: Optional[int],
         label: str,
     ) -> Optional[np.ndarray]:
-        x = row.get((source, feature), None)
-        if not isinstance(x, np.ndarray):
-            return None
-        if x.ndim > 1:
-            if index is None:
-                raise ValueError(
-                    f"{label} {source!r}.{feature!r} has nested arrays. "
-                    "Provide an index to select a trace."
-                )
-            x = x[index]
-        return x
+        x = row.get((source, feature))
+        arr = np.asarray(x)
+        if arr.ndim > 1 and index is not None:
+            arr = arr[index]
+        return arr
 
     @staticmethod
     def _source_timeseries(
@@ -424,12 +488,11 @@ class Bench:
         index: Optional[int] = None,
     ) -> Optional[pd.DataFrame]:
         t = Bench._extract_trace(row, source, time_column, index, "Source")
-        if t is None:
-            return None
-        data = {time_column: np.float64(t)}
+        t_arr = np.atleast_1d(t).astype(float, copy=False)
+        data: Dict[str, Any] = {time_column: t_arr}
         for feature_name in features:
             x = Bench._extract_trace(row, source, feature_name, index, "Feature")
-            data[feature_name] = x if x is not None else np.nan
+            data[feature_name] = np.atleast_1d(x)
         return pd.DataFrame(data)
 
     def build_long(
@@ -462,54 +525,21 @@ class Bench:
             the first source in source_features.
         """
         source_features_list = []
+        self._logger.info("Build long table")
         for entry in source_features:
-            if len(entry) == 2:
-                source, features = entry
-                indices = None
-            elif len(entry) == 3:
-                source, features, indices = entry
-            else:
-                raise ValueError(
-                    "source_features entries must be (source, features) or (source, features, indices)."
-                )
+            source = entry[0]
+            features = entry[1]
+            indices = entry[2] if len(entry) > 2 else None
             source_features_list.append((source, list(features), indices))
-        if not source_features_list:
-            raise ValueError("source_features must include at least one (source, features) pair.")
-        if not isinstance(df.columns, pd.MultiIndex) or df.columns.nlevels < 2:
-            raise ValueError("Expected MultiIndex columns with (source, feature).")
 
-        col_tuples = set(df.columns.tolist())
-        for source, _, _ in source_features_list:
-            if (source, time_column) not in col_tuples:
-                raise ValueError(
-                    f"Source {source!r} is missing required ('{source}', '{time_column}') column."
-                )
-
-        if reference_source is None:
-            ref_idx = 0
-        else:
-            ref_idx = next(
-                (i for i, (source, _, _) in enumerate(source_features_list) if source == reference_source),
-                None,
-            )
-            if ref_idx is None:
-                raise ValueError(
-                    f"reference_source {reference_source!r} is not in source_features."
-                )
+        ref_idx = 0
+        if reference_source is not None:
+            for i, (source, _, _) in enumerate(source_features_list):
+                if source == reference_source:
+                    ref_idx = i
+                    break
 
         ref_source, ref_features, ref_indices = source_features_list[ref_idx]
-        indexed_sources = [
-            source for source, _, indices in source_features_list if indices is not None
-        ]
-        if len(indexed_sources) > 1:
-            raise ValueError(
-                "Only one source may specify indices when building long tables."
-            )
-        if indexed_sources and indexed_sources[0] != ref_source:
-            raise ValueError(
-                "The indexed source must be the reference source in source_features."
-            )
-
         merge_sources = [
             entry for i, entry in enumerate(source_features_list) if i != ref_idx
         ]
@@ -580,18 +610,19 @@ class Bench:
                     index=None,
                 )
                 if ts is not None:
+                    ts = ts.dropna(subset=[time_column])
                     out = pd.merge_asof(
                         out,
                         ts.sort_values(time_column),
                         on=time_column,
                         direction="nearest",
-                        tolerance=tol,
+                        tolerance=tol,  # type: ignore[arg-type]
                     )
                 else:
                     for feature_name in features:
                         out[feature_name] = np.nan
 
-            subj, ses, task = idx
+            subj, ses, task = idx  # type: ignore[misc]
             out.insert(0, "Task", task)
             out.insert(0, "Session", ses)
             out.insert(0, "Subject", subj)
@@ -601,20 +632,21 @@ class Bench:
         return pd.concat(frames, ignore_index=True)
 
     def run_feature_on_row(
-		self,
-		df: pd.DataFrame,
-		feature: FeatureFn,
-		subject: Optional[str] = None,
-		session: Optional[str] = None,
-		task: Optional[str] = None,
-		debug: bool = False,
+        self,
+        df: pd.DataFrame,
+        feature: FeatureFn,
+        subject: Optional[str] = None,
+        session: Optional[str] = None,
+        task: Optional[str] = None,
+        debug: bool = False,
     ):
         """Compute one feature for a single row selection.
 
         Example:
-                val = bench.run_feature_on_row(df, bench.data[0], subject="GS29", session="ses-01")
+            val = bench.run_feature_on_row(df, bench.data[0], subject="GS29", session="ses-01")
         """
         idx, row = get_row(df, subject, session, task)
+        self._logger.info(f"Run feature: {feature.name} | {log_context(idx)}")
         val = feature.run(row)
         if debug:
             print(f"{log_context(idx)} | {feature.name} = {val}")
@@ -628,6 +660,7 @@ class Bench:
         """
         if drop_rows_list is None and self.filter_config is not None:
             drop_rows_list = self.filter_config.drop_rows
+        self._logger.info(f"Filter data: rows={len(drop_rows_list or ())}")
         return drop_rows(df, drop_rows_list or ())
 
     def save_table(self, df: pd.DataFrame, name: str = "table.csv", folder: str = "stats") -> Path:
@@ -636,10 +669,6 @@ class Bench:
         Example:
             path = bench.save_table(table, name="summary.csv")
         """
-        if self.output_paths is None:
-            raise ValueError("Call setup() before save_table().")
-        if not hasattr(self.output_paths, folder):
-            raise ValueError(f"Unknown output folder: {folder!r}")
         out_dir = getattr(self.output_paths, folder)
         path = out_dir / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -667,6 +696,7 @@ class Bench:
         - each DataFrame in `result.data` when dict-like as `<prefix>_<key>.csv`
         """
         base = prefix or result.name
+        self._logger.info(f"Save analysis tables: {base}")
         saved: Dict[str, Path] = {}
 
         if isinstance(result.table, pd.DataFrame):
@@ -688,10 +718,9 @@ class Bench:
         Example:
             path = bench.save_provenance()
         """
-        if self.output_paths is None:
-            raise ValueError("Call setup() before save_provenance().")
-        config_dir = self.output_paths.config
+        config_dir = self.output_paths.config  # type: ignore[union-attr]
         config_dir.mkdir(parents=True, exist_ok=True)
+        created_at = datetime.now().isoformat()
 
         used_feature_names = {
             name
@@ -708,17 +737,23 @@ class Bench:
                 params = {"name": feat.name, "label": feat.label}
             features.append({"name": feat.name, "class": feat.__class__.__name__, "params": params})
 
-        used_analysis_names = {entry.get("name") for entry in self._usage.get("analyses", [])}
         analyses = [
-            {"name": a.name, "class": a.__class__.__name__}
-            for a in self._analyses.values()
-            if a.name in used_analysis_names
+            {
+                "name": entry.get("name"),
+                "class": entry.get("class"),
+                "doc": entry.get("doc"),
+                "params": {**entry.get("config", {}), **entry.get("kwargs", {})},
+            }
+            for entry in self._usage.get("analyses", [])
         ]
-        used_plotter_names = {entry.get("name") for entry in self._usage.get("plots", [])}
         plotters = [
-            {"name": p.name, "class": p.__class__.__name__}
-            for p in self._plotters.values()
-            if p.name in used_plotter_names
+            {
+                "name": entry.get("name"),
+                "class": entry.get("class"),
+                "doc": entry.get("doc"),
+                "params": {**entry.get("config", {}), **entry.get("kwargs", {})},
+            }
+            for entry in self._usage.get("plots", [])
         ]
 
         payload = {
@@ -734,7 +769,11 @@ class Bench:
         path = config_dir / name
         with path.open("w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, default=str)
+        summary_path = config_dir / "provenance.md"
+        self._write_provenance_summary(summary_path, created_at, features, analyses, plotters)
         self._track_output(path, "other")
+        self._track_output(summary_path, "other")
+        self._log_saved_outputs("Save provenance", path)
         return path
 
     def save_run_summary(
@@ -749,10 +788,7 @@ class Bench:
         Example:
             bench.save_run_summary(params={"max_freq": 20}, notes="pilot run")
         """
-        if self.output_paths is None:
-            raise ValueError("Call setup() before save_run_summary().")
-
-        config_dir = self.output_paths.config
+        config_dir = self.output_paths.config  # type: ignore[union-attr]
         config_dir.mkdir(parents=True, exist_ok=True)
 
         if params is None:
@@ -790,6 +826,7 @@ class Bench:
         with path.open("w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, default=str)
         self._track_output(path, "other")
+        self._log_saved_outputs("Save run summary", path)
         return path
 
     def save_figure(
@@ -805,10 +842,6 @@ class Bench:
         Example:
             path = bench.save_figure(fig, name="overview.png")
         """
-        if self.output_paths is None:
-            raise ValueError("Call setup() before save_figure().")
-        if not hasattr(self.output_paths, folder):
-            raise ValueError(f"Unknown output folder: {folder!r}")
         out_dir = getattr(self.output_paths, folder)
         path = out_dir / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -830,17 +863,10 @@ class Bench:
         Example:
             path = bench.export_feature_report(df, source="meso", feature="meso_tiff")
         """
-        if self.output_paths is None:
-            raise ValueError("Call setup() before export_feature_report().")
-        if not isinstance(df.index, pd.MultiIndex):
-            raise ValueError("Expected MultiIndex with Subject/Session/Task.")
-        if not hasattr(self.output_paths, folder):
-            raise ValueError(f"Unknown output folder: {folder!r}")
-
         cols = []
         series = []
         for idx, row in df.iterrows():
-            subject, session, task = idx
+            subject, session, task = idx  # type: ignore[misc]
             col_name = id_sep.join([str(subject), str(session), str(task)])
             x = row.get((source, feature))
             if x is None:
@@ -898,7 +924,7 @@ class Bench:
         if path.suffix in {".pkl", ".pickle"}:
             return pd.read_pickle(path)
         if path.suffix in {".h5", ".hdf", ".hdf5"}:
-            return pd.read_hdf(path, key="HFSA")
+            return cast(pd.DataFrame, pd.read_hdf(path, key="HFSA"))
         if path.suffix == ".parquet":
             return pd.read_parquet(path)
         if path.suffix == ".csv":

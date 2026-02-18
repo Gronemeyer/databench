@@ -20,8 +20,6 @@ class MeanMeso(FeatureFn):
 
     def _run_impl(self, row) -> float:
         meso = as_1d(get_first(row, [("meso", "meso_tiff"), ("meso", "meso_mean"), ("Analysis", "meso_dff")]))
-        if meso is None or meso.size == 0:
-            return np.nan
         return float(np.nanmean(meso))
 
 
@@ -35,6 +33,4 @@ class StdMeso(FeatureFn):
 
     def _run_impl(self, row) -> float:
         meso = as_1d(get_first(row, [("meso", "meso_tiff"), ("meso", "meso_mean"), ("Analysis", "meso_dff")]))
-        if meso is None or meso.size == 0:
-            return np.nan
         return float(np.nanstd(meso))

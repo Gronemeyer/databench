@@ -13,6 +13,7 @@ dependencies = [
     "pandas",
     "scipy",
     "matplotlib",
+    "loguru",
 ]
 
 [tool.setuptools.packages.find]

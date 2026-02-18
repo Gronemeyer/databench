@@ -58,40 +58,6 @@ def spectrogram_db(x: np.ndarray, fs: float, win_s: float, overlap_frac: float):
     return f, tt, 10 * np.log10(Sxx + 1e-12)
 
 
-def list_regions(row: pd.Series, source: str) -> list[str]:
-    if isinstance(row.index, pd.MultiIndex):
-        return [c[1] for c in row.index if c[0] == source]
-    return []
-
-
-def resolve_targets(regions: list[str], targets: Dict[str, str]) -> Dict[str, str]:
-    resolved = {}
-    for k, col in targets.items():
-        if col in regions:
-            resolved[k] = col
-        else:
-            cands = [c for c in regions if c.startswith("L_") and (k in c)]
-            resolved[k] = cands[0] if cands else (regions[0] if regions else col)
-    return resolved
-
-
-def _stack_regions(row: pd.Series, source: str, regions: list[str]) -> np.ndarray:
-    xs = []
-    for r in regions:
-        x = row.get((source, r))
-        if x is None:
-            continue
-        arr = np.asarray(x, dtype=float)
-        if arr.ndim == 0 or arr.size == 0:
-            continue
-        xs.append(arr.ravel())
-    if not xs:
-        return np.empty((0, 0))
-    n = min(len(x) for x in xs)
-    xs = [x[:n] for x in xs]
-    return np.vstack(xs)
-
-
 @dataclass(frozen=True)
 class MesomapHilbert(AnalysisFn):
     name: str = "mesomap_hilbert"
@@ -104,26 +70,33 @@ class MesomapHilbert(AnalysisFn):
         debug: bool = False,
         context: Optional[str] = None,
     ):
-        regions = list_regions(row, source)
-        if not regions:
-            if debug and context:
-                print(f"[mesomap] No regions found | {context}")
-            return {}
+        regions = [c[1] for c in row.index if c[0] == source]
 
-        resolved = resolve_targets(regions, cfg.targets)
+        resolved: Dict[str, str] = {}
+        for key, col in cfg.targets.items():
+            if col in regions:
+                resolved[key] = col
+                continue
+            candidates = [region for region in regions if region.startswith("L_") and (key in region)]
+            if candidates:
+                resolved[key] = candidates[0]
+            elif regions:
+                resolved[key] = regions[0]
+            else:
+                resolved[key] = col
 
         signals = {}
         for k, col in resolved.items():
             x = row.get((source, col))
-            if x is None:
-                continue
             signals[k] = detrend_zscore_1d(np.asarray(x, dtype=float))
 
-        X_all = _stack_regions(row, source, regions)
-        if X_all.size == 0:
-            if debug and context:
-                print(f"[mesomap] Empty stacked regions | {context}")
-            return {}
+        stacked = []
+        for region in regions:
+            x = row.get((source, region))
+            arr = np.asarray(x, dtype=float)
+            stacked.append(arr.ravel())
+        n = min(len(arr) for arr in stacked)
+        X_all = np.vstack([arr[:n] for arr in stacked])
         X_all = signal.detrend(X_all, axis=1, type="linear")
         g = X_all.mean(axis=0)
         g = detrend_zscore_1d(g)
@@ -144,12 +117,11 @@ class MesomapHilbert(AnalysisFn):
             specs[k] = (f[m], tt, Sdb[m, :])
 
         overlap = {}
-        g_env = envs.get("GLOBAL")
-        if g_env is not None:
-            for k in resolved.keys():
-                overlap[k] = float(np.corrcoef(envs[k], g_env)[0, 1])
+        g_env = envs["GLOBAL"]
+        for k in resolved.keys():
+            overlap[k] = float(np.corrcoef(envs[k], g_env)[0, 1])
 
-        if debug and context:
+        if debug:
             print(f"[mesomap] Resolved: {resolved} | {context}")
 
         return {
@@ -187,19 +159,13 @@ def export_hilbert_envelopes(
     for idx, row in df.iterrows():
         ctx = log_context(idx)
         out = run_mesomap_hilbert(row, cfg, source=source, debug=debug, context=ctx)
-        if not out:
-            continue
-
-        if not isinstance(idx, tuple) or len(idx) < 3:
-            continue
         subject, session, task = idx[:3]
         subject = strip_prefix(subject, "sub-")
         session = strip_prefix(session, "ses-")
         task = strip_prefix(task, "task-")
 
         keys = list(out["resolved"].keys())
-        if "GLOBAL" in out["envs"]:
-            keys.append("GLOBAL")
+        keys.append("GLOBAL")
 
         data = {"t_s": out["t"]}
         for k in keys:
@@ -234,13 +200,10 @@ class MesomapHilbertAnalysis(Analysis):
         keys: Optional[list[str]] = None,
         **kwargs,
     ):
-        if not result.data:
-            return None
         out = result.data
         if kind == "envelopes":
             use_keys = keys or list(out["resolved"].keys())
-            if "GLOBAL" in out["envs"]:
-                use_keys.append("GLOBAL")
+            use_keys.append("GLOBAL")
             cfg = result.meta.get("cfg")
             return plot_stacked_envelopes(
                 out["t"],
@@ -252,8 +215,7 @@ class MesomapHilbertAnalysis(Analysis):
             )
         if kind == "spectrograms":
             use_keys = keys or list(out["resolved"].keys())
-            if "GLOBAL" in out["specs"]:
-                use_keys.append("GLOBAL")
+            use_keys.append("GLOBAL")
             cfg = result.meta.get("cfg")
             fmax = kwargs.pop("fmax", cfg.fmax if cfg else 12.0)
             win_s = kwargs.pop("win_s", cfg.win_s if cfg else 4.0)

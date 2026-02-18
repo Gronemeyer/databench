@@ -11,10 +11,10 @@ from databench.plotting import FeaturePlotter, plot_locomotion_bouts
 from databench.utils import clean_xy, get_first, strip_prefix
 
 
-DATASET = Path(r"D:\4jake\260211_ETOH_dataset.pkl")
-RUN_NAME = "test-new-bouts"
+DATASET = Path(r"/Users/jakegronemeyer/Desktop/4jake/260212_ETOH-HFSA_dataset.pkl")
+RUN_NAME = "260217_test-bouts"
 EXPORT_SVG = True
-TASK_FILTER = "task-spont"
+TASK_FILTER = "task-widefield"
 
 
 def main() -> None:
@@ -76,8 +76,8 @@ def main() -> None:
                 t,
                 speed_cms,
                 min_speed_cms=bench.get_feature("locomotion_bouts_n").min_speed_cms,
-                min_duration_s=bouts_feature.min_duration_s,
-                merge_gap_s=bouts_feature.merge_gap_s,
+                min_duration_s=bench.get_feature("locomotion_bouts_n").min_duration_s,
+                merge_gap_s=bench.get_feature("locomotion_bouts_n").merge_gap_s,
             )
             if bouts:
                 dt_med = float(np.nanmedian(np.diff(t))) if t.size > 1 else 0.0

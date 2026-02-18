@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from databench._utils._logger import log_this_fr
+
 
 @dataclass(frozen=True)
 class FeatureFn:
@@ -13,11 +15,12 @@ class FeatureFn:
     color: Optional[str] = None
     source: Optional[str] = None
 
+    @log_this_fr
     def run(self, row, debug: bool = False, context: str | None = None):
-        if debug and context:
+        if debug:
             print(f"[{self.name}] start | {context}")
         val = self._run_impl(row)
-        if debug and context:
+        if debug:
             print(f"[{self.name}] value={val} | {context}")
         return val
 

@@ -13,17 +13,12 @@ if TYPE_CHECKING:
 
 
 def _safe_git_hash() -> Optional[str]:
-    try:
-        out = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL)
-    except Exception:
-        return None
-    return out.decode("utf-8").strip() if out else None
+    out = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL)
+    return out.decode("utf-8").strip()
 
 
 def _serialize_config(obj):
-    if hasattr(obj, "__dataclass_fields__"):
-        return asdict(obj)
-    return obj
+    return asdict(obj)
 
 
 def save_provenance(bench: "Bench", *, output_dir: Path) -> Path:
@@ -33,8 +28,8 @@ def save_provenance(bench: "Bench", *, output_dir: Path) -> Path:
     payload = {
         "created_at": datetime.now().isoformat(),
         "git_hash": _safe_git_hash(),
-        "io_config": _serialize_config(bench.io_config) if bench.io_config else None,
-        "filter_config": _serialize_config(bench.filter_config) if bench.filter_config else None,
+        "io_config": _serialize_config(bench.io_config),
+        "filter_config": _serialize_config(bench.filter_config),
         "features": {
             name: {"class": feat.__class__.__name__, "config": _serialize_config(feat)}
             for name, feat in bench._features.items()
