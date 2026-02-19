@@ -224,12 +224,13 @@ project_root = Path(__file__).resolve().parents[1]
 output_root = project_root / "outputs"
 
 bench = Bench()
-bench.setup(pickle_path, output_root=output_root, run_name="260217", tag="spont-mop-eta")
+bench.setup(pickle_path, output_root=output_root, run_name="260218", tag="spont-mop-eta")
 
 paths = bench.output_paths
 print(f"[databench] run_dir: {paths.run_dir}")
 df = bench.load()
 bouts_feature = bench.get_feature("locomotion_bouts_n")
+bench._usage["features"].append({"names": [bouts_feature.name]})
 
 roi_cols = ["L_MOp", "R_MOp", "L_MOs", "R_MOs"]#, "L_VISp", "R_VISp", "L_SSp-ll", "R_SSp-ll", "L_SSp-m", "R_SSp-m"]
 plot_rois = ["L_MOp", "R_MOp", "L_MOs", "R_MOs",]#] "L_VISp", "R_VISp", "L_SSp-ll", "R_SSp-ll", "L_SSp-m", "R_SSp-m",]
@@ -296,11 +297,23 @@ bench.preflight(
 res = bench.analyze(analysis, long)
 
 fig_onset, _ = bench.plot(plot_onset, res)
-onset_plot_path = bench.save_figure(fig_onset, "eta_onset_rois.png")
+#onset_plot_path = bench.save_figure(fig_onset, "eta_onset_rois.png")
+bench.save_feature_plot(
+    fig_onset,
+    "eta_onset_rois.png",
+    feature_name="ETA onset-aligned",
+    plotter=plot_onset,
+)
 plt.close(fig_onset)
 
 fig_offset, _ = bench.plot(plot_offset, res)
-offset_plot_path = bench.save_figure(fig_offset, "eta_offset_rois.png")
+#offset_plot_path = bench.save_figure(fig_offset, "eta_offset_rois.png")
+bench.save_feature_plot(
+    fig_offset,
+    "eta_offset_rois.png",
+    feature_name="ETA offset-aligned",
+    plotter=plot_offset,
+)
 plt.close(fig_offset)
 
 saved_tables = bench.save_analysis_result_tables(res, prefix="eta")
@@ -311,8 +324,8 @@ run_summary_path = bench.save_run_summary(
 bench.save_provenance()
 
 saved_paths = [
-    onset_plot_path,
-    offset_plot_path,
+    # onset_plot_path,
+    # offset_plot_path,
     *saved_tables.values(),
     run_summary_path,
 ]

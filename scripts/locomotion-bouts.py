@@ -12,14 +12,18 @@ from databench.utils import clean_xy, get_first, strip_prefix
 
 
 DATASET = Path(r"/Users/jakegronemeyer/Desktop/4jake/260212_ETOH-HFSA_dataset.pkl")
-RUN_NAME = "260217_test-bouts"
+RUN_NAME = "260218_test-scientist"
 EXPORT_SVG = True
 TASK_FILTER = "task-widefield"
 
 
 def main() -> None:
     bench = Bench()
-    bench.setup(input_path=DATASET, run_name=RUN_NAME, tag="ETOH_locomotion_bouts-5-seconds")
+    bench.setup(input_path=DATASET, 
+                scientist="Jacob Gronemeyer",
+                run_name=RUN_NAME, 
+                tag="ETOH_locomotion_bouts-5-seconds",
+                notes="First-order locomotion bout features for ET0H R01 10-day pre-condition dataset.")
     df = bench.load()
     df = df[df.index.get_level_values("Task") == TASK_FILTER]
 
@@ -47,7 +51,14 @@ def main() -> None:
             x_label="Session (days)",
         )
         base = f"{feat.name}_boxplot"
-        bench.save_figure(fig, f"{base}.png", folder="plots", dpi=300, bbox_inches="tight")
+        bench.save_feature_plot(
+            fig,
+            f"{base}.png",
+            feature_name=feat.name,
+            folder="plots",
+            dpi=300,
+            bbox_inches="tight",
+        )
         if EXPORT_SVG:
             bench.save_figure(fig, f"{base}.svg", folder="plots", dpi=300, bbox_inches="tight")
         plt.close(fig)
