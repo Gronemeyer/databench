@@ -276,6 +276,8 @@ def _nanmean_no_warn(values) -> float:
 @register_feature
 @dataclass(frozen=True)
 class MeanSpeedCMS(FeatureFn):
+    """Mean treadmill speed per session in cm/s."""
+
     name: str = "speed_mean_cms"
     label: str = "Speed (cm/s)"
     color: str = SOURCE_COLOR
@@ -293,6 +295,8 @@ class MeanSpeedCMS(FeatureFn):
 @register_feature
 @dataclass(frozen=True)
 class StdSpeedCMS(FeatureFn):
+    """Standard deviation of treadmill speed in cm/s."""
+
     name: str = "speed_std_cms"
     label: str = "Speed SD (cm/s)"
     color: str = SOURCE_COLOR
@@ -309,6 +313,8 @@ class StdSpeedCMS(FeatureFn):
 @register_feature
 @dataclass(frozen=True)
 class TotalDistanceM(FeatureFn):
+    """Total distance traveled in meters during the session."""
+
     name: str = "distance_m"
     label: str = "Distance (m)"
     color: str = SOURCE_COLOR
@@ -335,6 +341,8 @@ class TotalDistanceM(FeatureFn):
 
 @dataclass(frozen=True)
 class LocomotionBoutFeature(FeatureFn):
+    """Base class for locomotion-bout features with shared thresholds."""
+
     color: str = SOURCE_COLOR
     source: str = "treadmill"
     plotter: str = "boxplot"
@@ -371,6 +379,8 @@ class LocomotionBoutFeature(FeatureFn):
 @register_feature
 @dataclass(frozen=True)
 class LocomotionBoutsCount(LocomotionBoutFeature):
+    """Count of locomotion bouts per session."""
+
     name: str = "locomotion_bouts_n"
     label: str = "Locomotion bouts (n)"
 
@@ -383,6 +393,8 @@ class LocomotionBoutsCount(LocomotionBoutFeature):
 @register_feature
 @dataclass(frozen=True)
 class LocomotionBoutSpeedMeanCMS(LocomotionBoutFeature):
+    """Mean speed across locomotion bouts in cm/s."""
+
     name: str = "locomotion_bout_speed_mean_cms"
     label: str = "Bout speed (cm/s)"
 
@@ -396,6 +408,8 @@ class LocomotionBoutSpeedMeanCMS(LocomotionBoutFeature):
 @register_feature
 @dataclass(frozen=True)
 class LocomotionBoutDistanceM(LocomotionBoutFeature):
+    """Mean distance across locomotion bouts in meters."""
+
     name: str = "locomotion_bout_distance_m"
     label: str = "Bout distance (m)"
 
@@ -409,6 +423,8 @@ class LocomotionBoutDistanceM(LocomotionBoutFeature):
 @register_feature
 @dataclass(frozen=True)
 class LocomotionBoutDurationS(LocomotionBoutFeature):
+    """Mean duration across locomotion bouts in seconds."""
+
     name: str = "locomotion_bout_duration_s"
     label: str = "Bout duration (s)"
 
