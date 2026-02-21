@@ -10,6 +10,7 @@ from typing import Optional
 class IOConfig:
     input_path: Path
     output_root: Path = Path("outputs")
+    scientist: Optional[str] = None
     run_name: str = "databench"
     tag: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S"))
 

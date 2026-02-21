@@ -14,6 +14,7 @@ from databench.analysis import Analysis, AnalysisResult
 from databench.config import FilterConfig, IOConfig, OutputPaths
 from databench.features import FeatureFn
 from databench.plotting import Plotter
+from databench import provenance
 from databench.registry import ANALYSIS_CLASSES, FEATURE_CLASSES, PLOTTER_CLASSES
 from databench.utils import drop_rows, session_to_int
 from databench.debug import get_row, log_context
@@ -53,10 +54,12 @@ class Bench:
         self.output_paths: Optional[OutputPaths] = None
         self._usage: Dict[str, list] = {"features": [], "analyses": [], "plots": []}
         self._derived_column_meta: Dict[str, Dict[str, Any]] = {}
+        self._provenance_notes: Optional[str] = None
         self._saved_outputs: Dict[str, List[str]] = {
             "tables": [],
             "figures": [],
             "other": [],
+            "feature_plots": [],
         }
         self._logger = get_logger("databench")
 
@@ -212,6 +215,7 @@ class Bench:
             {
                 "name": analysis_obj.name,
                 "class": analysis_obj.__class__.__name__,
+                "class_module": analysis_obj.__class__.__module__,
                 "doc": (analysis_obj.__class__.__doc__ or "").strip() or None,
                 "kwargs": kwargs,
                 "config": self._serialize_component(analysis_obj),
@@ -232,6 +236,7 @@ class Bench:
             {
                 "name": plot_obj.name,
                 "class": plot_obj.__class__.__name__,
+                "class_module": plot_obj.__class__.__module__,
                 "doc": (plot_obj.__class__.__doc__ or "").strip() or None,
                 "kwargs": kwargs,
                 "config": self._serialize_component(plot_obj),
@@ -263,6 +268,8 @@ class Bench:
         self,
         input_path: Path,
         output_root: Path = Path("outputs"),
+        scientist: Optional[str] = None,
+        notes: Optional[str] = None,
         run_name: str = "databench",
         tag: Optional[str] = None,
     ) -> tuple[IOConfig, OutputPaths]:
@@ -271,11 +278,23 @@ class Bench:
         Example:
             io_cfg, paths = bench.setup("/path/to/input.pkl")
         """
-        cfg = IOConfig(input_path=Path(input_path), output_root=output_root, run_name=run_name, tag=tag or "")
+        cfg = IOConfig(
+            input_path=Path(input_path),
+            output_root=output_root,
+            scientist=scientist,
+            run_name=run_name,
+            tag=tag or "",
+        )
         paths = self._make_output_paths(cfg)
         self.io_config = cfg
         self.output_paths = paths
-        self._saved_outputs = {"tables": [], "figures": [], "other": []}
+        self._provenance_notes = notes
+        self._saved_outputs = {
+            "tables": [],
+            "figures": [],
+            "other": [],
+            "feature_plots": [],
+        }
         self._logger.info(f"Setup: input={cfg.input_path} output={paths.run_dir}")
         return cfg, paths
 
@@ -291,143 +310,6 @@ class Bench:
             f"figures={len(self._saved_outputs.get('figures', []))}, "
             f"other={len(self._saved_outputs.get('other', []))})"
         )
-
-    @staticmethod
-    def _format_provenance_value(value: Any) -> str:
-        if isinstance(value, Path):
-            return str(value)
-        if isinstance(value, (list, dict, tuple)):
-            return json.dumps(value, ensure_ascii=True, default=str)
-        return str(value)
-
-    @staticmethod
-    def _shared_params(param_list: List[Dict[str, Any]]) -> Dict[str, Any]:
-        if not param_list:
-            return {}
-        keys = set.intersection(*(set(params.keys()) for params in param_list))
-        shared: Dict[str, Any] = {}
-        for key in sorted(keys):
-            values = [params.get(key) for params in param_list]
-            first = values[0]
-            if all(v == first for v in values) and first is not None:
-                shared[key] = first
-        return shared
-
-    def _write_provenance_summary(
-        self,
-        path: Path,
-        created_at: str,
-        features: List[Dict[str, Any]],
-        analyses: List[Dict[str, Any]],
-        plotters: List[Dict[str, Any]],
-    ) -> None:
-        lines: List[str] = ["# Provenance Summary", ""]
-        lines.append(f"Created: {created_at}")
-        lines.append(f"Git: {self._get_git_hash()}")
-
-        io_cfg = self.io_config
-        if io_cfg is not None:
-            lines.append(f"Input: {self._format_provenance_value(io_cfg.input_path)}")
-            lines.append(f"Output root: {self._format_provenance_value(io_cfg.output_root)}")
-            lines.append(f"Run name: {io_cfg.run_name}")
-            lines.append(f"Tag: {io_cfg.tag}")
-        if self.filter_config is not None:
-            lines.append(f"Filters: {self._format_provenance_value(asdict(self.filter_config))}")
-
-        lines.append("")
-        feature_params = [feat.get("params", {}) for feat in features]
-        shared_feature_params = self._shared_params(feature_params)
-        if shared_feature_params:
-            lines.append("## Shared feature params")
-            for key, value in shared_feature_params.items():
-                lines.append(f"- {key}: {self._format_provenance_value(value)}")
-            lines.append("")
-
-        lines.append("## Features (overrides)")
-        if features:
-            for feat in features:
-                params = dict(feat.get("params", {}))
-                params.pop("name", None)
-                label = params.pop("label", None)
-                overrides = {
-                    key: value
-                    for key, value in params.items()
-                    if key not in shared_feature_params and value is not None
-                }
-                parts = []
-                if label:
-                    parts.append(f"label={self._format_provenance_value(label)}")
-                for key in sorted(overrides.keys()):
-                    parts.append(f"{key}={self._format_provenance_value(overrides[key])}")
-                detail = "; ".join(parts) if parts else "(no overrides)"
-                lines.append(f"- {feat.get('name')} ({feat.get('class')}): {detail}")
-        else:
-            lines.append("- None")
-
-        lines.append("")
-        analysis_params = [entry.get("params", {}) for entry in analyses]
-        shared_analysis_params = self._shared_params(analysis_params)
-        if shared_analysis_params:
-            lines.append("## Shared analysis params")
-            for key, value in shared_analysis_params.items():
-                lines.append(f"- {key}: {self._format_provenance_value(value)}")
-            lines.append("")
-
-        lines.append("## Analyses (overrides)")
-        if analyses:
-            for analysis in analyses:
-                params = dict(analysis.get("params", {}))
-                params.pop("name", None)
-                overrides = {
-                    key: value
-                    for key, value in params.items()
-                    if key not in shared_analysis_params and value is not None
-                }
-                parts = [
-                    f"{key}={self._format_provenance_value(overrides[key])}"
-                    for key in sorted(overrides.keys())
-                ]
-                detail = "; ".join(parts) if parts else "(no overrides)"
-                lines.append(f"- {analysis.get('name')} ({analysis.get('class')}): {detail}")
-                if analysis.get("doc"):
-                    lines.append(f"  Doc: {analysis.get('doc')}")
-        else:
-            lines.append("- None")
-
-        lines.append("")
-        plot_params = [entry.get("params", {}) for entry in plotters]
-        shared_plot_params = self._shared_params(plot_params)
-        if shared_plot_params:
-            lines.append("## Shared plot params")
-            for key, value in shared_plot_params.items():
-                lines.append(f"- {key}: {self._format_provenance_value(value)}")
-            lines.append("")
-
-        lines.append("## Plots")
-        if plotters:
-            for entry in plotters:
-                name = entry.get("name")
-                plotter_class = entry.get("class")
-                params = dict(entry.get("params", {}))
-                params.pop("name", None)
-                overrides = {
-                    key: value
-                    for key, value in params.items()
-                    if key not in shared_plot_params and value is not None
-                }
-                parts = [
-                    f"{key}={self._format_provenance_value(overrides[key])}"
-                    for key in sorted(overrides.keys())
-                ]
-                detail = "; ".join(parts) if parts else "(no overrides)"
-                label = f"{name} ({plotter_class})" if plotter_class else str(name)
-                lines.append(f"- {label}: {detail}")
-                if entry.get("doc"):
-                    lines.append(f"  Doc: {entry.get('doc')}")
-        else:
-            lines.append("- None")
-
-        path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
     def load(self, input_path: Optional[Path] = None) -> pd.DataFrame:
         """Load the dataset from the configured input path.
@@ -720,57 +602,7 @@ class Bench:
         """
         config_dir = self.output_paths.config  # type: ignore[union-attr]
         config_dir.mkdir(parents=True, exist_ok=True)
-        created_at = datetime.now().isoformat()
-
-        used_feature_names = {
-            name
-            for entry in self._usage.get("features", [])
-            for name in entry.get("names", [])
-        }
-        features = []
-        for feat in self.data:
-            if feat.name not in used_feature_names:
-                continue
-            try:
-                params = asdict(feat)
-            except Exception:
-                params = {"name": feat.name, "label": feat.label}
-            features.append({"name": feat.name, "class": feat.__class__.__name__, "params": params})
-
-        analyses = [
-            {
-                "name": entry.get("name"),
-                "class": entry.get("class"),
-                "doc": entry.get("doc"),
-                "params": {**entry.get("config", {}), **entry.get("kwargs", {})},
-            }
-            for entry in self._usage.get("analyses", [])
-        ]
-        plotters = [
-            {
-                "name": entry.get("name"),
-                "class": entry.get("class"),
-                "doc": entry.get("doc"),
-                "params": {**entry.get("config", {}), **entry.get("kwargs", {})},
-            }
-            for entry in self._usage.get("plots", [])
-        ]
-
-        payload = {
-            "io_config": None if self.io_config is None else asdict(self.io_config),
-            "filter_config": None if self.filter_config is None else asdict(self.filter_config),
-            "git_hash": self._get_git_hash(),
-            "features": features,
-            "analyses": analyses,
-            "plotters": plotters,
-            "usage": self._usage,
-        }
-
-        path = config_dir / name
-        with path.open("w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, default=str)
-        summary_path = config_dir / "provenance.md"
-        self._write_provenance_summary(summary_path, created_at, features, analyses, plotters)
+        path, summary_path = provenance.save_provenance(self, output_dir=config_dir, name=name)
         self._track_output(path, "other")
         self._track_output(summary_path, "other")
         self._log_saved_outputs("Save provenance", path)
@@ -847,6 +679,30 @@ class Bench:
         path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(path, dpi=dpi, bbox_inches=bbox_inches)
         self._track_output(path, "figures")
+        return path
+
+    def save_feature_plot(
+        self,
+        fig,
+        name: str,
+        feature_name: str,
+        plotter: Optional[Any] = None,
+        folder: str = "plots",
+        dpi: int = 300,
+        bbox_inches: str = "tight",
+    ) -> Path:
+        """Save a figure and record its associated feature name explicitly."""
+        path = self.save_figure(fig, name=name, folder=folder, dpi=dpi, bbox_inches=bbox_inches)
+        record = {
+            "feature_name": feature_name,
+            "path": str(path),
+        }
+        if plotter is not None:
+            record["plotter_class"] = plotter.__class__.__name__
+            record["plotter_module"] = plotter.__class__.__module__
+            record["plotter_doc"] = (plotter.__class__.__doc__ or "").strip() or None
+            record["plotter_params"] = self._serialize_component(plotter)
+        self._saved_outputs.setdefault("feature_plots", []).append(record)
         return path
 
     def export_feature_report(
