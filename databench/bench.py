@@ -854,7 +854,11 @@ class Bench:
 
     @staticmethod
     def _make_output_paths(cfg: IOConfig) -> OutputPaths:
-        run_dir = cfg.output_root / cfg.run_name / cfg.tag
+        # Structure: output_root / script_name / {run_name}_{tag} / YYMMDDHHMMSS
+        script_name = cfg.script_name or "unknown"
+        run_tag = f"{cfg.run_name}_{cfg.tag}" if cfg.tag else cfg.run_name
+        timestamp = datetime.now().strftime("%y%m%d%H%M%S")
+        run_dir = cfg.output_root / script_name / run_tag / timestamp
         plots = run_dir / "plots"
         reports = run_dir / "reports"
         stats = run_dir / "stats"

@@ -460,11 +460,11 @@ def save_provenance(bench: "Bench", *, output_dir: Path, name: str = "provenance
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, default=str)
 
-    tag = ""
+    script_name = ""
     if bench.io_config is not None:
-        tag = bench.io_config.tag or ""
+        script_name = bench.io_config.script_name or ""
     date_prefix = datetime.now().strftime("%y%m%d")
-    summary_name = f"{date_prefix}_{tag}_summary.md" if tag else f"{date_prefix}_summary.md"
+    summary_name = f"{date_prefix}_{script_name}_summary.md" if script_name else f"{date_prefix}_summary.md"
     summary_path = output_dir / summary_name
     write_provenance_summary(
         summary_path,

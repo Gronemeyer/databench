@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import os
+import sys
 import tomllib
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
+
+
+def _detect_script_name() -> str:
+    """Return the stem of the top-level script (e.g. 'oscillation-pupil-eta')."""
+    main = getattr(sys.modules.get("__main__"), "__file__", None)
+    if main:
+        return Path(main).stem
+    return "interactive"
 
 
 @dataclass(frozen=True)
@@ -16,7 +25,8 @@ class IOConfig:
     analyst: Optional[str] = None
     lab: Optional[str] = None
     run_name: str = "databench"
-    tag: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S"))
+    tag: str = ""
+    script_name: str = field(default_factory=_detect_script_name)
 
 
 @dataclass(frozen=True)
