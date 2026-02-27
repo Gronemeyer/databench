@@ -17,11 +17,13 @@ from databench.features.treadmill import locomotion_bout_events, extract_epoch_i
 pickle = Path(r"D:\4jake\260211_ETOH_dataset.pkl")
 
 bench = Bench()
-bench.setup(pickle, run_name="sandbox", tag="event-based")
+(bench
+    .setup(pickle, analyst="Jacob Gronemeyer", lab="Sipe Lab", run_name="sandbox", tag="event-based")
+    .load()
+    .filter(drop_rows=(("GS27", "ses-02", "task-spont"),)))
 
 paths = bench.output_paths
-df = bench.load()
-df = bench.filter_data(df, ("GS27", "ses-02", "task-spont"))
+df = bench.df
 
 #%%
 
@@ -35,13 +37,14 @@ source_features = [
     ('pupil', ['pupil_diameter_mm']),
     ('treadmill', ['speed_mm']),
 ]
-long = bench.build_long(
+bench.build_long(
     df,
     source_features=source_features,
     tol=0.25,
     time_column="time_elapsed_s",
     reference_source="mesomap",
 )
+long = bench.long
 
 ses_to_cond = {
     'ses-01': 'baseline',
@@ -398,4 +401,6 @@ plot_roi_condition_grid(
     baseline=(-2.0, -1.0),
     bouts_feature=bouts_feature,
 )
+
+bench.save_provenance()
 # %%

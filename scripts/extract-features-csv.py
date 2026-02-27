@@ -36,9 +36,9 @@ EXTRACT_FEATURES = {
 
 def main() -> None:
     bench = Bench()
-    bench.setup(DATASET_PATH, run_name="feature_extraction", tag="ETOH_R01")
+    bench.setup(DATASET_PATH, analyst="Jacob Gronemeyer", lab="Sipe Lab", run_name="feature_extraction", tag="ETOH_R01").load()
 
-    df = bench.load()
+    df = bench.df
     if SUBJECT is not None or SESSION is not None or TASK is not None:
         df = subset_df(df, subject=SUBJECT, session=SESSION, task=TASK)
 
@@ -72,6 +72,8 @@ def main() -> None:
             folder="stats",
         )
         print(f"Saved {out_name} CSV to: {out_path}")
+
+    bench.save_provenance()
 
 
 if __name__ == "__main__":

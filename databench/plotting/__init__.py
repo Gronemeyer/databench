@@ -14,6 +14,14 @@ from databench.plotting.core import (
 from databench.plotting.axes import SessionAxis, SubjectAxis
 from databench.plotting.mesomap import plot_stacked_envelopes, plot_spectrogram_panel
 from databench.plotting.treadmill import plot_locomotion_bouts
+from databench.plotting.eta import (
+    EtaConditionPlotter,
+    EtaSubjectPlotter,
+    EtaAllDaysAveragePlotter,
+    EtaLongitudinalHeatmapPlotter,
+    EtaLongitudinalMetricPlotter,
+    EtaPrePostDiffBoxplot,
+)
 
 __all__ = [
     "plot_mean_sem",
@@ -31,4 +39,10 @@ __all__ = [
     "plot_stacked_envelopes",
     "plot_spectrogram_panel",
     "plot_locomotion_bouts",
+    "EtaConditionPlotter",
+    "EtaSubjectPlotter",
+    "EtaAllDaysAveragePlotter",
+    "EtaLongitudinalHeatmapPlotter",
+    "EtaLongitudinalMetricPlotter",
+    "EtaPrePostDiffBoxplot",
 ]

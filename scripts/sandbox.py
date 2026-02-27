@@ -14,10 +14,12 @@ from databench import Bench
 
 bench = Bench()
 bench.setup(input_path=Path(r'/Users/jakegronemeyer/Desktop/4jake/260212_ACUTEVIS_dataset.pkl'),
+            analyst="Jacob Gronemeyer", lab="Sipe Lab",
             run_name="sandbox", tag="groups")
 
 paths = bench.output_paths
-df = bench.load()
+bench.load()
+df = bench.df
 # %%
 print("MultiIndex Levels:")
 print(df.index.names)
@@ -131,14 +133,13 @@ source_features = [
     ('pupil', ['pupil_diameter_mm']),
     ('treadmill', ['speed_mm']),
 ]
-long = bench.build_long(
-    df,
-    source_features=source_features,
+bench.build_long(
+    sources=source_features,
     tol=0.25,
     time_column="time_elapsed_s",
     reference_source="mesomap",
 )
-long
+bench.long
 # %%
 
 ses_to_cond = {
@@ -148,5 +149,7 @@ ses_to_cond = {
     'ses-04': 'ethanol_high',
 }
 
-long['Condition'] = long['Session'].map(ses_to_cond)
+bench.label_conditions(ses_to_cond)
+
+bench.save_provenance()
 # %%

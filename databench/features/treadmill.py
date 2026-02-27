@@ -196,6 +196,33 @@ class LocomotionBoutEventsExtractor:
     speed_col: str = "speed_mm"
     speed_scale_to_cms: float = 10.0
 
+    @classmethod
+    def from_feature(
+        cls,
+        feat: "LocomotionBoutFeature",
+        *,
+        group_cols: tuple[str, ...] = ("Subject", "Session", "Task"),
+        time_col: str = "time_elapsed_s",
+        speed_col: str = "speed_mm",
+        speed_scale_to_cms: float = 10.0,
+    ) -> "LocomotionBoutEventsExtractor":
+        """Build an extractor from a LocomotionBoutFeature's thresholds.
+
+        Replaces the 7-parameter constructor boilerplate::
+
+            bouts_feat = bench.get_feature("locomotion_bouts_n")
+            extractor = LocomotionBoutEventsExtractor.from_feature(bouts_feat)
+        """
+        return cls(
+            min_speed_cms=feat.min_speed_cms,
+            min_duration_s=feat.min_duration_s,
+            merge_gap_s=feat.merge_gap_s,
+            group_cols=group_cols,
+            time_col=time_col,
+            speed_col=speed_col,
+            speed_scale_to_cms=speed_scale_to_cms,
+        )
+
     def run(self, long: pd.DataFrame) -> pd.DataFrame:
         return locomotion_bout_events(
             long,

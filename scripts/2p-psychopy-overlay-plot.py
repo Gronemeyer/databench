@@ -11,14 +11,18 @@ from collections.abc import Sequence
 
 bench = Bench()
 
-bench.setup(
-	input_path=Path(r'/Users/jakegronemeyer/Desktop/4jake/260212_ACUTEVIS_dataset.pkl'),
-	output_root=Path(__file__).resolve().parents[1] / "outputs",
-	run_name="260216",
-	tag="event-based-analysis"
-)
+(bench
+	.setup(
+		input_path=Path(r'/Users/jakegronemeyer/Desktop/4jake/260212_ACUTEVIS_dataset.pkl'),
+		output_root=Path(__file__).resolve().parents[1] / "outputs",
+		analyst="Jacob Gronemeyer",
+		lab="Sipe Lab",
+		run_name="260216",
+		tag="event-based-analysis",
+	)
+	.load())
 
-df = bench.load()
+df = bench.df
 
 #%%
 def plot_psychopy_roi_overview(
@@ -99,5 +103,7 @@ plot_psychopy_roi_overview(
 	title="2p ROI overview",
 	max_plots=6,
 )
+
+bench.save_provenance()
 
 # %%

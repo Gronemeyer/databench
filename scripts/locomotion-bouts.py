@@ -19,14 +19,18 @@ TASK_FILTER = "task-widefield"
 
 def main() -> None:
     bench = Bench()
-    bench.setup(input_path=DATASET, 
-                scientist="Jacob Gronemeyer",
-                run_name=RUN_NAME, 
-                tag="ETOH_locomotion_bouts-5-seconds",
-                notes="First-order locomotion bout features for ET0H R01 10-day pre-condition dataset.")
-    df = bench.load()
-    df = df[df.index.get_level_values("Task") == TASK_FILTER]
+    (bench
+        .setup(input_path=DATASET,
+               analyst="Jacob Gronemeyer",
+               lab="Sipe Lab",
+               scientist="Jacob Gronemeyer",
+               run_name=RUN_NAME,
+               tag="ETOH_locomotion_bouts-5-seconds",
+               notes="First-order locomotion bout features for ET0H R01 10-day pre-condition dataset.")
+        .load()
+        .filter(Task=TASK_FILTER))
 
+    df = bench.df
     paths = bench.output_paths
     feature_plotter = FeaturePlotter()
 
@@ -40,25 +44,14 @@ def main() -> None:
         bench.get_feature("locomotion_bout_duration_s"),
     ]
 
-    session_table = bench.build_session_table(df, features)
-    bench.save_table(session_table.reset_index(), "locomotion_bouts_session_table.csv")
+    bench.build_session_table(features=features)
+    bench.save_table(bench.session_table.reset_index(), "locomotion_bouts_session_table.csv")
 
     for feat in features:
-        fig, _ = bench.plot(
-            feature_plotter,
-            session_table,
-            feature=feat,
-            x_label="Session (days)",
-        )
+        bench.plot(feature_plotter, bench.session_table, feature=feat, x_label="Session (days)")
+        fig = bench._last_fig
         base = f"{feat.name}_boxplot"
-        bench.save_feature_plot(
-            fig,
-            f"{base}.png",
-            feature_name=feat.name,
-            folder="plots",
-            dpi=300,
-            bbox_inches="tight",
-        )
+        bench.save_feature_plot(fig, f"{base}.png", feature_name=feat.name, folder="plots", dpi=300, bbox_inches="tight")
         if EXPORT_SVG:
             bench.save_figure(fig, f"{base}.svg", folder="plots", dpi=300, bbox_inches="tight")
         plt.close(fig)

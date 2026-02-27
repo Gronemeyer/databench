@@ -13,6 +13,104 @@ from databench.analysis.base import AnalysisFn, Analysis, AnalysisResult
 from databench.registry import register_analysis
 from databench.utils import as_1d, get_first, strip_prefix
 
+
+# ---------------------------------------------------------------------------
+# Plotting
+# ---------------------------------------------------------------------------
+
+def plot_oscillation_overlay(
+    t: np.ndarray,
+    x: np.ndarray,
+    xf: np.ndarray,
+    env: np.ndarray,
+    thr: float,
+    bursts: Sequence[Tuple[int, int]],
+    signal_key: str,
+    *,
+    band: Tuple[float, float] = (3.0, 5.0),
+    overlay: Optional[Tuple[np.ndarray, str]] = None,
+    overlay_subplot: bool = False,
+    window: Optional[Tuple[float, float]] = None,
+    title: Optional[str] = None,
+) -> Tuple[plt.Figure, np.ndarray]:
+    """Plot raw signal, bandpassed + envelope, threshold, and detected bursts.
+
+    Parameters
+    ----------
+    overlay : (array, label) or None
+        Optional secondary signal to superimpose (e.g. pupil).
+    overlay_subplot : bool
+        If True, put the overlay on its own subplot instead of twin-axis.
+    window : (t_start, t_end) or None
+        Zoom to a time window (seconds). None shows full trace.
+    """
+    n_axes = 2 + (1 if overlay is not None and overlay_subplot else 0)
+    fig, axes = plt.subplots(n_axes, 1, figsize=(14, 3 * n_axes), sharex=True)
+    axes = np.atleast_1d(axes)
+
+    # Optionally restrict to time window
+    if window is not None:
+        mask = (t >= window[0]) & (t <= window[1])
+        idx_slice = np.where(mask)[0]
+        sl = slice(idx_slice[0], idx_slice[-1] + 1)
+    else:
+        sl = slice(None)
+
+    ts = t[sl]
+
+    # --- Axis 0: raw signal ---
+    ax0 = axes[0]
+    ax0.plot(ts, x[sl], linewidth=0.5, color="k", alpha=0.7, label=signal_key)
+    for s, e in bursts:
+        bs, be = max(s, sl.start or 0), min(e, (sl.stop or len(t)) - 1)
+        if bs <= be:
+            ax0.axvspan(t[bs], t[be], color="tomato", alpha=0.15)
+    ax0.set_ylabel(signal_key)
+    ax0.set_title(title or f"{signal_key} with detected bursts")
+    ax0.legend(loc="upper right", fontsize=8)
+
+    # --- Axis 1: bandpassed + envelope + threshold ---
+    ax1 = axes[1]
+    ax1.plot(ts, xf[sl], linewidth=0.5, color="steelblue", alpha=0.7,
+             label=f"BP {band[0]}-{band[1]} Hz")
+    ax1.plot(ts, env[sl], linewidth=0.8, color="darkorange", label="envelope")
+    ax1.axhline(thr, color="red", linestyle="--", linewidth=0.8, label=f"threshold={thr:.4f}")
+    for s, e in bursts:
+        bs, be = max(s, sl.start or 0), min(e, (sl.stop or len(t)) - 1)
+        if bs <= be:
+            ax1.axvspan(t[bs], t[be], color="tomato", alpha=0.15)
+    ax1.set_ylabel("Amplitude")
+    ax1.legend(loc="upper right", fontsize=8)
+
+    # --- Optional overlay ---
+    if overlay is not None:
+        ov_data, ov_label = overlay
+        ov_data = np.asarray(ov_data).ravel()
+        # Resample overlay onto the signal time vector via linear interpolation
+        n_ov = len(ov_data)
+        if n_ov != len(t):
+            ov_t = np.linspace(t[0], t[-1], n_ov)
+            ov_data = np.interp(t, ov_t, ov_data)
+        if overlay_subplot:
+            ax_ov = axes[2]
+            ax_ov.plot(ts, ov_data[sl], linewidth=0.6, color="purple", label=ov_label)
+            for s, e in bursts:
+                bs, be = max(s, sl.start or 0), min(e, (sl.stop or len(t)) - 1)
+                if bs <= be:
+                    ax_ov.axvspan(t[bs], t[be], color="tomato", alpha=0.15)
+            ax_ov.set_ylabel(ov_label)
+            ax_ov.legend(loc="upper right", fontsize=8)
+        else:
+            ax_tw = ax0.twinx()
+            ax_tw.plot(ts, ov_data[sl], linewidth=0.6, color="purple", alpha=0.5, label=ov_label)
+            ax_tw.set_ylabel(ov_label, color="purple")
+            ax_tw.tick_params(axis="y", labelcolor="purple")
+
+    axes[-1].set_xlabel("Time (s)")
+    fig.tight_layout()
+    return fig, axes
+
+
 @dataclass(frozen=True)
 class OscillationDetectorConfig:
     fs: float = 50.0
@@ -21,7 +119,7 @@ class OscillationDetectorConfig:
     k: float = 4.0
     min_duration_s: float = 0.5
     merge_gap_s: float = 0.25
-
+    threshold: Optional[float] = None  # fixed envelope threshold; bypasses k when set
 
 def _as_time_vector(tt: np.ndarray, n: int) -> np.ndarray:
     t = np.asarray(tt, dtype=float).ravel()
@@ -144,6 +242,8 @@ class OscillationDetector(AnalysisFn):
         debug: bool = False,
         context: Optional[str] = None,
     ):
+        if time_key is None:
+            time_key = "time_elapsed_s"
         if source and isinstance(row.index, pd.MultiIndex):
             signal_value = row.get((source, signal_key))
             time_value = row.get((source, time_key))
@@ -151,7 +251,7 @@ class OscillationDetector(AnalysisFn):
             signal_value = row.get(signal_key)
             time_value = row.get(time_key)
 
-        x = as_1d(signal_value)
+        x = signal_value
         t_raw = as_1d(time_value)
         t = _as_time_vector(t_raw, len(x))
         n = min(len(t), len(x))
@@ -159,7 +259,13 @@ class OscillationDetector(AnalysisFn):
         t = t[:n]
 
         xf, env = _bandpass_env(x, cfg.fs, cfg.band, cfg.order)
-        thr, med, robust_std = _robust_threshold(env, cfg.k)
+
+        if cfg.threshold is not None:
+            thr = cfg.threshold
+            med = float(np.median(env))
+            robust_std = 0.0
+        else:
+            thr, med, robust_std = _robust_threshold(env, cfg.k)
 
         segments = _segments_from_mask(env > thr)
         min_gap = int(round(cfg.merge_gap_s * cfg.fs))
@@ -276,7 +382,7 @@ def save_oscillation_plot(
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     signal_key = result.context.signal_key or "signal"
-    name = filename or f"{result.context.slug()}_{signal_key}_bursts_overlay.png"
+    name = filename or f"{result.context.slug()}_{signal_key}_bursts_overlay.svg"
     title = f"{result.context.label()} | Signal={signal_key}"
     fig, _ = plot_oscillation_overlay(
         result.t,

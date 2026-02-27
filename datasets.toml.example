@@ -1,0 +1,13 @@
+# Dataset alias → absolute path mapping.
+# Copy to datasets.toml and fill in your local paths.
+#
+# Set DATABENCH_DATASET env var to pick one:
+#   DATABENCH_DATASET=etoh python Scripts/event-based.py
+# If unset, the "default" alias is used.
+
+default = "etoh-hfsa"
+
+[datasets]
+etoh      = "/path/to/260211_ETOH_dataset.pkl"
+etoh-hfsa = "/path/to/260212_ETOH-HFSA_dataset.pkl"
+acutevis  = "/path/to/260212_ACUTEVIS_dataset.pkl"

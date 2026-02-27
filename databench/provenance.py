@@ -12,6 +12,56 @@ if TYPE_CHECKING:
     from databench.bench import Bench
 
 
+class RunContext:
+    """Explicit provenance scope — replaces hidden ``_usage`` / ``_saved_outputs`` state.
+
+    Usage::
+
+        with bench.run("eta-analysis", notes="pilot") as run:
+            run.analyze(MyAnalysis(...))
+            run.plot(MyPlotter(...), save="fig.png")
+            run.save_tables(prefix="eta")
+        # provenance.json + summary.md written automatically on __exit__
+
+    ``RunContext`` delegates to the parent ``Bench`` but keeps its own
+    usage and output tracking scoped to this run.
+    """
+
+    def __init__(self, bench: "Bench", name: str, notes: Optional[str] = None):
+        self._bench = bench
+        self.name = name
+        self.notes = notes
+        # Scoped tracking — replaces bench-level _usage/_saved_outputs for this run
+        self._prev_usage: Dict[str, list] = {}
+        self._prev_saved_outputs: Dict[str, List[str]] = {}
+        self._prev_notes: Optional[str] = None
+
+    def __enter__(self) -> "Bench":
+        # Snapshot bench state, install fresh tracking for this run
+        self._prev_usage = self._bench._usage
+        self._prev_saved_outputs = self._bench._saved_outputs
+        self._prev_notes = self._bench._provenance_notes
+        self._bench._usage = {"features": [], "analyses": [], "plots": []}
+        self._bench._saved_outputs = {
+            "tables": [], "figures": [], "other": [], "feature_plots": [],
+        }
+        self._bench._provenance_notes = self.notes
+        return self._bench
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is None:
+            # Auto-save provenance on clean exit
+            try:
+                self._bench.save_provenance()
+            except Exception:
+                pass  # Don't mask the original exception
+        # Restore previous bench state
+        self._bench._usage = self._prev_usage
+        self._bench._saved_outputs = self._prev_saved_outputs
+        self._bench._provenance_notes = self._prev_notes
+        return False  # Don't suppress exceptions
+
+
 def _format_provenance_value(value: Any) -> str:
     if isinstance(value, Path):
         return str(value)
@@ -223,11 +273,20 @@ def write_provenance_summary(
     plotters: List[Dict[str, Any]],
 ) -> None:
     lines: List[str] = ["# Provenance Summary", ""]
+
+    io_cfg = bench.io_config
+    if io_cfg is not None:
+        if io_cfg.analyst:
+            lines.append(f"Analyst: {io_cfg.analyst}")
+            lines.append("")
+        if io_cfg.lab:
+            lines.append(f"Lab: {io_cfg.lab}")
+            lines.append("")
+
     lines.append(f"Created: {created_at}")
     lines.append("")
     lines.append(f"Git: {bench._get_git_hash()}")
 
-    io_cfg = bench.io_config
     if io_cfg is not None:
         lines.append("")
         lines.append(f"Input: {_format_provenance_value(io_cfg.input_path)}")

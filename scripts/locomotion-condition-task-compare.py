@@ -3,7 +3,7 @@
 Compare locomotion bout statistics across conditions and tasks.
 
 This script demonstrates:
-1) explicit procedural flow (load -> preflight -> analyze -> plot -> save)
+1) explicit procedural flow (load -> build_long -> label -> analyze -> plot -> save)
 2) custom analysis + plotter classes for locomotion comparison
 3) DataFrame-based locomotion bout event API
 """
@@ -20,6 +20,7 @@ import pandas as pd
 
 from databench import Bench
 from databench.analysis.base import Analysis, AnalysisResult
+from databench.config import CONDITION_COLORS, CONDITION_ORDER
 from databench.features.treadmill import LocomotionBoutEventsExtractor
 from databench.plotting.base import Plotter
 
@@ -114,6 +115,11 @@ class LocomotionByConditionTaskAnalysis(Analysis):
             session_duration_min = session_duration_s / 60.0 if session_duration_s > 0 else np.nan
             running_fraction_time = float(np.mean(speed_cms >= min_speed_cms))
 
+            # overall (full-trace) speed and distance stats
+            overall_mean_speed_cms = float(np.nanmean(speed_cms))
+            dt_arr = np.diff(tt)
+            total_distance_m = float(np.nansum(np.abs(speed_cms[1:]) * dt_arr)) / 100.0
+
             ge = grouped_events.get(key)
             if ge is None or ge.empty:
                 session_rows.append(
@@ -125,6 +131,8 @@ class LocomotionByConditionTaskAnalysis(Analysis):
                         "session_duration_s": session_duration_s,
                         "session_duration_min": session_duration_min,
                         "running_fraction_time": running_fraction_time,
+                        "overall_mean_speed_cms": overall_mean_speed_cms,
+                        "total_distance_m": total_distance_m,
                         "n_bouts": 0,
                         "bout_rate_per_min": 0.0,
                         "mean_bout_duration_s": np.nan,
@@ -186,6 +194,8 @@ class LocomotionByConditionTaskAnalysis(Analysis):
                     "session_duration_s": session_duration_s,
                     "session_duration_min": session_duration_min,
                     "running_fraction_time": running_fraction_time,
+                    "overall_mean_speed_cms": overall_mean_speed_cms,
+                    "total_distance_m": total_distance_m,
                     "n_bouts": n_bouts,
                     "bout_rate_per_min": bout_rate_per_min,
                     "mean_bout_duration_s": float(np.nanmean(durations)) if durations else np.nan,
@@ -211,6 +221,8 @@ class LocomotionByConditionTaskAnalysis(Analysis):
             )
 
         stat_cols = [
+            "overall_mean_speed_cms",
+            "total_distance_m",
             "n_bouts",
             "bout_rate_per_min",
             "mean_bout_duration_s",
@@ -259,6 +271,8 @@ class LocomotionConditionTaskPlotter(Plotter):
     condition_order: tuple[str, ...] = ("baseline", "saline", "ethanol_low", "ethanol_high")
     task_order: tuple[str, ...] = ("task-spont", "task-movies")
     metrics: tuple[str, ...] = (
+        "overall_mean_speed_cms",
+        "total_distance_m",
         "n_bouts",
         "bout_rate_per_min",
         "mean_bout_duration_s",
@@ -266,13 +280,14 @@ class LocomotionConditionTaskPlotter(Plotter):
         "total_bout_distance_m",
         "running_fraction_time",
     )
-    ncols: int = 2
 
     def plot(self, result: AnalysisResult):
         subject_stats = result.data["subject_stats"]
         d = subject_stats.copy()
 
         metric_labels = {
+            "overall_mean_speed_cms": "Mean speed (cm/s)",
+            "total_distance_m": "Total distance (m)",
             "n_bouts": "Bout count",
             "bout_rate_per_min": "Bouts / min",
             "mean_bout_duration_s": "Mean bout duration (s)",
@@ -281,33 +296,40 @@ class LocomotionConditionTaskPlotter(Plotter):
             "running_fraction_time": "Running time fraction",
         }
 
-        cond_colors = {
-            "baseline": "#bbabab",
-            "saline": "#4289e6",
-            "ethanol_low": "#ffa251",
-            "ethanol_high": "#ce1818",
-        }
-
-        n = len(self.metrics)
-        nrows = int(np.ceil(n / self.ncols))
+        n_metrics = len(self.metrics)
         conds = list(self.condition_order)
         tasks = list(self.task_order)
+        n_tasks = len(tasks)
         x = np.arange(len(conds), dtype=float)
-        task_figs: dict[str, tuple[Any, Any]] = {}
 
-        for task in tasks:
-            dt = d[d["Task"] == task].copy()
+        if n_tasks != 2:
+            raise ValueError("This plot layout expects exactly 2 tasks.")
 
-            fig, axes = plt.subplots(
-                nrows,
-                self.ncols,
-                figsize=(7.2 * self.ncols / 2, 3.1 * nrows),
-                sharex=False,
-                sharey=False,
-            )
-            axes = np.atleast_1d(axes).ravel()
+        nrows = int(np.ceil(n_metrics / 2))
+        ncols = 4
 
-            for ax, metric in zip(axes, self.metrics):
+        fig, axes = plt.subplots(
+            nrows,
+            ncols,
+            figsize=(15.5, 11.0),
+            sharex=False,
+            squeeze=False,
+        )
+
+        for metric_idx, metric in enumerate(self.metrics):
+            row_idx = metric_idx // 2
+            pair_idx = metric_idx % 2
+            col0 = pair_idx * 2
+            col1 = col0 + 1
+
+            # share y-axis between task panels for the same metric
+            axes[row_idx, col1].sharey(axes[row_idx, col0])
+
+            for task_offset, task in enumerate(tasks):
+                col_idx = col0 + task_offset
+                ax = axes[row_idx, col_idx]
+                dt = d[d["Task"] == task]
+
                 data_by_cond = []
                 for cond in conds:
                     y = dt.loc[dt[self.condition_col] == cond, metric].dropna().to_numpy()
@@ -326,7 +348,7 @@ class LocomotionConditionTaskPlotter(Plotter):
                 )
 
                 for patch, cond in zip(bp["boxes"], conds):
-                    patch.set_facecolor(cond_colors.get(cond, "#999999"))
+                    patch.set_facecolor(CONDITION_COLORS.get(cond, "#999999"))
                     patch.set_alpha(0.45)
 
                 for i, cond in enumerate(conds):
@@ -338,52 +360,42 @@ class LocomotionConditionTaskPlotter(Plotter):
                         np.full(y.size, x[i], dtype=float) + jitter,
                         y,
                         s=20,
-                        color=cond_colors.get(cond, "#999999"),
+                        color=CONDITION_COLORS.get(cond, "#999999"),
                         edgecolors="white",
                         linewidths=0.4,
                         alpha=0.9,
                         zorder=3,
                     )
 
-                ax.set_title(metric_labels.get(metric, metric), fontsize=10)
                 ax.set_xticks(x)
                 ax.set_xticklabels(conds, rotation=25, ha="right")
                 ax.tick_params(axis="both", labelsize=9)
                 ax.grid(axis="y", alpha=0.25)
 
-            for ax in axes[n:]:
-                ax.axis("off")
+                if task_offset == 0:
+                    ax.set_ylabel(metric_labels.get(metric, metric), fontsize=10)
+                else:
+                    ax.tick_params(labelleft=False)
 
-            fig.suptitle(f"Locomotion comparison across conditions — {task}", y=0.99)
-            fig.subplots_adjust(left=0.10, right=0.98, top=0.90, bottom=0.10, hspace=0.40, wspace=0.22)
-            task_figs[task] = (fig, axes)
+                ax.set_title(task, fontsize=10)
 
-        return task_figs
+        fig.suptitle("Locomotion comparison across conditions", y=0.99, fontsize=13)
+        fig.subplots_adjust(left=0.08, right=0.98, top=0.93, bottom=0.08, hspace=0.55, wspace=0.28)
+
+        return {"combined": (fig, axes)}
 
 
 #%%
 # Procedural workflow
 
-pickle_path = Path(r"D:\4jake\260211_ETOH_dataset.pkl")
+pickle_path = Path(r"/Users/jakegronemeyer/Desktop/4jake/260211_ETOH_dataset.pkl")
 project_root = Path(__file__).resolve().parents[1]
 output_root = project_root / "outputs"
 
 bench = Bench()
-bench.setup(pickle_path, output_root=output_root, run_name="260214", tag="locomotion-condition-task")
+bench.setup(pickle_path, output_root=output_root, analyst="Jacob Gronemeyer", lab="Sipe Lab", run_name="locomotion", tag="locomotion-condition-task").load()
 
-paths = bench.output_paths
-print(f"[databench] run_dir: {paths.run_dir}")
-df = bench.load()
 bouts_feature = bench.get_feature("locomotion_bouts_n")
-
-source_features = [("treadmill", ["speed_mm"])]
-long = bench.build_long(
-    df,
-    source_features=source_features,
-    tol=0.25,
-    time_column="time_elapsed_s",
-    reference_source="treadmill",
-)
 
 ses_to_cond = {
     "ses-01": "baseline",
@@ -391,20 +403,15 @@ ses_to_cond = {
     "ses-03": "ethanol_low",
     "ses-04": "ethanol_high",
 }
-long["Condition"] = long["Session"].map(ses_to_cond)
+
+(bench
+    .build_long(sources=[("treadmill", ["speed_mm"])], tol=0.25, time_column="time_elapsed_s", reference_source="treadmill")
+    .label_conditions(ses_to_cond))
 
 analysis = LocomotionByConditionTaskAnalysis(
     task_filter=("task-spont", "task-movies"),
     condition_col="Condition",
-    bout_events_extractor=LocomotionBoutEventsExtractor(
-        min_speed_cms=bouts_feature.min_speed_cms,
-        min_duration_s=bouts_feature.min_duration_s,
-        merge_gap_s=bouts_feature.merge_gap_s,
-        group_cols=("Subject", "Session", "Task"),
-        time_col="time_elapsed_s",
-        speed_col="speed_mm",
-        speed_scale_to_cms=10.0,
-    ),
+    bout_events_extractor=LocomotionBoutEventsExtractor.from_feature(bouts_feature),
 )
 
 plotter = LocomotionConditionTaskPlotter(
@@ -412,39 +419,14 @@ plotter = LocomotionConditionTaskPlotter(
     task_order=analysis.task_filter,
 )
 
-bench.preflight(
-    analysis=analysis,
-    plotter=plotter,
-    df=long,
-    required_columns=["Subject", "Session", "Task", "Condition", "time_elapsed_s", "speed_mm"],
-)
+(bench
+    .analyze(analysis)
+    .plot(plotter, save="locomotion_condition_summary")
+    .save_tables(prefix="locomotion_compare"))
 
-res = bench.analyze(analysis, long)
-
-task_figs = bench.plot(plotter, res)
-plot_paths: list[Path] = []
-for task_name, (fig, _) in task_figs.items():
-    safe_task = task_name.replace("task-", "")
-    p = bench.save_figure(fig, f"locomotion_condition_summary_{safe_task}.png")
-    plot_paths.append(p)
-    plt.close(fig)
-
-saved_tables = bench.save_analysis_result_tables(res, prefix="locomotion_compare")
-
-run_summary_path = bench.save_run_summary(
+bench.save_run_summary(
     notes="Locomotion bout/stats comparison across conditions and tasks using DataFrame event API.",
 )
-
-saved_paths = [
-    *plot_paths,
-    *saved_tables.values(),
-    run_summary_path,
-]
-for p in saved_paths:
-    print(f"[databench] saved: {p}")
-
-missing_paths = [str(p) for p in saved_paths if not Path(p).exists()]
-if missing_paths:
-    raise RuntimeError(f"Expected output files were not created: {missing_paths}")
+bench.save_provenance()
 
 # %%

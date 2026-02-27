@@ -33,10 +33,12 @@ def get_value(row: pd.Series, source: str, feature: str):
 
 
 def get_first(row: pd.Series, keys):
+    """Return the value for the first key whose value is not None."""
     for key in keys:
         val = row.get(key)
-        return val
-    return row.get(keys[0])
+        if val is not None:
+            return val
+    return None
 
 
 def drop_rows(df: pd.DataFrame, drop_tuples: tuple) -> pd.DataFrame:

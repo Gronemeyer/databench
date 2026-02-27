@@ -77,34 +77,27 @@ class DerivedBoxplotPlotter(Plotter):
 
 
 def main() -> None:
-    # 1) Setup and load data
+    # 1) Setup, load, filter
     pickle_path = Path(r"D:\4jake\260211_ETOH_dataset.pkl")
 
     bench = Bench()
-    bench.setup(pickle_path, run_name="sandbox", tag="blessed")
-
-    df = bench.load()
-    df = bench.filter_data(df, (("GS27", "ses-02", "task-spont"),))
+    (bench
+        .setup(pickle_path, analyst="Jacob Gronemeyer", lab="Sipe Lab", run_name="sandbox", tag="blessed")
+        .load()
+        .filter(drop_rows=(("GS27", "ses-02", "task-spont"),)))
 
     # 2) Build first-order feature table
     feature_names = ["speed_mean_cms", "pupil_mean_mm"]
     feature_fns = [bench.get_feature(name) for name in feature_names]
-    session_table = bench.build_session_table(df, feature_fns).reset_index()
+    bench.build_session_table(features=feature_fns)
 
-    # Guardrail: fail early if expected inputs are missing
+    # 3) Second-order analysis
     analysis = DeltaFromBaseline(y="speed_mean_cms", baseline_session_n=1, output_col="d_speed_mean_cms")
     derived_plotter = DerivedBoxplotPlotter(y="d_speed_mean_cms", x_label="Session")
     feature_plotter = FeaturePlotter()
 
-    bench.preflight(
-        analysis=analysis,
-        df=session_table,
-        required_columns=["Subject", "session_n", "speed_mean_cms"],
-    )
-
-    # 3) Second-order analysis
-    result = bench.analyze(analysis, session_table)
-    table2 = result.data
+    bench.analyze(analysis, bench.session_table.reset_index())
+    table2 = bench.result.data
 
     # Register metadata so second-order column can be plotted like a feature
     bench.register_derived_column(
@@ -115,32 +108,19 @@ def main() -> None:
     )
 
     # 4) Plot first-order feature
-    fig1, _ = bench.plot(feature_plotter, table2, feature="speed_mean_cms", x_label="Session")
-    bench.save_figure(fig1, "first_order_speed.png")
-    plt.close(fig1)
+    bench.plot(feature_plotter, table2, feature="speed_mean_cms", x_label="Session", save="first_order_speed.png")
 
     # 5) Plot second-order derived feature using same API
-    fig2, _ = bench.plot(feature_plotter, table2, feature="d_speed_mean_cms", x_label="Session")
-    bench.save_figure(fig2, "second_order_delta_speed.png")
-    plt.close(fig2)
+    bench.plot(feature_plotter, table2, feature="d_speed_mean_cms", x_label="Session", save="second_order_delta_speed.png")
 
     # 6) Plot second-order with custom plotter defined in this script
-    fig3, _ = bench.plot(derived_plotter, table2)
-    bench.save_figure(fig3, "second_order_delta_speed_boxplot.png")
-    plt.close(fig3)
+    bench.plot(derived_plotter, table2, save="second_order_delta_speed_boxplot.png")
 
     bench.save_table(table2, "blessed_session_table.csv")
     bench.save_run_summary(
         notes="Blessed procedural workflow with custom decorators for analysis + plotter.",
-        outputs={
-            "table": "stats/blessed_session_table.csv",
-            "plots": [
-                "plots/first_order_speed.png",
-                "plots/second_order_delta_speed.png",
-                "plots/second_order_delta_speed_boxplot.png",
-            ],
-        },
     )
+    bench.save_provenance()
 
 
 if __name__ == "__main__":
