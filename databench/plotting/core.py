@@ -209,10 +209,23 @@ def plot_feature(
 @register_plotter
 @dataclass(frozen=True)
 class FeaturePlotter(Plotter):
-    name: str = "feature"
+    """Plot a feature from a wide table (session_table).
 
-    def plot(self, wide, feature: Union[FeatureFn, DerivedColumnSpec, Mapping[str, object], str], **kwargs):
-        return plot_feature(wide, feature, **kwargs)
+    Set ``feature`` at construction time — accepts a FeatureFn,
+    DerivedColumnSpec, dict, or string.
+    """
+    name: str = "feature"
+    feature: Union[FeatureFn, DerivedColumnSpec, Mapping[str, object], str, None] = None
+    x: str = "session_n"
+    color: Optional[str] = None
+    x_label: Optional[str] = None
+
+    def plot(self, result):
+        """Plot feature from result.data (a wide DataFrame)."""
+        wide = result.data if hasattr(result, 'data') else result
+        if self.feature is None:
+            raise ValueError("FeaturePlotter requires a feature set at construction.")
+        return plot_feature(wide, self.feature, x=self.x, color=self.color, x_label=self.x_label)
 
 
 @dataclass(frozen=True)
@@ -242,7 +255,23 @@ def _coerce_plot_spec(feature: Union[FeatureFn, DerivedColumnSpec, Mapping[str, 
 @register_plotter
 @dataclass(frozen=True)
 class LongitudinalPlotter(Plotter):
-    name: str = "longitudinal"
+    """Plot a longitudinal summary (mean ± SEM over sessions).
 
-    def plot(self, wide, y: str, **kwargs):
-        return plot_feature_longitudinal(wide, y=y, **kwargs)
+    Set ``y`` at construction time.
+    """
+    name: str = "longitudinal"
+    y: str = ""
+    x: str = "session_n"
+    title: Optional[str] = None
+    color: Optional[str] = None
+    y_label: Optional[str] = None
+    x_label: Optional[str] = None
+
+    def plot(self, result):
+        """Plot from result.data (a wide DataFrame)."""
+        wide = result.data if hasattr(result, 'data') else result
+        return plot_feature_longitudinal(
+            wide, y=self.y, x=self.x,
+            title=self.title, color=self.color,
+            y_label=self.y_label, x_label=self.x_label,
+        )

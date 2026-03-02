@@ -25,12 +25,16 @@ from databench.plotting.eta import EtaSubjectPlotter
 #%%
 # Procedural workflow
 
-pickle_path = resolve_dataset()
-project_root = Path(__file__).resolve().parents[1]
-output_root = project_root / "outputs"
+from databench.config import resolve_dataset
+DATASET = resolve_dataset()
 
 bench = Bench()
-bench.setup(pickle_path, output_root=output_root, analyst="Jacob Gronemeyer", lab="Sipe Lab", run_name="260217", tag="2p-locomotion-eta").load()
+bench.setup(
+    DATASET, 
+    analyst="Jacob Gronemeyer", 
+    lab="Sipe Lab", 
+    run_name="2p-locomotion-eta", 
+    tag="ACUTEVIS")
 
 raw = bench.df
 
@@ -105,52 +109,50 @@ plot_offset = EtaSubjectPlotter(
     condition_order=eta_cond_order,
 )
 
-bench.build_long(
-    raw,
-    sources=[
-        ("suite2p", [mean_feature]),
-        ("encoder", ["speed_mm"]),
-    ],
-    tol=0.25,
-    time_column="time_elapsed_s",
-    reference_source="suite2p",
-)
+with bench.run("2p-locomotion-eta") as run:
+    run.build_long(
+        raw,
+        sources=[
+            ("suite2p", [mean_feature]),
+            ("encoder", ["speed_mm"]),
+        ],
+        tol=0.25,
+        time_column="time_elapsed_s",
+        reference_source="suite2p",
+    )
 
-# Map session_config injection → Condition
-config_cols = ["injection"]
-cfg = raw["session_config"][config_cols].copy()
-cfg = cfg.rename(columns={"injection": "Condition"})
-cfg["Condition"] = cfg["Condition"].astype(str).str.strip().str.lower()
-condition_map = {
-    "baseline": "baseline",
-    "saline": "saline",
-    "ethanol_low": "low",
-    "ethanol_high": "high",
-    "low": "low",
-    "high": "high",
-}
-cfg["Condition"] = cfg["Condition"].map(condition_map)
-cfg["Condition"] = pd.Categorical(
-    cfg["Condition"],
-    categories=["baseline", "saline", "low", "high"],
-    ordered=True,
-)
+    # Map session_config injection → Condition
+    config_cols = ["injection"]
+    cfg = raw["session_config"][config_cols].copy()
+    cfg = cfg.rename(columns={"injection": "Condition"})
+    cfg["Condition"] = cfg["Condition"].astype(str).str.strip().str.lower()
+    condition_map = {
+        "baseline": "baseline",
+        "saline": "saline",
+        "ethanol_low": "low",
+        "ethanol_high": "high",
+        "low": "low",
+        "high": "high",
+    }
+    cfg["Condition"] = cfg["Condition"].map(condition_map)
+    cfg["Condition"] = pd.Categorical(
+        cfg["Condition"],
+        categories=["baseline", "saline", "low", "high"],
+        ordered=True,
+    )
 
-# Join condition labels into long table
-bench._long = bench.long.join(cfg, on=["Subject", "Session", "Task"])
+    # Join condition labels into long table
+    run._long = run.long.join(cfg, on=["Subject", "Session", "Task"])
 
-if task not in set(bench.long["Task"].unique()):
-    raise ValueError(f"Requested task {task!r} not found in long table.")
+    if task not in set(run.long["Task"].unique()):
+        raise ValueError(f"Requested task {task!r} not found in long table.")
 
-(bench
-    .analyze(analysis)
-    .plot(plot_onset, save="eta_locomotion_onset.png")
-    .plot(plot_offset, save="eta_locomotion_offset.png")
-    .save_tables(prefix="eta_locomotion"))
-
-bench.save_run_summary(
-    notes="Event-triggered ETA for ROI traces aligned to locomotion onset/offset.",
-)
-bench.save_provenance()
+    result = run.analyze(analysis, df=run.long)
+    run.plot(plot_onset, result, save="eta_locomotion_onset.png")
+    run.plot(plot_offset, result, save="eta_locomotion_offset.png")
+    run.save_tables(result, prefix="eta_locomotion")
+    run.save_run_summary(
+        notes="Event-triggered ETA for ROI traces aligned to locomotion onset/offset.",
+    )
 
 # %%

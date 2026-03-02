@@ -55,23 +55,24 @@ def _warn_missing_columns(
 class Analysis:
     """Base class for analyses.
 
-    Subclasses should override ``run(self, df, **kwargs)`` and declare
-    ``required_columns`` for automatic validation.
+    Subclasses override ``run(df) -> AnalysisResult``.
+    All parameters live on the frozen dataclass — no **kwargs.
+    Declare ``required_columns`` for auto-validation.
     """
 
     name: str
     required_columns: tuple[str, ...] = ()
 
     @log_this_fr
-    def run(self, df: pd.DataFrame, **kwargs) -> AnalysisResult:  # pragma: no cover - interface
+    def run(self, df: pd.DataFrame) -> AnalysisResult:  # pragma: no cover - interface
         raise NotImplementedError
 
     @log_this_fr
-    def plot(self, result: AnalysisResult, **kwargs):  # pragma: no cover - optional
+    def plot(self, result: AnalysisResult):  # pragma: no cover - optional
         return None
 
     @log_this_fr
-    def save(self, result: AnalysisResult, **kwargs) -> list:  # pragma: no cover - optional
+    def save(self, result: AnalysisResult) -> list:  # pragma: no cover - optional
         return []
 
     def validate(self, df: pd.DataFrame) -> list[str]:
@@ -96,8 +97,11 @@ class AxisFn:
     label: str
 
 
+# AnalysisFn is deprecated — use Analysis with run(df) -> AnalysisResult instead.
+# Kept temporarily for backward compatibility during migration.
 @dataclass(frozen=True)
 class AnalysisFn:
+    """Deprecated. Use ``Analysis`` subclass with ``run(df) -> AnalysisResult``."""
     name: str
 
     @log_this_fr

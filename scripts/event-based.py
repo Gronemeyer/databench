@@ -1,20 +1,5 @@
-#%%
-"""
-Event-based analysis in blessed databench style.
-
-This script demonstrates:
-1) explicit procedural flow (load -> build_long -> label -> analyze -> plot -> save)
-2) decorator-registered custom analysis and plotter
-3) DataFrame-based locomotion bout event API
-"""
-
+# %%
 from __future__ import annotations
-
-from pathlib import Path
-
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
 
 from databench import Bench
 from databench.analysis.eta import EtaByConditionAnalysis
@@ -23,67 +8,73 @@ from databench.features.treadmill import LocomotionBoutEventsExtractor
 from databench.plotting.eta import EtaConditionPlotter
 
 
-#%%
-# Procedural workflow
+DATASET = resolve_dataset()
+REGIONS = ("L_MOp", "R_MOp", "L_MOs", "R_MOs")
+TASK = "task-spont"
+BASELINE_S = (-5.0, 0.0)
+WINDOW_S = (-1.0, 3.0)
+STEP_S = 0.02
 
-pickle_path = resolve_dataset()
-project_root = Path(__file__).resolve().parents[1]
-output_root = project_root / "outputs"
-
-bench = Bench()
-bench.setup(pickle_path, output_root=output_root, analyst="Jacob Gronemeyer", lab="Sipe Lab", run_name="260218", tag="spont-mop-eta").load()
-
-bouts_feature = bench.get_feature("locomotion_bouts_n")
-
-roi_cols = ["L_MOp", "R_MOp", "L_MOs", "R_MOs"]
-plot_rois = roi_cols
-
-analysis = EtaByConditionAnalysis(
-    roi_cols=tuple(roi_cols),
-    task="task-spont",
-    event_types=("onset", "offset"),
-    window=(-1.0, 3.0),
-    dt=0.02,
-    baseline=(-5.0, 0.0),
-    bout_events_extractor=LocomotionBoutEventsExtractor.from_feature(bouts_feature),
-)
-
-plot_onset = EtaConditionPlotter(
-    rois=tuple(plot_rois),
-    task=analysis.task,
-    event_type="onset",
-    baseline=analysis.baseline,
-)
-plot_offset = EtaConditionPlotter(
-    rois=tuple(plot_rois),
-    task=analysis.task,
-    event_type="offset",
-    baseline=analysis.baseline,
-)
-
-ses_to_cond = {
+SESSION_TO_CONDITION = {
     "ses-01": "baseline",
     "ses-02": "saline",
     "ses-03": "ethanol_low",
     "ses-04": "ethanol_high",
 }
 
-(bench
-    .build_long(sources=[
-        ("mesomap", roi_cols),
-        ("pupil", ["pupil_diameter_mm"]),
-        ("treadmill", ["speed_mm"]),
-    ], tol=0.25, time_column="time_elapsed_s", reference_source="mesomap")
-    .label_conditions(ses_to_cond)
-    .analyze(analysis)
-    .plot(plot_onset, save="eta_onset_rois.png")
-    .plot(plot_offset, save="eta_offset_rois.png")
-    .save_tables(prefix="eta")
+bench = Bench()
+bench.setup(
+    DATASET,
+    analyst="Jacob Gronemeyer",
+    lab="Sipe Lab",
+    run_name="event-triggered-average",
+    tag="MOp-MOs_spont",
 )
 
-bench.save_run_summary(
-    notes="Event-based ETA workflow using registered analysis/plotter.",
-)
-bench.save_provenance()
+bout_feature = bench.get_feature("locomotion_bouts_n")
 
-# %%
+analysis = EtaByConditionAnalysis(
+    roi_cols=REGIONS,
+    task=TASK,
+    event_types=("onset", "offset"),
+    window=WINDOW_S,
+    dt=STEP_S,
+    baseline=BASELINE_S,
+    bout_events_extractor=LocomotionBoutEventsExtractor.from_feature(bout_feature),
+)
+
+plotters = {
+    event_type: EtaConditionPlotter(
+        rois=REGIONS,
+        task=analysis.task,
+        event_type=event_type,
+        baseline=analysis.baseline,
+    )
+    for event_type in analysis.event_types
+}
+
+with bench.run("spont-mop-eta") as run:
+    frame = (
+        run.build_long(
+            sources=[
+                ("mesomap", REGIONS),
+                ("pupil", ["pupil_diameter_mm"]),
+                ("treadmill", ["speed_mm"]),
+            ],
+            tol=0.25,
+            time_column="time_elapsed_s",
+            reference_source="mesomap",
+        )
+        .label_conditions(SESSION_TO_CONDITION)
+    )
+
+    result = run.analyze(analysis, df=frame)
+
+    for event_type, plotter in plotters.items():
+        run.plot(plotter, result, save=f"eta_{event_type}_rois.png")
+
+    run.save_tables(result, prefix="eta")
+    run.save_run_summary(
+        notes="Event-based ETA workflow using registered analysis/plotter."
+    )
+

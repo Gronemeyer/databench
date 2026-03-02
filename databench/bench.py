@@ -16,13 +16,10 @@ from databench.config import FilterConfig, IOConfig, OutputPaths
 from databench.features import FeatureFn
 from databench.plotting import Plotter
 from databench import provenance
-from databench.provenance import RunContext
 from databench.registry import (
     ANALYSIS_CLASSES, FEATURE_CLASSES, PLOTTER_CLASSES,
-    _ANALYSIS_BY_NAME, _PLOTTER_BY_NAME,
 )
 from databench.utils import drop_rows, session_to_int
-from databench.debug import get_row, log_context
 from databench._utils._logger import get_logger
 
 
@@ -34,7 +31,6 @@ class Bench:
         bench = Bench()
         (bench
             .setup(path, run_name="260218", tag="eta")
-            .load()
             .build_long(sources=[("mesomap", rois), ("treadmill", ["speed_mm"])])
             .label_conditions(ses_to_cond)
             .analyze(EtaByConditionAnalysis(...))
@@ -60,8 +56,7 @@ class Bench:
         self.io_config: Optional[IOConfig] = None
         self.filter_config: Optional[FilterConfig] = None
         self.output_paths: Optional[OutputPaths] = None
-        self._usage: Dict[str, list] = {"features": [], "analyses": [], "plots": []}
-        self._derived_column_meta: Dict[str, Dict[str, Any]] = {}
+        self._invoked: List[Dict[str, Any]] = []
         self._provenance_notes: Optional[str] = None
         self._saved_outputs: Dict[str, List[str]] = {
             "tables": [],
@@ -85,13 +80,33 @@ class Bench:
         for plotter in (plotters or PLOTTER_CLASSES):
             self.register_plotter(plotter)
 
+    # -- RunContext entry point ------------------------------------------------
+
+    def run(self, name: str, notes: Optional[str] = None) -> "provenance.RunContext":
+        """Return a ``RunContext`` context manager for scoped execution.
+
+        Usage::
+
+            with bench.run("eta-analysis") as run:
+                run.build_long(sources=[...])
+                result = run.analyze(analysis, df=run.long)
+                fig, ax = run.plot(plotter, result, save="plot.png")
+                run.save_tables(result, prefix="eta")
+            # provenance auto-saved, bench state restored
+
+        On entry the bench chain state (df, long, session_table, result) is
+        snapshotted.  On clean exit provenance is auto-saved and the
+        snapshot is restored so successive ``run()`` blocks are isolated.
+        """
+        return provenance.RunContext(self, name, notes)
+
     # -- Chain-state properties ------------------------------------------------
 
     @property
     def df(self) -> pd.DataFrame:
-        """The raw loaded DataFrame (set by ``load()``)."""
+        """The raw loaded DataFrame (set by ``setup()``)."""
         if self._df is None:
-            raise RuntimeError("No data loaded. Call .load() first.")
+            raise RuntimeError("No data loaded. Call .setup() first.")
         return self._df
 
     @property
@@ -167,34 +182,26 @@ class Bench:
             return {"class": component.__class__.__name__}
 
     def _resolve_analysis(self, analysis: Any) -> Analysis:
-        """Resolve a class, instance, or registered name to an Analysis instance."""
+        """Resolve to an Analysis instance and register it for provenance."""
         if isinstance(analysis, str):
-            # Lookup by name — first in local registry, then global
             if analysis in self._analyses:
                 return self._analyses[analysis]
-            if analysis in _ANALYSIS_BY_NAME:
-                return _ANALYSIS_BY_NAME[analysis]()
             raise KeyError(f"No analysis registered with name={analysis!r}. Available: {self.list_analyses()}")
-        return analysis() if isinstance(analysis, type) else analysis
+        instance = analysis() if isinstance(analysis, type) else analysis
+        self._analyses[instance.name] = instance
+        return instance
 
     def _resolve_plotter(self, plotter: Any) -> Union[Plotter, Analysis]:
-        """Resolve a class, instance, or registered name to a Plotter (or Analysis with .plot())."""
+        """Resolve to a Plotter instance and register it."""
         if isinstance(plotter, str):
             if plotter in self._plotters:
                 return self._plotters[plotter]
-            if plotter in _PLOTTER_BY_NAME:
-                return _PLOTTER_BY_NAME[plotter]()
-            # Also check analyses (some have .plot())
             if plotter in self._analyses:
                 return self._analyses[plotter]
-            if plotter in _ANALYSIS_BY_NAME:
-                return _ANALYSIS_BY_NAME[plotter]()
             raise KeyError(f"No plotter registered with name={plotter!r}. Available: {self.list_plotters()}")
-        return plotter() if isinstance(plotter, type) else plotter
-
-    def list_features(self) -> List[str]:
-        """List registered first-order feature names."""
-        return sorted(self._features.keys())
+        instance = plotter() if isinstance(plotter, type) else plotter
+        self._plotters[instance.name] = instance
+        return instance
 
     def list_analyses(self) -> List[str]:
         """List registered analysis names."""
@@ -204,133 +211,91 @@ class Bench:
         """List registered plotter names."""
         return sorted(self._plotters.keys())
 
-    def list_derived_columns(self) -> List[str]:
-        """List registered second-order (derived) column names."""
-        return sorted(self._derived_column_meta.keys())
+    def analyze(self, analysis: Union[str, Analysis, Type[Analysis]], df: Union[pd.DataFrame, pd.Series, None] = None) -> AnalysisResult:
+        """Run an analysis and return its result.
 
-    def register_derived_column(
-        self,
-        name: str,
-        label: Optional[str] = None,
-        color: Optional[str] = None,
-        plotter: str = "longitudinal",
-    ) -> Dict[str, Any]:
-        """Register plotting metadata for a derived/second-order column."""
-        spec = {
-            "name": name,
-            "label": label or name,
-            "color": color,
-            "plotter": plotter,
-        }
-        self._derived_column_meta[name] = spec
-        return dict(spec)
+        Also stores the result on ``self._result`` for later access.
 
-    def get_column_plot_spec(self, name: str) -> Union[FeatureFn, Dict[str, Any]]:
-        """Resolve first-order features or derived-column metadata for plotting."""
-        if name in self._features:
-            return self._features[name]
-        return dict(self._derived_column_meta[name])
+        Parameters
+        ----------
+        analysis : str, Analysis, or Analysis subclass
+            The analysis to run.
+        df : DataFrame or Series
+            Data to analyse.  Required — pass ``bench.long``, ``bench.df``,
+            ``bench.session_table``, or a row explicitly.
 
-    @staticmethod
-    def _has_required_column(df: pd.DataFrame, col: str) -> bool:
-        if col in df.columns:
-            return True
-        if isinstance(df.columns, pd.MultiIndex):
-            for level in range(df.columns.nlevels):
-                if col in df.columns.get_level_values(level):
-                    return True
-        if col in df.index.names:
-            return True
-        return False
-
-    def analyze(self, analysis: Union[str, Analysis, Type[Analysis]], *args, **kwargs) -> "Bench":
-        """Run an analysis. Accepts a name, class, or instance.
-
-        Result is stored on ``self._result`` and accessible via ``bench.result``.
-        Returns *self* for chaining. The :class:`AnalysisResult` is also accessible
-        as ``bench.result`` immediately after this call.
-
-        When no positional args are given, the analysis receives the current
-        ``long`` table automatically (if available).
+        Returns
+        -------
+        AnalysisResult
         """
         analysis_obj = self._resolve_analysis(analysis)
         self._logger.info(f"Analyze: {analysis_obj.name}")
-        self._usage["analyses"].append(
-            {
-                "name": analysis_obj.name,
-                "class": analysis_obj.__class__.__name__,
-                "class_module": analysis_obj.__class__.__module__,
-                "doc": (analysis_obj.__class__.__doc__ or "").strip() or None,
-                "kwargs": kwargs,
-                "config": self._serialize_component(analysis_obj),
-            }
-        )
-        # Auto-supply the long table when no positional arg is given
-        if not args and self._long is not None:
-            args = (self._long,)
-        # Validate required columns if the analysis declares them
-        if hasattr(analysis_obj, "validate") and args and isinstance(args[0], pd.DataFrame):
-            analysis_obj.validate(args[0])
-        self._result = analysis_obj.run(*args, **kwargs)
-        return self
+        self._invoked.append({"kind": "analysis", "name": analysis_obj.name})
+        if df is None:
+            if self._long is not None:
+                df = self._long
+            else:
+                raise ValueError(
+                    "No df supplied and no long table available. "
+                    "Pass df= explicitly (bench.long, bench.df, etc.)."
+                )
+        if hasattr(analysis_obj, "validate") and isinstance(df, pd.DataFrame):
+            analysis_obj.validate(df)
+        self._result = analysis_obj.run(df)
+        return self._result
 
     def plot(
         self,
         plotter: Union[str, Plotter, Type[Plotter], Analysis, Type[Analysis]],
-        *args,
+        result: Optional[AnalysisResult] = None,
         save: Optional[str] = None,
-        **kwargs,
-    ) -> "Bench":
-        """Run a plotter. Accepts a name, class, or instance.
+    ):
+        """Run a plotter and return ``(fig, axes)``.
 
-        When ``save="filename.png"`` is provided the figure is saved and closed
-        automatically, removing the manual ``save_figure`` + ``plt.close`` boilerplate.
+        Parameters
+        ----------
+        plotter : str, Plotter, or Plotter subclass
+            The plotter to use.
+        result : AnalysisResult, optional
+            Data to plot.  When *None*, uses ``self.result``.
+        save : str, optional
+            When provided the figure is saved and closed automatically.
 
-        When no positional args are given, the current ``result`` is supplied
-        automatically.
+        Returns
+        -------
+        ``(fig, axes)`` or whatever the plotter returns.
         """
         plot_obj = self._resolve_plotter(plotter)
         self._logger.debug(f"Plot: {plot_obj.name}")
-        self._usage["plots"].append(
-            {
-                "name": plot_obj.name,
-                "class": plot_obj.__class__.__name__,
-                "class_module": plot_obj.__class__.__module__,
-                "doc": (plot_obj.__class__.__doc__ or "").strip() or None,
-                "kwargs": kwargs,
-                "config": self._serialize_component(plot_obj),
-            }
-        )
-        # Auto-supply the last result when no positional arg is given
-        if not args and self._result is not None:
-            args = (self._result,)
-        out = plot_obj.plot(*args, **kwargs)
+        self._invoked.append({"kind": "plot", "name": plot_obj.name})
+        if result is None:
+            result = self._result
+        out = plot_obj.plot(result)
         # Normalise return value
         fig = None
         if isinstance(out, tuple):
             fig = out[0]
         elif isinstance(out, dict):
-            # dict[str, (fig, axes)] — save all of them when save= is a directory prefix
             if save:
                 for key, val in out.items():
                     sub_fig = val[0] if isinstance(val, tuple) else val
                     self.save_and_close(sub_fig, f"{save}_{key}.png")
                 self._last_fig = None
-                return self
+                return out
         else:
             fig = out
         self._last_fig = fig
         if save and fig is not None:
             self.save_and_close(fig, save)
-        return self
+        return out
 
-    def save(self, result: Optional[AnalysisResult] = None, **kwargs) -> list:
+    def save(self, result: Optional[AnalysisResult] = None) -> list:
         """Save a result using the originating analysis."""
         if result is None:
             result = self.result
         analysis = self._analyses[result.name]
         self._logger.info(f"Save result: {result.name}")
-        return analysis.save(result, **kwargs)
+        return analysis.save(result)
 
     def set_filters(self, drop_rows: tuple = ()) -> "Bench":
         """Set dataset filters for later use with ``filter_data()``. Returns self."""
@@ -371,7 +336,10 @@ class Bench:
         run_name: str = "databench",
         tag: Optional[str] = None,
     ) -> "Bench":
-        """Define input/output paths and create output folders. Returns self for chaining."""
+        """Define input/output paths, create output folders, and load the dataset.
+
+        Returns self for chaining.
+        """
         cfg = IOConfig(
             input_path=Path(input_path),
             output_root=output_root,
@@ -392,13 +360,22 @@ class Bench:
             "feature_plots": [],
         }
         self._logger.info(f"Setup: input={cfg.input_path} output={paths.run_dir}")
+        self._df = self._load_df(cfg.input_path)
+        self._logger.info(f"Loaded dataset: {cfg.input_path} shape={self._df.shape}")
         return self
 
-    def _track_output(self, path: Path, category: str) -> None:
+    def track_output(self, path: Path, category: str) -> None:
+        """Record a saved output path under the given category.
+
+        Categories: ``tables``, ``figures``, ``other``, ``feature_plots``.
+        """
         key = category if category in self._saved_outputs else "other"
         as_str = str(path)
         if as_str not in self._saved_outputs[key]:
             self._saved_outputs[key].append(as_str)
+
+    # backward compat alias
+    _track_output = track_output
 
     def _log_saved_outputs(self, label: str, path: Path) -> None:
         self._logger.info(
@@ -406,17 +383,6 @@ class Bench:
             f"figures={len(self._saved_outputs.get('figures', []))}, "
             f"other={len(self._saved_outputs.get('other', []))})"
         )
-
-    def load(self, input_path: Optional[Path] = None) -> "Bench":
-        """Load the dataset. Stores on ``self._df``, returns self for chaining.
-
-        Access the raw DataFrame via ``bench.df``.
-        """
-        if input_path is None:
-            input_path = self.io_config.input_path  # type: ignore[union-attr]
-        self._logger.info(f"Load dataset: {input_path}")
-        self._df = self._load_df(input_path)
-        return self
 
     def build_session_table(
         self,
@@ -434,7 +400,8 @@ class Bench:
         self._logger.info(
             f"Build session table: features={len(use_features)} df_shape={df.shape} index_names={list(df.index.names)}"
         )
-        self._usage["features"].append({"names": [f.name for f in use_features]})
+        for f in use_features:
+            self._invoked.append({"kind": "feature", "name": f.name, "kwargs": {}})
         rows = []
         for _, row in df.iterrows():
             out = {}
@@ -608,25 +575,6 @@ class Bench:
         self._long = pd.concat(frames, ignore_index=True)
         return self
 
-    def run_feature_on_row(
-        self,
-        df: Optional[pd.DataFrame] = None,
-        feature: Optional[FeatureFn] = None,
-        subject: Optional[str] = None,
-        session: Optional[str] = None,
-        task: Optional[str] = None,
-        debug: bool = False,
-    ):
-        """Compute one feature for a single row selection."""
-        if df is None:
-            df = self.df
-        idx, row = get_row(df, subject, session, task)
-        self._logger.info(f"Run feature: {feature.name} | {log_context(idx)}")
-        val = feature.run(row)
-        if debug:
-            print(f"{log_context(idx)} | {feature.name} = {val}")
-        return val
-
     def filter_data(self, df: pd.DataFrame, drop_rows_list: Optional[tuple] = None) -> pd.DataFrame:
         """Filter rows using stored or provided drop rules."""
         if drop_rows_list is None and self.filter_config is not None:
@@ -727,12 +675,12 @@ class Bench:
         if params is None:
             params_payload: Dict[str, Any] = {
                 "analyses": [
-                    {"name": e.get("name"), "kwargs": e.get("kwargs", {})}
-                    for e in self._usage.get("analyses", [])
+                    {"name": e["name"], "kwargs": e.get("kwargs", {})}
+                    for e in self._invoked if e["kind"] == "analysis"
                 ],
                 "plots": [
-                    {"name": e.get("name"), "kwargs": e.get("kwargs", {})}
-                    for e in self._usage.get("plots", [])
+                    {"name": e["name"], "kwargs": e.get("kwargs", {})}
+                    for e in self._invoked if e["kind"] == "plot"
                 ],
             }
         else:
@@ -751,7 +699,7 @@ class Bench:
             "notes": notes,
             "io_config": None if self.io_config is None else asdict(self.io_config),
             "filter_config": None if self.filter_config is None else asdict(self.filter_config),
-            "usage": self._usage,
+            "invoked": self._invoked,
             "outputs": outputs_payload,
         }
 
@@ -840,17 +788,6 @@ class Bench:
         out_df.to_csv(out_path, index=False)
         self._track_output(out_path, "tables")
         return out_path
-
-    def run(self, name: str, notes: Optional[str] = None) -> RunContext:
-        """Create a provenance-tracked run context.
-
-        Usage::
-
-            with bench.run("eta-analysis", notes="pilot") as run:
-                run.analyze(analysis).plot(plotter, save="fig.png").save_tables()
-            # provenance written automatically
-        """
-        return RunContext(self, name, notes=notes)
 
     @staticmethod
     def _make_output_paths(cfg: IOConfig) -> OutputPaths:

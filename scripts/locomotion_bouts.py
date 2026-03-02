@@ -17,44 +17,39 @@ RUN_NAME = "260218_test-scientist"
 EXPORT_SVG = True
 TASK_FILTER = "task-widefield"
 
+bench = Bench()
+(bench
+    .setup(input_path=DATASET,
+            analyst="Jacob Gronemeyer",
+            lab="Sipe Lab",
+            scientist="Jacob Gronemeyer",
+            run_name=RUN_NAME,
+            tag="ETOH_locomotion_bouts-5-seconds")
+    .filter(Task=TASK_FILTER))
 
-def main() -> None:
-    bench = Bench()
-    (bench
-        .setup(input_path=DATASET,
-               analyst="Jacob Gronemeyer",
-               lab="Sipe Lab",
-               scientist="Jacob Gronemeyer",
-               run_name=RUN_NAME,
-               tag="ETOH_locomotion_bouts-5-seconds",
-               notes="First-order locomotion bout features for ET0H R01 10-day pre-condition dataset.")
-        .load()
-        .filter(Task=TASK_FILTER))
+df = bench.df
+paths = bench.output_paths
+features = [
+    bench.get_feature("speed_mean_cms"),
+    bench.get_feature("speed_std_cms"),
+    bench.get_feature("distance_m"),
+    bench.get_feature("locomotion_bouts_n"),
+    bench.get_feature("locomotion_bout_speed_mean_cms"),
+    bench.get_feature("locomotion_bout_distance_m"),
+    bench.get_feature("locomotion_bout_duration_s"),
+]
 
-    df = bench.df
-    paths = bench.output_paths
-    feature_plotter = FeaturePlotter()
-
-    features = [
-        bench.get_feature("speed_mean_cms"),
-        bench.get_feature("speed_std_cms"),
-        bench.get_feature("distance_m"),
-        bench.get_feature("locomotion_bouts_n"),
-        bench.get_feature("locomotion_bout_speed_mean_cms"),
-        bench.get_feature("locomotion_bout_distance_m"),
-        bench.get_feature("locomotion_bout_duration_s"),
-    ]
-
-    bench.build_session_table(features=features)
-    bench.save_table(bench.session_table.reset_index(), "locomotion_bouts_session_table.csv")
+with bench.run("locomotion-bouts", notes="First-order locomotion bout features for ET0H R01 10-day pre-condition dataset.") as run:
+    run.build_session_table(features=features)
+    run.save_table(run.session_table.reset_index(), "locomotion_bouts_session_table.csv")
 
     for feat in features:
-        bench.plot(feature_plotter, bench.session_table, feature=feat, x_label="Session (days)")
-        fig = bench._last_fig
+        plotter = FeaturePlotter(feature=feat, x_label="Session (days)")
+        fig, _ = run.plot(plotter, run.session_table)
         base = f"{feat.name}_boxplot"
-        bench.save_feature_plot(fig, f"{base}.png", feature_name=feat.name, folder="plots", dpi=300, bbox_inches="tight")
+        run.save_feature_plot(fig, f"{base}.png", feature_name=feat.name, folder="plots", dpi=300, bbox_inches="tight")
         if EXPORT_SVG:
-            bench.save_figure(fig, f"{base}.svg", folder="plots", dpi=300, bbox_inches="tight")
+            run.save_figure(fig, f"{base}.svg", folder="plots", dpi=300, bbox_inches="tight")
         plt.close(fig)
 
     report_path = paths.reports / "locomotion_bouts_report.pdf"
@@ -116,8 +111,6 @@ def main() -> None:
             pdf.savefig(fig, bbox_inches="tight")
             plt.close(fig)
 
-    bench.save_provenance()
-
-
-if __name__ == "__main__":
-    main()
+    run.save_run_summary(
+        notes="First-order locomotion bout features for ET0H R01 10-day pre-condition dataset.",
+    )

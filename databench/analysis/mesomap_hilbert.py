@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, Tuple, Optional, cast
 from pathlib import Path
 
@@ -13,19 +13,18 @@ from databench.plotting import plot_stacked_envelopes, plot_spectrogram_panel
 from scipy import signal
 
 
-@dataclass(frozen=True)
-class MesomapHilbertConfig:
-    fs: float = 50.0 # sampling frequency (Hz) to define Nyquist f/2
-    band_lo: float = 3.2 # bandpass low end
-    band_hi: float = 4.0 # bandpass high end
-    win_s: float = 4.0 # spectrogram window size (s)
-    overlap_frac: float = 0.950 # spectrogram overlap fraction
-    fmax: float = 12.0 # max frequency to keep in spectrogram (Hz) y axis
-    targets: Dict[str, str] = field(default_factory=lambda: {
-        "VISp": "L_VISp",
-        "MOs": "L_MOs",
-        "SSp-ll": "L_SSp-ll",
-    })
+# Default mesomap Hilbert parameters
+_DEFAULT_FS = 50.0
+_DEFAULT_BAND_LO = 3.2
+_DEFAULT_BAND_HI = 4.0
+_DEFAULT_WIN_S = 4.0
+_DEFAULT_OVERLAP_FRAC = 0.950
+_DEFAULT_FMAX = 12.0
+_DEFAULT_TARGETS: Dict[str, str] = {
+    "VISp": "L_VISp",
+    "MOs": "L_MOs",
+    "SSp-ll": "L_SSp-ll",
+}
 
 
 def detrend_zscore_1d(x: np.ndarray) -> np.ndarray:
@@ -65,15 +64,24 @@ class MesomapHilbert(AnalysisFn):
     def _run_impl(
         self,
         row: pd.Series,
-        cfg: MesomapHilbertConfig,
+        *,
+        fs: float = _DEFAULT_FS,
+        band_lo: float = _DEFAULT_BAND_LO,
+        band_hi: float = _DEFAULT_BAND_HI,
+        win_s: float = _DEFAULT_WIN_S,
+        overlap_frac: float = _DEFAULT_OVERLAP_FRAC,
+        fmax: float = _DEFAULT_FMAX,
+        targets: Optional[Dict[str, str]] = None,
         source: str = "mesomap",
         debug: bool = False,
         context: Optional[str] = None,
     ):
+        if targets is None:
+            targets = _DEFAULT_TARGETS
         regions = [c[1] for c in row.index if c[0] == source]
 
         resolved: Dict[str, str] = {}
-        for key, col in cfg.targets.items():
+        for key, col in targets.items():
             if col in regions:
                 resolved[key] = col
                 continue
@@ -103,17 +111,17 @@ class MesomapHilbert(AnalysisFn):
         signals["GLOBAL"] = g
 
         n = len(g)
-        t = np.arange(n) / cfg.fs
+        t = np.arange(n) / fs
 
         envs = {}
         specs: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
         for k, x0 in signals.items():
-            xb = bandpass_1d(x0, cfg.fs, cfg.band_lo, cfg.band_hi)
+            xb = bandpass_1d(x0, fs, band_lo, band_hi)
             hb = cast(np.ndarray, signal.hilbert(xb))
             envs[k] = np.abs(hb)
 
-            f, tt, Sdb = spectrogram_db(xb, cfg.fs, cfg.win_s, cfg.overlap_frac)
-            m = (f >= 0) & (f <= cfg.fmax)
+            f, tt, Sdb = spectrogram_db(xb, fs, win_s, overlap_frac)
+            m = (f >= 0) & (f <= fmax)
             specs[k] = (f[m], tt, Sdb[m, :])
 
         overlap = {}
@@ -136,18 +144,44 @@ class MesomapHilbert(AnalysisFn):
 
 def run_mesomap_hilbert(
     row: pd.Series,
-    cfg: MesomapHilbertConfig,
+    *,
+    fs: float = _DEFAULT_FS,
+    band_lo: float = _DEFAULT_BAND_LO,
+    band_hi: float = _DEFAULT_BAND_HI,
+    win_s: float = _DEFAULT_WIN_S,
+    overlap_frac: float = _DEFAULT_OVERLAP_FRAC,
+    fmax: float = _DEFAULT_FMAX,
+    targets: Optional[Dict[str, str]] = None,
     source: str = "mesomap",
     debug: bool = False,
     context: Optional[str] = None,
 ):
-    return MesomapHilbert().run(row, cfg=cfg, source=source, debug=debug, context=context)
+    return MesomapHilbert().run(
+        row,
+        fs=fs,
+        band_lo=band_lo,
+        band_hi=band_hi,
+        win_s=win_s,
+        overlap_frac=overlap_frac,
+        fmax=fmax,
+        targets=targets,
+        source=source,
+        debug=debug,
+        context=context,
+    )
 
 
 def export_hilbert_envelopes(
     df: pd.DataFrame,
-    cfg: MesomapHilbertConfig,
     out_dir: Path,
+    *,
+    fs: float = _DEFAULT_FS,
+    band_lo: float = _DEFAULT_BAND_LO,
+    band_hi: float = _DEFAULT_BAND_HI,
+    win_s: float = _DEFAULT_WIN_S,
+    overlap_frac: float = _DEFAULT_OVERLAP_FRAC,
+    fmax: float = _DEFAULT_FMAX,
+    targets: Optional[Dict[str, str]] = None,
     source: str = "mesomap",
     analysis_name: str = "hilbert_env",
     debug: bool = False,
@@ -158,7 +192,19 @@ def export_hilbert_envelopes(
 
     for idx, row in df.iterrows():
         ctx = log_context(idx)
-        out = run_mesomap_hilbert(row, cfg, source=source, debug=debug, context=ctx)
+        out = run_mesomap_hilbert(
+            row,
+            fs=fs,
+            band_lo=band_lo,
+            band_hi=band_hi,
+            win_s=win_s,
+            overlap_frac=overlap_frac,
+            fmax=fmax,
+            targets=targets,
+            source=source,
+            debug=debug,
+            context=ctx,
+        )
         subject, session, task = idx[:3]
         subject = strip_prefix(subject, "sub-")
         session = strip_prefix(session, "ses-")
@@ -179,46 +225,56 @@ def export_hilbert_envelopes(
 @dataclass(frozen=True)
 class MesomapHilbertAnalysis(Analysis):
     name: str = "mesomap_hilbert"
+    fs: float = _DEFAULT_FS
+    band_lo: float = _DEFAULT_BAND_LO
+    band_hi: float = _DEFAULT_BAND_HI
+    win_s: float = _DEFAULT_WIN_S
+    overlap_frac: float = _DEFAULT_OVERLAP_FRAC
+    fmax: float = _DEFAULT_FMAX
+    targets: Optional[Dict[str, str]] = None
+    source: str = "mesomap"
 
     def run(
         self,
         row: pd.Series,
-        cfg: MesomapHilbertConfig,
-        *,
-        source: str = "mesomap",
-        debug: bool = False,
-        context: Optional[str] = None,
     ) -> AnalysisResult:
-        out = run_mesomap_hilbert(row, cfg, source=source, debug=debug, context=context)
-        return AnalysisResult(name=self.name, data=out, meta={"source": source, "cfg": cfg})
+        out = run_mesomap_hilbert(
+            row,
+            fs=self.fs,
+            band_lo=self.band_lo,
+            band_hi=self.band_hi,
+            win_s=self.win_s,
+            overlap_frac=self.overlap_frac,
+            fmax=self.fmax,
+            targets=self.targets,
+            source=self.source,
+        )
+        return AnalysisResult(
+            name=self.name,
+            data=out,
+            meta={
+                "source": self.source,
+                "band_lo": self.band_lo,
+                "band_hi": self.band_hi,
+                "fmax": self.fmax,
+                "win_s": self.win_s,
+                "overlap_frac": self.overlap_frac,
+            },
+        )
 
     def plot(
         self,
         result: AnalysisResult,
-        *,
-        kind: str = "envelopes",
-        keys: Optional[list[str]] = None,
-        **kwargs,
     ):
+        """Plot envelopes from a MesomapHilbert result."""
         out = result.data
-        if kind == "envelopes":
-            use_keys = keys or list(out["resolved"].keys())
-            use_keys.append("GLOBAL")
-            cfg = result.meta.get("cfg")
-            return plot_stacked_envelopes(
-                out["t"],
-                out["envs"],
-                use_keys,
-                kwargs.pop("band_lo", cfg.band_lo if cfg else 3.2),
-                kwargs.pop("band_hi", cfg.band_hi if cfg else 4.0),
-                **kwargs,
-            )
-        if kind == "spectrograms":
-            use_keys = keys or list(out["resolved"].keys())
-            use_keys.append("GLOBAL")
-            cfg = result.meta.get("cfg")
-            fmax = kwargs.pop("fmax", cfg.fmax if cfg else 12.0)
-            win_s = kwargs.pop("win_s", cfg.win_s if cfg else 4.0)
-            overlap_frac = kwargs.pop("overlap_frac", cfg.overlap_frac if cfg else 0.95)
-            return plot_spectrogram_panel(out["specs"], use_keys, fmax, win_s, overlap_frac)
-        raise ValueError(f"Unknown plot kind: {kind!r}")
+        meta = result.meta or {}
+        use_keys = list(out["resolved"].keys())
+        use_keys.append("GLOBAL")
+        return plot_stacked_envelopes(
+            out["t"],
+            out["envs"],
+            use_keys,
+            meta.get("band_lo", _DEFAULT_BAND_LO),
+            meta.get("band_hi", _DEFAULT_BAND_HI),
+        )

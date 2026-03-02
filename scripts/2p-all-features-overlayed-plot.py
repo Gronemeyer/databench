@@ -8,18 +8,19 @@ import pandas as pd
 import matplotlib.pyplot as plt
 #%%
 
+from databench.config import resolve_dataset
+DATASET = resolve_dataset()
+
 bench = Bench()
 
 bench.setup(
-	input_path=Path(r'/Users/jakegronemeyer/Desktop/4jake/260212_ACUTEVIS_dataset.pkl'),
-	output_root=Path(__file__).resolve().parents[1] / "outputs",
+	input_path=DATASET,
 	analyst="Jacob Gronemeyer",
 	lab="Sipe Lab",
-	run_name="260216",
-	tag="event-based-analysis"
+	run_name="event-triggered-overlays",
+	tag="ACUTEVIS"
 )
 
-bench.load()
 df = bench.df
 
 #%%
@@ -129,17 +130,20 @@ def plot_psychopy_roi_overview(
 	plt.show()
 
 
-plot_psychopy_roi_overview(
-	df,
-	source="suite2p",
-	trace_key="deltaf_f",
-	time_key="time_elapsed_s",
-	roi_index=4,
-	task_filter="task-gratings",
-	title="2p ROI overview",
-	max_plots=6,
-)
+with bench.run("2p-overview-plots") as run:
+    plot_psychopy_roi_overview(
+        df,
+        source="suite2p",
+        trace_key="deltaf_f",
+        time_key="time_elapsed_s",
+        roi_index=4,
+        task_filter="task-gratings",
+        title="2p ROI overview",
+        max_plots=6,
+    )
 
-bench.save_provenance()
+    run.save_run_summary(
+        notes="2p ROI overview with pupil + encoder overlays for gratings task.",
+    )
 
 # %%

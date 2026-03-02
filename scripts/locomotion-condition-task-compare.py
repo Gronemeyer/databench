@@ -382,18 +382,23 @@ class LocomotionConditionTaskPlotter(Plotter):
         fig.suptitle("Locomotion comparison across conditions", y=0.99, fontsize=13)
         fig.subplots_adjust(left=0.08, right=0.98, top=0.93, bottom=0.08, hspace=0.55, wspace=0.28)
 
-        return {"combined": (fig, axes)}
+        return fig, axes
 
 
 #%%
 # Procedural workflow
 
-pickle_path = Path(r"/Users/jakegronemeyer/Desktop/4jake/260211_ETOH_dataset.pkl")
-project_root = Path(__file__).resolve().parents[1]
-output_root = project_root / "outputs"
+from databench.config import resolve_dataset
+DATASET = resolve_dataset()
 
 bench = Bench()
-bench.setup(pickle_path, output_root=output_root, analyst="Jacob Gronemeyer", lab="Sipe Lab", run_name="locomotion", tag="locomotion-condition-task").load()
+bench.setup(
+    DATASET,
+    analyst="Jacob Gronemeyer",
+    lab="Sipe Lab",
+    run_name="locomotion",
+    tag="locomotion-condition-task",
+)
 
 bouts_feature = bench.get_feature("locomotion_bouts_n")
 
@@ -403,10 +408,6 @@ ses_to_cond = {
     "ses-03": "ethanol_low",
     "ses-04": "ethanol_high",
 }
-
-(bench
-    .build_long(sources=[("treadmill", ["speed_mm"])], tol=0.25, time_column="time_elapsed_s", reference_source="treadmill")
-    .label_conditions(ses_to_cond))
 
 analysis = LocomotionByConditionTaskAnalysis(
     task_filter=("task-spont", "task-movies"),
@@ -419,14 +420,21 @@ plotter = LocomotionConditionTaskPlotter(
     task_order=analysis.task_filter,
 )
 
-(bench
-    .analyze(analysis)
-    .plot(plotter, save="locomotion_condition_summary")
-    .save_tables(prefix="locomotion_compare"))
+with bench.run("locomotion-condition-task") as run:
+    (run
+        .build_long(
+            sources=[("treadmill", ["speed_mm"])],
+            tol=0.25,
+            time_column="time_elapsed_s",
+            reference_source="treadmill",
+        )
+        .label_conditions(ses_to_cond))
 
-bench.save_run_summary(
-    notes="Locomotion bout/stats comparison across conditions and tasks using DataFrame event API.",
-)
-bench.save_provenance()
+    result = run.analyze(analysis, df=run.long)
+    run.plot(plotter, result, save="locomotion_condition_summary.png")
+    run.save_tables(result, prefix="locomotion_compare")
+    run.save_run_summary(
+        notes="Locomotion bout/stats comparison across conditions and tasks using DataFrame event API.",
+    )
 
 # %%

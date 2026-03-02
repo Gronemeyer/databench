@@ -22,6 +22,15 @@ from databench.plotting.eta import (
     EtaLongitudinalMetricPlotter,
     EtaPrePostDiffBoxplot,
 )
+from databench.plotting.oscillation import (
+    smooth_savgol,
+    shade_bursts,
+    time_mask,
+    OscillationOverviewPlotter,
+    OscillationBurstDetailPlotter,
+    OscillationReportPagePlotter,
+    OscillationEtaGroupPlotter,
+)
 
 __all__ = [
     "plot_mean_sem",
@@ -45,4 +54,11 @@ __all__ = [
     "EtaLongitudinalHeatmapPlotter",
     "EtaLongitudinalMetricPlotter",
     "EtaPrePostDiffBoxplot",
+    "smooth_savgol",
+    "shade_bursts",
+    "time_mask",
+    "OscillationOverviewPlotter",
+    "OscillationBurstDetailPlotter",
+    "OscillationReportPagePlotter",
+    "OscillationEtaGroupPlotter",
 ]

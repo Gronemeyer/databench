@@ -111,15 +111,13 @@ def plot_oscillation_overlay(
     return fig, axes
 
 
-@dataclass(frozen=True)
-class OscillationDetectorConfig:
-    fs: float = 50.0
-    band: Tuple[float, float] = (3.1, 4.3)
-    order: int = 4
-    k: float = 4.0
-    min_duration_s: float = 0.5
-    merge_gap_s: float = 0.25
-    threshold: Optional[float] = None  # fixed envelope threshold; bypasses k when set
+# Default oscillation detector parameters
+_DEFAULT_FS = 50.0
+_DEFAULT_BAND = (3.1, 4.3)
+_DEFAULT_ORDER = 4
+_DEFAULT_K = 4.0
+_DEFAULT_MIN_DURATION_S = 0.5
+_DEFAULT_MERGE_GAP_S = 0.25
 
 def _as_time_vector(tt: np.ndarray, n: int) -> np.ndarray:
     t = np.asarray(tt, dtype=float).ravel()
@@ -235,7 +233,14 @@ class OscillationDetector(AnalysisFn):
     def _run_impl(
         self,
         row: pd.Series,
-        cfg: OscillationDetectorConfig,
+        *,
+        fs: float = _DEFAULT_FS,
+        band: Tuple[float, float] = _DEFAULT_BAND,
+        order: int = _DEFAULT_ORDER,
+        k: float = _DEFAULT_K,
+        min_duration_s: float = _DEFAULT_MIN_DURATION_S,
+        merge_gap_s: float = _DEFAULT_MERGE_GAP_S,
+        threshold: Optional[float] = None,
         source: Optional[str] = None,
         signal_key: Optional[str] = None,
         time_key: Optional[str] = None,
@@ -258,22 +263,22 @@ class OscillationDetector(AnalysisFn):
         x = x[:n]
         t = t[:n]
 
-        xf, env = _bandpass_env(x, cfg.fs, cfg.band, cfg.order)
+        xf, env = _bandpass_env(x, fs, band, order)
 
-        if cfg.threshold is not None:
-            thr = cfg.threshold
+        if threshold is not None:
+            thr = threshold
             med = float(np.median(env))
             robust_std = 0.0
         else:
-            thr, med, robust_std = _robust_threshold(env, cfg.k)
+            thr, med, robust_std = _robust_threshold(env, k)
 
         segments = _segments_from_mask(env > thr)
-        min_gap = int(round(cfg.merge_gap_s * cfg.fs))
+        min_gap = int(round(merge_gap_s * fs))
         merged = _merge_gaps(segments, min_gap)
-        min_len = int(round(cfg.min_duration_s * cfg.fs))
+        min_len = int(round(min_duration_s * fs))
         bursts = _apply_min_duration(merged, min_len)
 
-        table = _burst_table(t, env, bursts, cfg.fs)
+        table = _burst_table(t, env, bursts, fs)
 
         if debug:
             print(f"[oscillation_detector] bursts={len(bursts)} | {context}")
@@ -291,13 +296,18 @@ class OscillationDetector(AnalysisFn):
         }
 
 
-def context_from_index(
-    index,
+def _context_from_row(
+    row: pd.Series,
     source: Optional[str] = None,
     signal_key: Optional[str] = None,
     time_key: Optional[str] = None,
 ) -> OscillationContext:
-    subject, session, task = index[:3]
+    """Build an OscillationContext from a row's index (Subject, Session, Task)."""
+    idx = row.name if hasattr(row, 'name') else (None, None, None)
+    if isinstance(idx, tuple) and len(idx) >= 3:
+        subject, session, task = idx[:3]
+    else:
+        subject, session, task = None, None, None
     return OscillationContext(
         subject=subject,
         session=session,
@@ -310,50 +320,36 @@ def context_from_index(
 
 def analyze_oscillation_row(
     row: pd.Series,
-    cfg: OscillationDetectorConfig,
     *,
+    fs: float = _DEFAULT_FS,
+    band: Tuple[float, float] = _DEFAULT_BAND,
+    order: int = _DEFAULT_ORDER,
+    k: float = _DEFAULT_K,
+    min_duration_s: float = _DEFAULT_MIN_DURATION_S,
+    merge_gap_s: float = _DEFAULT_MERGE_GAP_S,
+    threshold: Optional[float] = None,
     source: Optional[str] = None,
     signal_key: Optional[str] = None,
     time_key: Optional[str] = None,
     debug: bool = False,
-    context: Optional[OscillationContext] = None,
 ) -> Optional[OscillationResult]:
-    ctx = context or OscillationContext(source=source, signal_key=signal_key, time_key=time_key)
+    ctx = _context_from_row(row, source=source, signal_key=signal_key, time_key=time_key)
     out = OscillationDetector().run(
         row,
-        cfg=cfg,
+        fs=fs,
+        band=band,
+        order=order,
+        k=k,
+        min_duration_s=min_duration_s,
+        merge_gap_s=merge_gap_s,
+        threshold=threshold,
         source=source,
         signal_key=signal_key,
         time_key=time_key,
         debug=debug,
         context=ctx.label(),
     )
-    return OscillationResult(context=ctx, band=cfg.band, **out)
-
-
-def analyze_oscillation_dataset(
-    df: pd.DataFrame,
-    cfg: OscillationDetectorConfig,
-    *,
-    source: Optional[str] = None,
-    signal_key: Optional[str] = None,
-    time_key: Optional[str] = None,
-    debug: bool = False,
-) -> list[OscillationResult]:
-    results: list[OscillationResult] = []
-    for idx, row in df.iterrows():
-        ctx = context_from_index(idx, source=source, signal_key=signal_key, time_key=time_key)
-        out = analyze_oscillation_row(
-            row,
-            cfg,
-            source=source,
-            signal_key=signal_key,
-            time_key=time_key,
-            debug=debug,
-            context=ctx,
-        )
-        results.append(out)
-    return results
+    return OscillationResult(context=ctx, band=band, **out)
 
 
 def save_oscillation_bursts(
@@ -408,44 +404,123 @@ def save_oscillation_plot(
 @dataclass(frozen=True)
 class OscillationDetectorAnalysis(Analysis):
     name: str = "oscillation_detector"
+    fs: float = _DEFAULT_FS
+    band: Tuple[float, float] = _DEFAULT_BAND
+    order: int = _DEFAULT_ORDER
+    k: float = _DEFAULT_K
+    min_duration_s: float = _DEFAULT_MIN_DURATION_S
+    merge_gap_s: float = _DEFAULT_MERGE_GAP_S
+    threshold: Optional[float] = None
+    source: str = ""
+    signal_key: str = ""
+
+    time_key: str = "time_elapsed_s"
+    debug: bool = False
 
     def run(
         self,
-        row: pd.Series,
-        cfg: OscillationDetectorConfig,
-        *,
-        source: Optional[str] = None,
-        signal_key: Optional[str] = None,
-        time_key: Optional[str] = None,
-        debug: bool = False,
-        context: Optional[OscillationContext] = None,
+        row: Optional[pd.Series] = None,
     ) -> AnalysisResult:
+        if row is None:
+            return AnalysisResult(name=self.name)
         result = analyze_oscillation_row(
             row,
-            cfg,
-            source=source,
-            signal_key=signal_key,
-            time_key=time_key,
-            debug=debug,
-            context=context,
+            fs=self.fs,
+            band=self.band,
+            order=self.order,
+            k=self.k,
+            min_duration_s=self.min_duration_s,
+            merge_gap_s=self.merge_gap_s,
+            threshold=self.threshold,
+            source=self.source or None,
+            signal_key=self.signal_key or None,
+            time_key=self.time_key,
+            debug=self.debug,
         )
         return AnalysisResult(
             name=self.name,
             data=result,
             table=None if result is None else result.table,
             context=None if result is None else result.context,
-            meta={"band": cfg.band},
+            meta={"band": self.band},
         )
+
+    def run_dataset(
+        self,
+        df: pd.DataFrame,
+    ) -> list[OscillationResult]:
+        """Run oscillation detection across all rows of a task-filtered DataFrame.
+
+        Uses instance fields for fs, band, order, k, threshold, etc.
+        Returns only rows that yielded detectable results.
+        """
+        results: list[OscillationResult] = []
+        for idx, row in df.iterrows():
+            out = analyze_oscillation_row(
+                row,
+                fs=self.fs,
+                band=self.band,
+                order=self.order,
+                k=self.k,
+                min_duration_s=self.min_duration_s,
+                merge_gap_s=self.merge_gap_s,
+                threshold=self.threshold,
+                source=self.source or None,
+                signal_key=self.signal_key or None,
+                time_key=self.time_key,
+                debug=self.debug,
+            )
+            if out is not None:
+                results.append(out)
+        return results
+
+    def collect_events(
+        self,
+        results: list[OscillationResult],
+        *,
+        edge_pad_s: float = 0.0,
+    ) -> pd.DataFrame:
+        """Build a standardised events table from oscillation detection results.
+
+        Output columns: Subject, Session, Task, onset_t, offset_t,
+        duration_s, peak_env.  Ready for ``EventTriggeredAverageAnalysis``.
+
+        Parameters
+        ----------
+        edge_pad_s : float
+            Exclude events whose ±pad window exceeds recording boundaries.
+        """
+        frames: list[pd.DataFrame] = []
+        for result in results:
+            if result is None or result.table.empty:
+                continue
+            ctx = result.context
+            tbl = result.table.copy()
+            tbl.insert(0, "Subject", ctx.subject)
+            tbl.insert(1, "Session", ctx.session)
+            tbl.insert(2, "Task", ctx.task)
+
+            if edge_pad_s > 0:
+                t_start, t_end = float(result.t[0]), float(result.t[-1])
+                tbl = tbl[
+                    (tbl["start_s"] - edge_pad_s >= t_start)
+                    & (tbl["end_s"] + edge_pad_s <= t_end)
+                ]
+
+            if not tbl.empty:
+                frames.append(tbl)
+
+        if not frames:
+            return pd.DataFrame()
+        events = pd.concat(frames, ignore_index=True)
+        events = events.rename(columns={"start_s": "onset_t", "end_s": "offset_t"})
+        return events
 
     def plot(
         self,
         result: AnalysisResult,
-        *,
-        overlay: Optional[Tuple[np.ndarray, str]] = None,
-        overlay_subplot: bool = False,
-        time_window: Optional[Tuple[float, float]] = None,
-        title: Optional[str] = None,
     ):
+        """Plot oscillation overlay from result.data (OscillationResult)."""
         res: OscillationResult = result.data
         return plot_oscillation_overlay(
             res.t,
@@ -456,32 +531,17 @@ class OscillationDetectorAnalysis(Analysis):
             res.bursts,
             res.context.signal_key or "signal",
             band=res.band,
-            overlay=overlay,
-            overlay_subplot=overlay_subplot,
-            window=time_window,
-            title=title or f"{res.context.label()} | Signal={res.context.signal_key}",
+            title=f"{res.context.label()} | Signal={res.context.signal_key}",
         )
 
     def save(
         self,
         result: AnalysisResult,
-        *,
-        stats_dir: Path,
-        plots_dir: Optional[Path] = None,
-        overlay: Optional[Tuple[np.ndarray, str]] = None,
-        overlay_subplot: bool = False,
-        time_window: Optional[Tuple[float, float]] = None,
-        save_plot: bool = True,
     ) -> list[Path]:
+        """Save burst table CSV. Requires output_paths on result.meta."""
         res: OscillationResult = result.data
-        paths: list[Path] = [save_oscillation_bursts(res, stats_dir)]
-        paths.append(
-            save_oscillation_plot(
-                res,
-                plots_dir,
-                overlay=overlay,
-                overlay_subplot=overlay_subplot,
-                time_window=time_window,
-            )
-        )
+        stats_dir = result.meta.get("stats_dir")
+        if stats_dir is None:
+            return []
+        paths: list[Path] = [save_oscillation_bursts(res, Path(stats_dir))]
         return paths

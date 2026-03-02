@@ -8,7 +8,8 @@ from databench import Bench
 from databench.debug import subset_df
 
 
-DATASET_PATH = Path(r"/Volumes/ake.bin/Projects/RO1_ETOH/260116_dataset_mvp.pkl")
+from databench.config import resolve_dataset
+DATASET = resolve_dataset()
 
 # Optional filters
 SUBJECT = None
@@ -34,18 +35,20 @@ EXTRACT_FEATURES = {
 }
 
 
-def main() -> None:
-    bench = Bench()
-    bench.setup(DATASET_PATH, analyst="Jacob Gronemeyer", lab="Sipe Lab", run_name="feature_extraction", tag="ETOH_R01").load()
+bench = Bench()
+bench.setup(
+    DATASET, 
+    analyst="Jacob Gronemeyer", 
+    lab="Sipe Lab", 
+    run_name="feature_extraction", 
+    tag="ETOH_R01")
 
-    df = bench.df
-    if SUBJECT is not None or SESSION is not None or TASK is not None:
-        df = subset_df(df, subject=SUBJECT, session=SESSION, task=TASK)
+df = bench.df
+df = subset_df(df, subject=SUBJECT, session=SESSION, task=TASK)
 
-    if not isinstance(df.columns, pd.MultiIndex):
-        raise ValueError("Expected MultiIndex columns (source, feature).")
+available = set(df.columns)
 
-    available = set(df.columns)
+with bench.run("feature-extraction") as run:
     for out_name, candidates in EXTRACT_FEATURES.items():
         if not candidates:
             print(f"Skipping {out_name}: no candidates provided.")
@@ -64,7 +67,7 @@ def main() -> None:
 
         source, feature = chosen
         file_name = f"{out_name}.csv".replace("/", "-")
-        out_path = bench.export_feature_report(
+        out_path = run.export_feature_report(
             df,
             source=source,
             feature=feature,
@@ -73,8 +76,6 @@ def main() -> None:
         )
         print(f"Saved {out_name} CSV to: {out_path}")
 
-    bench.save_provenance()
-
-
-if __name__ == "__main__":
-    main()
+    run.save_run_summary(
+        notes="Batch feature extraction to CSV for locomotion, pupil, and ROI signals.",
+    )

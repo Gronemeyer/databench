@@ -18,7 +18,6 @@ bench.setup(input_path=Path(r'/Users/jakegronemeyer/Desktop/4jake/260212_ACUTEVI
             run_name="sandbox", tag="groups")
 
 paths = bench.output_paths
-bench.load()
 df = bench.df
 # %%
 print("MultiIndex Levels:")

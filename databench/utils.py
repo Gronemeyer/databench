@@ -13,6 +13,27 @@ def session_to_int(session_label: object) -> float:
 
 
 def as_1d(x) -> Optional[np.ndarray]:
+    """
+    Convert input to a 1-dimensional numpy array.
+    
+    Parameters
+    ----------
+    x : array-like
+        Input data that can be converted to a numpy array.
+    
+    Returns
+    -------
+    np.ndarray or None
+        A flattened 1-dimensional numpy array, or None if input is None.
+    
+    Examples
+    --------
+    >>> as_1d([1, 2, 3])
+    array([1, 2, 3])
+    
+    >>> as_1d([[1, 2], [3, 4]])
+    array([1, 2, 3, 4])
+    """
     return np.asarray(x).ravel()
 
 
@@ -33,12 +54,10 @@ def get_value(row: pd.Series, source: str, feature: str):
 
 
 def get_first(row: pd.Series, keys):
-    """Return the value for the first key whose value is not None."""
     for key in keys:
         val = row.get(key)
-        if val is not None:
-            return val
-    return None
+        return val
+    return row.get(keys[0])
 
 
 def drop_rows(df: pd.DataFrame, drop_tuples: tuple) -> pd.DataFrame:

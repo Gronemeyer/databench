@@ -11,44 +11,44 @@ from databench.analysis.eta import (
     _session_to_day,
 )
 from databench.analysis.longitudinal import MeanSEM, longitudinal_summary, LongitudinalAnalysis
-from databench.analysis.mesomap_hilbert import MesomapHilbertConfig, run_mesomap_hilbert, export_hilbert_envelopes
+from databench.analysis.mesomap_hilbert import run_mesomap_hilbert, export_hilbert_envelopes, MesomapHilbertAnalysis
 from databench.analysis.oscillation_detector import (
-    OscillationDetectorConfig,
     OscillationContext,
     OscillationResult,
     analyze_oscillation_row,
-    analyze_oscillation_dataset,
     save_oscillation_bursts,
     save_oscillation_plot,
-    context_from_index,
     OscillationDetectorAnalysis,
 )
 
 
 __all__ = [
+    # Base
     "StatFn",
     "AxisFn",
-    "AnalysisFn",
     "Analysis",
     "AnalysisResult",
     "_warn_missing_columns",
+    # Deprecated — use Analysis instead
+    "AnalysisFn",
+    # ETA
     "eta_baselined",
     "EtaByConditionAnalysis",
     "EtaLongitudinalAnalysis",
     "EtaPrePostDiffAnalysis",
+    # Longitudinal
     "MeanSEM",
     "LongitudinalAnalysis",
-    "MesomapHilbertConfig",
+    "longitudinal_summary",
+    # Mesomap
     "run_mesomap_hilbert",
     "export_hilbert_envelopes",
-    "OscillationDetectorConfig",
+    "MesomapHilbertAnalysis",
+    # Oscillation
     "OscillationContext",
     "OscillationResult",
     "OscillationDetectorAnalysis",
     "analyze_oscillation_row",
-    "analyze_oscillation_dataset",
     "save_oscillation_bursts",
     "save_oscillation_plot",
-    "context_from_index",
-    "longitudinal_summary",
 ]

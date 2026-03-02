@@ -13,52 +13,79 @@ if TYPE_CHECKING:
 
 
 class RunContext:
-    """Explicit provenance scope — replaces hidden ``_usage`` / ``_saved_outputs`` state.
+    """Scoped execution block with provenance tracking and state isolation.
 
     Usage::
 
         with bench.run("eta-analysis", notes="pilot") as run:
-            run.analyze(MyAnalysis(...))
-            run.plot(MyPlotter(...), save="fig.png")
-            run.save_tables(prefix="eta")
-        # provenance.json + summary.md written automatically on __exit__
+            run.build_long(sources=[...])
+            result = run.analyze(MyAnalysis(...), df=run.long)
+            fig, ax = run.plot(MyPlotter(...), result, save="fig.png")
+            run.save_tables(result, prefix="eta")
+        # provenance.json + summary.md written on clean exit
+        # bench chain state restored to pre-run snapshot
 
-    ``RunContext`` delegates to the parent ``Bench`` but keeps its own
-    usage and output tracking scoped to this run.
+    ``RunContext`` returns the parent ``Bench`` on ``__enter__`` so the
+    caller uses the same API.  Provenance tracking (``_invoked``,
+    ``_saved_outputs``) and chain state (``_df``, ``_long``,
+    ``_session_table``, ``_result``, ``_last_fig``) are scoped to this
+    block and restored on exit.
     """
 
     def __init__(self, bench: "Bench", name: str, notes: Optional[str] = None):
         self._bench = bench
         self.name = name
         self.notes = notes
-        # Scoped tracking — replaces bench-level _usage/_saved_outputs for this run
-        self._prev_usage: Dict[str, list] = {}
+        # Snapshots — filled on __enter__
+        self._prev_invoked: List[Dict[str, Any]] = []
         self._prev_saved_outputs: Dict[str, List[str]] = {}
         self._prev_notes: Optional[str] = None
+        # Chain-state snapshots
+        self._prev_long: Optional[Any] = None
+        self._prev_session_table: Optional[Any] = None
+        self._prev_result: Optional[Any] = None
+        self._prev_last_fig: Optional[Any] = None
 
     def __enter__(self) -> "Bench":
-        # Snapshot bench state, install fresh tracking for this run
-        self._prev_usage = self._bench._usage
-        self._prev_saved_outputs = self._bench._saved_outputs
-        self._prev_notes = self._bench._provenance_notes
-        self._bench._usage = {"features": [], "analyses": [], "plots": []}
-        self._bench._saved_outputs = {
+        b = self._bench
+        # Snapshot provenance state
+        self._prev_invoked = b._invoked
+        self._prev_saved_outputs = b._saved_outputs
+        self._prev_notes = b._provenance_notes
+        # Snapshot chain state (df is NOT reset — it's the shared loaded data)
+        self._prev_long = b._long
+        self._prev_session_table = b._session_table
+        self._prev_result = b._result
+        self._prev_last_fig = b._last_fig
+        # Install fresh tracking
+        b._invoked = []
+        b._saved_outputs = {
             "tables": [], "figures": [], "other": [], "feature_plots": [],
         }
-        self._bench._provenance_notes = self.notes
-        return self._bench
+        b._provenance_notes = self.notes
+        # Reset chain state for isolation
+        b._long = None
+        b._session_table = None
+        b._result = None
+        b._last_fig = None
+        return b
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        b = self._bench
         if exc_type is None:
-            # Auto-save provenance on clean exit
             try:
-                self._bench.save_provenance()
+                b.save_provenance()
             except Exception:
                 pass  # Don't mask the original exception
-        # Restore previous bench state
-        self._bench._usage = self._prev_usage
-        self._bench._saved_outputs = self._prev_saved_outputs
-        self._bench._provenance_notes = self._prev_notes
+        # Restore provenance state
+        b._invoked = self._prev_invoked
+        b._saved_outputs = self._prev_saved_outputs
+        b._provenance_notes = self._prev_notes
+        # Restore chain state
+        b._long = self._prev_long
+        b._session_table = self._prev_session_table
+        b._result = self._prev_result
+        b._last_fig = self._prev_last_fig
         return False  # Don't suppress exceptions
 
 
@@ -181,11 +208,19 @@ def _feature_plot_map(entries: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str, 
     return mapped
 
 
+def _serialize_component(component: Any) -> Dict[str, Any]:
+    """Best-effort dataclass → dict serialization."""
+    try:
+        return asdict(component)
+    except Exception:
+        return {"class": component.__class__.__name__}
+
+
 def _collect_features(bench: "Bench") -> List[Dict[str, Any]]:
     used_feature_names = {
-        name
-        for entry in bench._usage.get("features", [])
-        for name in entry.get("names", [])
+        entry["name"]
+        for entry in bench._invoked
+        if entry["kind"] == "feature"
     }
     features = []
     for feat in bench.data:
@@ -197,6 +232,7 @@ def _collect_features(bench: "Bench") -> List[Dict[str, Any]]:
             params = {"name": feat.name, "label": feat.label}
         module = feat.__class__.__module__
         class_name = feat.__class__.__name__
+        depends_on = list(getattr(feat.__class__, "_depends_on", ()))
         features.append(
             {
                 "name": feat.name,
@@ -205,37 +241,87 @@ def _collect_features(bench: "Bench") -> List[Dict[str, Any]]:
                 "class_path": _class_path(module, class_name),
                 "doc": (feat.__class__.__doc__ or "").strip() or None,
                 "params": params,
+                "depends_on": depends_on,
             }
         )
     return features
 
 
 def _collect_analyses(bench: "Bench") -> List[Dict[str, Any]]:
-    return [
-        {
-            "name": entry.get("name"),
-            "class": entry.get("class"),
-            "class_module": entry.get("class_module"),
-            "class_path": _class_path(entry.get("class_module"), entry.get("class")),
-            "doc": entry.get("doc"),
-            "params": {**entry.get("config", {}), **entry.get("kwargs", {})},
-        }
-        for entry in bench._usage.get("analyses", [])
-    ]
+    results = []
+    for entry in bench._invoked:
+        if entry["kind"] != "analysis":
+            continue
+        name = entry["name"]
+        # Look up the instance from bench._analyses for auto-serialization
+        instance = bench._analyses.get(name)
+        if instance is not None:
+            cls = instance.__class__
+            module = cls.__module__
+            class_name = cls.__name__
+            doc = (cls.__doc__ or "").strip() or None
+            config = _serialize_component(instance)
+        else:
+            module = None
+            class_name = None
+            doc = None
+            config = {}
+        depends_on = list(getattr(instance.__class__, "_depends_on", ())) if instance else []
+        kwargs = entry.get("kwargs", {})
+        params = {**config, **kwargs}
+        results.append(
+            {
+                "name": name,
+                "class": class_name,
+                "class_module": module,
+                "class_path": _class_path(module, class_name),
+                "doc": doc,
+                "params": params,
+                "kwargs": kwargs,
+                "depends_on": depends_on,
+            }
+        )
+    return results
 
 
 def _collect_plotters(bench: "Bench") -> List[Dict[str, Any]]:
-    return [
-        {
-            "name": entry.get("name"),
-            "class": entry.get("class"),
-            "class_module": entry.get("class_module"),
-            "class_path": _class_path(entry.get("class_module"), entry.get("class")),
-            "doc": entry.get("doc"),
-            "params": {**entry.get("config", {}), **entry.get("kwargs", {})},
-        }
-        for entry in bench._usage.get("plots", [])
-    ]
+    results = []
+    for entry in bench._invoked:
+        if entry["kind"] != "plot":
+            continue
+        name = entry["name"]
+        # Look up the instance from bench._plotters for auto-serialization
+        instance = bench._plotters.get(name)
+        # Also check _analyses (some analyses have .plot())
+        if instance is None:
+            instance = bench._analyses.get(name)
+        if instance is not None:
+            cls = instance.__class__
+            module = cls.__module__
+            class_name = cls.__name__
+            doc = (cls.__doc__ or "").strip() or None
+            config = _serialize_component(instance)
+        else:
+            module = None
+            class_name = None
+            doc = None
+            config = {}
+        depends_on = list(getattr(instance.__class__, "_depends_on", ())) if instance else []
+        kwargs = entry.get("kwargs", {})
+        params = {**config, **kwargs}
+        results.append(
+            {
+                "name": name,
+                "class": class_name,
+                "class_module": module,
+                "class_path": _class_path(module, class_name),
+                "doc": doc,
+                "params": params,
+                "kwargs": kwargs,
+                "depends_on": depends_on,
+            }
+        )
+    return results
 
 
 def build_provenance_payload(bench: "Bench") -> Dict[str, Any]:
@@ -253,7 +339,7 @@ def build_provenance_payload(bench: "Bench") -> Dict[str, Any]:
         "features": features,
         "analyses": analyses,
         "plotters": plotters,
-        "usage": bench._usage,
+        "invoked": bench._invoked,
     }
     return {
         "created_at": created_at,
@@ -312,7 +398,8 @@ def write_provenance_summary(
         lines.append(bench._provenance_notes)
 
     plot_paths = _iter_plot_images(bench._saved_outputs.get("figures", []))
-    usage_plots = bench._usage.get("plots", [])
+    # Use the plotters list (already collected from _invoked) for plot pairing
+    usage_plots = plotters
     feature_plot_map = _feature_plot_map(bench._saved_outputs.get("feature_plots", []))
     feature_plot_paths = {entry["path"] for entry in feature_plot_map.values()}
 
@@ -377,6 +464,10 @@ def write_provenance_summary(
                     lines.append("")
                 if analysis.get("doc"):
                     lines.append(f"\t\tDoc: {analysis.get('doc')}")
+                    lines.append("")
+                deps = analysis.get("depends_on", [])
+                if deps:
+                    lines.append(f"\t\tDepends on: {', '.join(deps)}")
                     lines.append("")
                 lines.append(f"\t\tgit: {bench._get_git_hash()}")
                 lines.append("")

@@ -53,24 +53,24 @@ def longitudinal_summary(
 @dataclass(frozen=True)
 class LongitudinalAnalysis(Analysis):
     name: str = "longitudinal_summary"
+    y: Optional[str] = None
+    ycols: Optional[tuple[str, ...]] = None
+    x: str = "session_n"
 
     def run(
         self,
         wide: pd.DataFrame,
-        y: Optional[str] = None,
-        ycols: Optional[Iterable[str]] = None,
-        x: str = "session_n",
     ) -> AnalysisResult:
-        out, stats = longitudinal_summary(wide, y=y, ycols=ycols, x=x)
-        meta = {"x": x, "y": y, "ycols": list(ycols) if ycols else None}
+        out, stats = longitudinal_summary(wide, y=self.y, ycols=self.ycols, x=self.x)
+        meta = {"x": self.x, "y": self.y, "ycols": list(self.ycols) if self.ycols else None}
         return AnalysisResult(name=self.name, data=out, table=stats, meta=meta)
 
-    def plot(self, result: AnalysisResult, **kwargs):
-        x = kwargs.pop("x", result.meta.get("x", "session_n"))
-        y = kwargs.pop("y", result.meta.get("y"))
-        title = kwargs.pop("title", f"{y} across sessions")
-        color = kwargs.pop("color", "#1f77b4")
-        y_label = kwargs.pop("y_label", y)
+    def plot(self, result: AnalysisResult):
+        x = result.meta.get("x", "session_n")
+        y = result.meta.get("y")
+        title = f"{y} across sessions"
+        color = "#1f77b4"
+        y_label = y
         from databench.plotting.core import plot_mean_sem
 
-        return plot_mean_sem(result.table, x=x, y_label=y_label, title=title, color=color, **kwargs)
+        return plot_mean_sem(result.table, x=x, y_label=y_label, title=title, color=color)

@@ -31,7 +31,7 @@ project_root = Path(__file__).resolve().parents[1]
 output_root = project_root / "outputs"
 
 bench = Bench()
-bench.setup(pickle_path, output_root=output_root, analyst="Jacob Gronemeyer", lab="Sipe Lab", run_name="260215", tag="eta-prepost-condition_vis-primary-secondary").load()
+bench.setup(pickle_path, output_root=output_root, analyst="Jacob Gronemeyer", lab="Sipe Lab", run_name="260215", tag="eta-prepost-condition_vis-primary-secondary")
 
 bouts_feature = bench.get_feature("locomotion_bouts_n")
 
@@ -44,13 +44,6 @@ ses_to_cond = {
     "ses-03": "ethanol_low",
     "ses-04": "ethanol_high",
 }
-
-(bench
-    .build_long(sources=[
-        ("mesomap", roi_cols),
-        ("treadmill", ["speed_mm"]),
-    ], tol=0.25, time_column="time_elapsed_s", reference_source="mesomap")
-    .label_conditions(ses_to_cond))
 
 analysis = EtaPrePostDiffAnalysis(
     roi_cols=tuple(roi_cols),
@@ -68,14 +61,19 @@ plotter = EtaPrePostDiffBoxplot(
     condition_col=analysis.condition_col,
 )
 
-(bench
-    .analyze(analysis)
-    .plot(plotter, save="eta_prepost_diff_boxplot.png")
-    .save_tables(prefix="eta_prepost_diff"))
+with bench.run("eta-prepost-condition") as run:
+    (run
+        .build_long(sources=[
+            ("mesomap", roi_cols),
+            ("treadmill", ["speed_mm"]),
+        ], tol=0.25, time_column="time_elapsed_s", reference_source="mesomap")
+        .label_conditions(ses_to_cond))
 
-bench.save_run_summary(
-    notes="ETA pre/post difference comparison across conditions for onset/offset locomotion events.",
-)
-bench.save_provenance()
+    result = run.analyze(analysis, df=run.long)
+    run.plot(plotter, result, save="eta_prepost_diff_boxplot.png")
+    run.save_tables(result, prefix="eta_prepost_diff")
+    run.save_run_summary(
+        notes="ETA pre/post difference comparison across conditions for onset/offset locomotion events.",
+    )
 
 # %%

@@ -1,4 +1,4 @@
-"""Explicit decorators for registering features, analyses, and plotters.
+"""Decorators for registering features, analyses, and plotters.
 
 Usage::
 
@@ -6,102 +6,80 @@ Usage::
     @dataclass(frozen=True)
     class MyAnalysis(Analysis):
         name: str = "my_analysis"
-        ...
 
-Registered components can be retrieved by name::
+    @register_analysis(depends_on=["oscillation_detector"])
+    @dataclass(frozen=True)
+    class MySecondOrder(Analysis):
+        name: str = "second_order"
 
-    get_analysis("my_analysis")   # returns the *class*
+Dependency metadata is stored on the class as ``_depends_on``
+and ``_component_kind`` and is used at provenance time.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Type
+from typing import Callable, List, Optional, Sequence, Type, Union
 
 
+# Global class lists — consumed by Bench.__init__ to seed instance registries
 FEATURE_CLASSES: List[Type] = []
 ANALYSIS_CLASSES: List[Type] = []
 PLOTTER_CLASSES: List[Type] = []
 
-# Name → class lookup tables (populated alongside the lists above)
-_FEATURE_BY_NAME: Dict[str, Type] = {}
-_ANALYSIS_BY_NAME: Dict[str, Type] = {}
-_PLOTTER_BY_NAME: Dict[str, Type] = {}
 
-
-def _register(cls: Type, registry: List[Type], by_name: Dict[str, Type]) -> Type:
-    """Shared logic: deduplicate by ``name`` field, index by name."""
+def _register(
+    cls: Type,
+    registry: List[Type],
+    depends_on: Sequence[str] = (),
+    kind: str = "unknown",
+) -> Type:
+    """Core registration: deduplicate by ``name``, attach dependency metadata."""
     name: Optional[str] = getattr(cls, "name", None)
-    # Deduplicate: if a class with the same name already registered, replace it
-    if name is not None and name in by_name:
-        old = by_name[name]
-        if old in registry:
-            registry.remove(old)
+    if name is not None:
+        registry[:] = [c for c in registry if getattr(c, "name", None) != name]
     if cls not in registry:
         registry.append(cls)
-    if name is not None:
-        by_name[name] = cls
+    cls._depends_on = tuple(depends_on)
+    cls._component_kind = kind
     return cls
 
 
-def register_feature(cls: Type) -> Type:
-    return _register(cls, FEATURE_CLASSES, _FEATURE_BY_NAME)
+def register_feature(
+    cls: Optional[Type] = None,
+    *,
+    depends_on: Sequence[str] = (),
+) -> Union[Type, Callable[[Type], Type]]:
+    """``@register_feature`` or ``@register_feature(depends_on=[...])``."""
+    if cls is not None:
+        return _register(cls, FEATURE_CLASSES, kind="feature")
+
+    def wrapper(inner: Type) -> Type:
+        return _register(inner, FEATURE_CLASSES, depends_on=depends_on, kind="feature")
+    return wrapper
 
 
-def register_analysis(cls: Type) -> Type:
-    return _register(cls, ANALYSIS_CLASSES, _ANALYSIS_BY_NAME)
+def register_analysis(
+    cls: Optional[Type] = None,
+    *,
+    depends_on: Sequence[str] = (),
+) -> Union[Type, Callable[[Type], Type]]:
+    """``@register_analysis`` or ``@register_analysis(depends_on=[...])``."""
+    if cls is not None:
+        return _register(cls, ANALYSIS_CLASSES, kind="analysis")
+
+    def wrapper(inner: Type) -> Type:
+        return _register(inner, ANALYSIS_CLASSES, depends_on=depends_on, kind="analysis")
+    return wrapper
 
 
-def register_plotter(cls: Type) -> Type:
-    return _register(cls, PLOTTER_CLASSES, _PLOTTER_BY_NAME)
+def register_plotter(
+    cls: Optional[Type] = None,
+    *,
+    depends_on: Sequence[str] = (),
+) -> Union[Type, Callable[[Type], Type]]:
+    """``@register_plotter`` or ``@register_plotter(depends_on=[...])``."""
+    if cls is not None:
+        return _register(cls, PLOTTER_CLASSES, kind="plotter")
 
-
-# --- lookup helpers --------------------------------------------------------
-
-def get_feature(name: str) -> Type:
-    """Return the registered feature *class* by its ``name`` field."""
-    try:
-        return _FEATURE_BY_NAME[name]
-    except KeyError:
-        raise KeyError(f"No feature registered with name={name!r}. Available: {sorted(_FEATURE_BY_NAME)}")
-
-
-def get_analysis(name: str) -> Type:
-    """Return the registered analysis *class* by its ``name`` field."""
-    try:
-        return _ANALYSIS_BY_NAME[name]
-    except KeyError:
-        raise KeyError(f"No analysis registered with name={name!r}. Available: {sorted(_ANALYSIS_BY_NAME)}")
-
-
-def get_plotter(name: str) -> Type:
-    """Return the registered plotter *class* by its ``name`` field."""
-    try:
-        return _PLOTTER_BY_NAME[name]
-    except KeyError:
-        raise KeyError(f"No plotter registered with name={name!r}. Available: {sorted(_PLOTTER_BY_NAME)}")
-
-
-# --- unregistration --------------------------------------------------------
-
-def unregister_feature(cls_or_name: Any) -> None:
-    _unregister(cls_or_name, FEATURE_CLASSES, _FEATURE_BY_NAME)
-
-
-def unregister_analysis(cls_or_name: Any) -> None:
-    _unregister(cls_or_name, ANALYSIS_CLASSES, _ANALYSIS_BY_NAME)
-
-
-def unregister_plotter(cls_or_name: Any) -> None:
-    _unregister(cls_or_name, PLOTTER_CLASSES, _PLOTTER_BY_NAME)
-
-
-def _unregister(cls_or_name: Any, registry: List[Type], by_name: Dict[str, Type]) -> None:
-    if isinstance(cls_or_name, str):
-        cls = by_name.pop(cls_or_name, None)
-        if cls is not None and cls in registry:
-            registry.remove(cls)
-    else:
-        if cls_or_name in registry:
-            registry.remove(cls_or_name)
-        name = getattr(cls_or_name, "name", None)
-        if name is not None:
-            by_name.pop(name, None)
+    def wrapper(inner: Type) -> Type:
+        return _register(inner, PLOTTER_CLASSES, depends_on=depends_on, kind="plotter")
+    return wrapper

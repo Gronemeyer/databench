@@ -294,6 +294,143 @@ class EtaByConditionAnalysis(Analysis):
 
 
 # ---------------------------------------------------------------------------
+# Analysis: general-purpose event-triggered average
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class EventTriggeredAverageAnalysis(Analysis):
+    """Event-triggered average from an externally-supplied events table.
+
+    Unlike :class:`EtaByConditionAnalysis`, which extracts locomotion bouts
+    internally, this analysis accepts *any* events DataFrame with at least
+    ``Subject``, ``Session``, ``Task``, ``onset_t``, ``offset_t`` columns.
+
+    Produces three DataFrames:
+
+    * ``eta_events``  — per-event ETA traces
+    * ``eta_session`` — mean per (Subject, Session, EventType, ROI, rel_time)
+    * ``eta_group``   — group mean ± SEM across sessions
+
+    Usage::
+
+        analysis = EventTriggeredAverageAnalysis(
+            roi_cols=("L_VISp", "pupil_diameter_mm"),
+            task="task-widefield",
+            window=(-2.0, 3.0),
+            dt=0.02,
+            baseline=(-2.0, -0.5),
+            events=osc_events,
+        )
+        bench.analyze(analysis)   # auto-supplies bench.long
+    """
+
+    name: str = "event_triggered_average"
+    roi_cols: tuple[str, ...] = ()
+    task: str = ""
+    event_types: tuple[str, ...] = ("onset", "offset")
+    window: tuple[float, float] = (-2.0, 3.0)
+    dt: float = 0.02
+    baseline: tuple[float, float] = (-2.0, -0.5)
+    events: Optional[pd.DataFrame] = None
+
+    def run(
+        self,
+        long: pd.DataFrame,
+    ) -> AnalysisResult:
+        if self.events is None or self.events.empty:
+            raise ValueError(
+                "EventTriggeredAverageAnalysis requires an events DataFrame. "
+                "Pass it at construction: EventTriggeredAverageAnalysis(events=df)."
+            )
+        events = self.events
+        roi_cols = list(self.roi_cols)
+        task = self.task
+
+        # Build per-session event map from the supplied events table
+        event_map: dict[tuple, dict[str, np.ndarray]] = {}
+        for (subj, ses, task_name), grp in events.groupby(
+            ["Subject", "Session", "Task"], sort=False,
+        ):
+            event_map[(subj, ses, task_name)] = {
+                "onset": grp["onset_t"].to_numpy(),
+                "offset": grp["offset_t"].to_numpy(),
+            }
+
+        rows: list[pd.DataFrame] = []
+        for (subj, ses, task_name), g in long.groupby(
+            ["Subject", "Session", "Task"], sort=False,
+        ):
+            if task and task_name != task:
+                continue
+            transitions = event_map.get((subj, ses, task_name))
+            if transitions is None:
+                continue
+            for event_type in self.event_types:
+                event_times = transitions.get(event_type, np.array([]))
+                if event_times.size == 0:
+                    continue
+                eta = eta_baselined(
+                    g,
+                    event_times,
+                    roi_cols,
+                    window=self.window,
+                    dt=self.dt,
+                    baseline=self.baseline,
+                )
+                if eta.empty:
+                    continue
+                eta.insert(0, "EventType", event_type)
+                eta.insert(0, "Task", task_name)
+                eta.insert(0, "Session", ses)
+                eta.insert(0, "Subject", subj)
+                rows.append(eta)
+
+        eta_events = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+
+        if eta_events.empty:
+            return AnalysisResult(
+                name=self.name,
+                data={
+                    "eta_events": eta_events,
+                    "eta_session": pd.DataFrame(),
+                    "eta_group": pd.DataFrame(),
+                },
+                meta={"task": task, "window": self.window, "dt": self.dt, "baseline": self.baseline},
+            )
+
+        eta_session = (
+            eta_events.groupby(
+                ["Subject", "Session", "Task", "EventType", "ROI", "rel_time"],
+                as_index=False,
+            )
+            .agg(value=("value", "mean"))
+        )
+
+        eta_group = (
+            eta_session.groupby(
+                ["Task", "EventType", "ROI", "rel_time"],
+                as_index=False,
+            )
+            .agg(
+                mean=("value", "mean"),
+                sem=("value", _safe_sem),
+                n_sessions=("Session", "nunique"),
+                n_subjects=("Subject", "nunique"),
+            )
+        )
+
+        return AnalysisResult(
+            name=self.name,
+            data={
+                "eta_events": eta_events,
+                "eta_session": eta_session,
+                "eta_group": eta_group,
+            },
+            meta={"task": task, "window": self.window, "dt": self.dt, "baseline": self.baseline},
+        )
+
+
+# ---------------------------------------------------------------------------
 # Analysis: longitudinal day-by-day ETA
 # ---------------------------------------------------------------------------
 
