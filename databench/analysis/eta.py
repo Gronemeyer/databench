@@ -1,32 +1,39 @@
-"""Shared event-triggered average (ETA) analysis utilities.
+"""Event-triggered average analysis — public API.
 
-Provides the core ``eta_baselined`` function and three Analysis classes:
+Usage::
 
-* :class:`EtaByConditionAnalysis` — condition-based ETA with subject → group aggregation.
-* :class:`EtaLongitudinalAnalysis` — longitudinal day-by-day ETA with pooled and metric aggregation.
-* :class:`EtaPrePostDiffAnalysis` — scalar pre/post-event difference analysis.
+    from databench import EtaAnalysis
+    from databench._signal.events import locomotion_events
+
+    events = locomotion_events(group, min_speed_cms=0.5)
+    eta = EtaAnalysis(
+        roi_columns=("L_VISp", "R_VISp", "L_MOs"),
+        window=(-2.0, 5.0),
+        baseline=(-2.0, -1.0),
+    )
+    result = eta.run(group, events)
+    result.plot(event="onset").save("eta_onset.svg")
+    result.save_tables(prefix="eta")
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Optional, Sequence
+import json
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Mapping, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 
-from databench.analysis.base import Analysis, AnalysisResult
-from databench.features.treadmill import (
-    LocomotionBoutEventsExtractor,
-    extract_epoch_interpolated,
-)
+from databench._signal.eta_core import eta_baselined
+from databench.config import OutputContext
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# ── Helpers ────────────────────────────────────────────────────────────────
 
 def _safe_sem(x: pd.Series) -> float:
-    """Standard error of the mean, returning 0.0 for n <= 1."""
+    """Standard error of the mean, returning 0.0 for n ≤ 1."""
     vals = x.dropna().to_numpy(dtype=float)
     n = vals.size
     if n <= 1:
@@ -34,773 +41,408 @@ def _safe_sem(x: pd.Series) -> float:
     return float(np.std(vals, ddof=1) / np.sqrt(n))
 
 
-def _session_to_day(session: str) -> int:
-    """Parse session string to an integer day number (e.g. ``'ses-03'`` → 3)."""
-    digits = "".join(ch for ch in str(session) if ch.isdigit())
-    if not digits:
-        raise ValueError(f"Could not parse session number from {session!r}")
-    return int(digits)
+# ── EtaAnalysis ────────────────────────────────────────────────────────────
 
+@dataclass(frozen=True)
+class EtaAnalysis:
+    """Configure and run event-triggered averages across a SessionGroup.
 
-# ---------------------------------------------------------------------------
-# Core ETA function
-# ---------------------------------------------------------------------------
+    This class is **event-source agnostic** — it does not detect events
+    itself.  Instead, pass a pre-computed events table (a
+    :class:`~pandas.DataFrame` with columns ``Subject``, ``Session``,
+    ``Task``, ``EventType``, ``event_time``) to :meth:`run`.
 
-def eta_baselined(
-    df: pd.DataFrame,
-    event_times: np.ndarray,
-    roi_columns: Sequence[str],
-    *,
-    time_column: str = "time_elapsed_s",
-    window: tuple[float, float] = (-2.0, 2.0),
-    dt: float = 0.05,
-    baseline: tuple[float, float] = (-2.0, -1.0),
-    bout_intervals: Optional[np.ndarray] = None,
-    exclude_events_in_bouts: bool = True,
-    baseline_exclude_bouts: bool = False,
-    min_clean_baseline_points: int = 3,
-    fallback_to_full_baseline: bool = True,
-) -> pd.DataFrame:
-    """Compute baseline-subtracted ETA traces for each event × ROI.
+    Use helper functions like
+    :func:`~databench._signal.events.locomotion_events` to produce events
+    from specific detectors.
 
     Parameters
     ----------
-    df : DataFrame
-        Long-format table containing at least *time_column* and all
-        *roi_columns*.
-    event_times : array
-        1-D array of event timestamps.
-    roi_columns : sequence of str
-        Column names to extract per-event epochs from.
-    time_column : str
-        Name of the time column in *df*.
+    roi_columns : tuple of str
+        Signal names to extract peri-event epochs from.
     window : (float, float)
-        Start and end of the peri-event window in seconds.
+        Peri-event window in seconds.
     dt : float
-        Sampling step for the interpolation grid.
+        Interpolation step size.
     baseline : (float, float)
-        Start and end of the baseline window within *window*, used for
-        subtraction.
-    bout_intervals : ndarray, optional
-        ``(N, 2)`` array of ``[onset, offset]`` times.
-    exclude_events_in_bouts : bool
-        When *True* (default) and *bout_intervals* is given, events whose
-        timestamp falls inside any bout interval are **dropped** from output.
-    baseline_exclude_bouts : bool
-        When *True* and *bout_intervals* is given, baseline timepoints that
-        overlap with any bout interval are **masked** before computing the
-        baseline mean.  Useful for longitudinal designs where bouts should
-        not contaminate the baseline window.
-    min_clean_baseline_points : int
-        Minimum number of finite, non-bout baseline points required when
-        *baseline_exclude_bouts* is *True*.  If fewer are available, the
-        function falls back to the full baseline (if *fallback_to_full_baseline*
-        is *True*) or uses whatever is available.
-    fallback_to_full_baseline : bool
-        When *True* and the cleaned baseline has fewer than
-        *min_clean_baseline_points*, use the full (unmasked) baseline window.
-
-    Returns
-    -------
-    DataFrame
-        Columns: ``event_id``, ``rel_time``, ``ROI``, ``value``.
-    """
-    df = df.sort_values(time_column)
-    time_values = df[time_column].to_numpy()
-
-    # Optionally filter events that fall inside bout intervals
-    if exclude_events_in_bouts and bout_intervals is not None and len(bout_intervals) > 0:
-        keep = np.ones(len(event_times), dtype=bool)
-        for i, et in enumerate(event_times):
-            for onset, offset in bout_intervals:
-                if onset <= et <= offset:
-                    keep[i] = False
-                    break
-        event_times = event_times[keep]
-
-    output_frames: list[pd.DataFrame] = []
-    for event_id, event_time in enumerate(event_times):
-        for roi in roi_columns:
-            roi_values = df[roi].to_numpy()
-            rel_t, roi_epoch = extract_epoch_interpolated(
-                time_values, roi_values, event_time, window=window, dt=dt,
-            )
-            if rel_t is None:
-                continue
-
-            baseline_mask_full = (rel_t >= baseline[0]) & (rel_t <= baseline[1])
-            baseline_mask = baseline_mask_full.copy()
-
-            # Mask baseline timepoints overlapping bouts
-            if baseline_exclude_bouts and bout_intervals is not None and len(bout_intervals) > 0:
-                abs_t = event_time + rel_t
-                in_bout = np.zeros(abs_t.shape, dtype=bool)
-                for onset_t, offset_t in bout_intervals:
-                    in_bout |= (abs_t >= float(onset_t)) & (abs_t <= float(offset_t))
-                baseline_mask = baseline_mask & ~in_bout
-
-                clean_count = int(np.sum(baseline_mask & np.isfinite(roi_epoch)))
-                if clean_count < min_clean_baseline_points and fallback_to_full_baseline:
-                    baseline_mask = baseline_mask_full
-
-            baseline_value = (
-                np.nanmean(roi_epoch[baseline_mask])
-                if baseline_mask.any()
-                else np.nan
-            )
-            roi_epoch = roi_epoch - baseline_value
-
-            output_frames.append(
-                pd.DataFrame(
-                    {
-                        "event_id": event_id,
-                        "rel_time": rel_t,
-                        "ROI": roi,
-                        "value": roi_epoch,
-                    }
-                )
-            )
-
-    if not output_frames:
-        return pd.DataFrame(columns=["event_id", "rel_time", "ROI", "value"])
-    return pd.concat(output_frames, ignore_index=True)
-
-
-# ---------------------------------------------------------------------------
-# Analysis: condition-based ETA
-# ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class EtaByConditionAnalysis(Analysis):
-    """Event-triggered average grouped by experimental condition.
-
-    Produces four DataFrames:
-
-    * ``events`` — extracted locomotion bout table
-    * ``eta_events`` — per-event ETA traces
-    * ``eta_subj`` — mean per (Subject, Condition, EventType, ROI, rel_time)
-    * ``eta_group`` — group mean ± SEM over subjects
+        Baseline subtraction window.
+    source : str
+        Data source for ROI columns.
+    reference_source : str
+        Reference source for time alignment.
+    time_column : str
+        Time column name used for alignment and epoch extraction.
+    alignment_tolerance_s : float
+        Tolerance for ``merge_asof`` alignment.
     """
 
-    name: str = "eta_by_condition"
-    roi_cols: tuple[str, ...] = ()
-    task: str = "task-spont"
-    event_types: tuple[str, ...] = ("onset", "offset")
-    window: tuple[float, float] = (-1.0, 3.0)
+    roi_columns: Tuple[str, ...] = ()
+    window: Tuple[float, float] = (-2.0, 5.0)
     dt: float = 0.05
-    baseline: tuple[float, float] = (-5.0, 0.0)
-    bout_events_extractor: Any = LocomotionBoutEventsExtractor()
+    baseline: Tuple[float, float] = (-2.0, -1.0)
 
-    def run(self, long: pd.DataFrame) -> AnalysisResult:
-        roi_cols = list(self.roi_cols)
-        required = ["Subject", "Session", "Task", "Condition", "time_elapsed_s", "speed_mm", *roi_cols]
-        missing = [c for c in required if c not in long.columns]
-        if missing:
-            raise ValueError(f"Missing required columns in long table: {', '.join(missing)}")
-
-        events = self.bout_events_extractor(long)
-        if not isinstance(events, pd.DataFrame):
-            raise TypeError("bout_events_extractor must return a pandas DataFrame.")
-        required_event_cols = {"Subject", "Session", "Task", "onset_t", "offset_t"}
-        missing_event_cols = sorted(required_event_cols.difference(events.columns))
-        if missing_event_cols:
-            raise ValueError(f"Extracted event table missing columns: {', '.join(missing_event_cols)}")
-        events = events.loc[events["Task"] == self.task].copy()
-
-        event_map = {
-            (subj, ses, task_name): {
-                "onset": grp["onset_t"].to_numpy(),
-                "offset": grp["offset_t"].to_numpy(),
-            }
-            for (subj, ses, task_name), grp in events.groupby(
-                ["Subject", "Session", "Task"], sort=False
-            )
-        }
-
-        rows = []
-        for (subj, ses, task_name), g in long.groupby(
-            ["Subject", "Session", "Task"], sort=False
-        ):
-            if task_name != self.task:
-                continue
-            transitions = event_map.get(
-                (subj, ses, task_name),
-                {"onset": np.array([]), "offset": np.array([])},
-            )
-            for event_type in self.event_types:
-                event_times = transitions.get(event_type, np.array([]))
-                if event_times.size == 0:
-                    continue
-                eta = eta_baselined(
-                    g,
-                    event_times,
-                    roi_cols,
-                    window=self.window,
-                    dt=self.dt,
-                    baseline=self.baseline,
-                )
-                if eta.empty:
-                    continue
-                eta.insert(0, "EventType", event_type)
-                eta.insert(0, "Task", task_name)
-                eta.insert(0, "Session", ses)
-                eta.insert(0, "Subject", subj)
-                eta["Condition"] = g["Condition"].iloc[0]
-                rows.append(eta)
-
-        eta_events = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
-
-        if eta_events.empty:
-            return AnalysisResult(
-                name=self.name,
-                data={
-                    "events": events,
-                    "eta_events": eta_events,
-                    "eta_subj": pd.DataFrame(),
-                    "eta_group": pd.DataFrame(),
-                },
-                meta={"task": self.task, "baseline": self.baseline, "window": self.window, "dt": self.dt},
-            )
-
-        eta_subj = (
-            eta_events.groupby(
-                ["Subject", "Condition", "Task", "EventType", "ROI", "rel_time"],
-                as_index=False,
-            )
-            .agg(value=("value", "mean"))
-        )
-
-        eta_group = (
-            eta_subj.groupby(
-                ["Condition", "Task", "EventType", "ROI", "rel_time"],
-                as_index=False,
-            )
-            .agg(
-                mean=("value", "mean"),
-                sem=("value", lambda x: x.std(ddof=1) / np.sqrt(x.notna().sum())),
-            )
-        )
-
-        return AnalysisResult(
-            name=self.name,
-            data={
-                "events": events,
-                "eta_events": eta_events,
-                "eta_subj": eta_subj,
-                "eta_group": eta_group,
-            },
-            meta={"task": self.task, "baseline": self.baseline, "window": self.window, "dt": self.dt},
-        )
-
-
-# ---------------------------------------------------------------------------
-# Analysis: general-purpose event-triggered average
-# ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class EventTriggeredAverageAnalysis(Analysis):
-    """Event-triggered average from an externally-supplied events table.
-
-    Unlike :class:`EtaByConditionAnalysis`, which extracts locomotion bouts
-    internally, this analysis accepts *any* events DataFrame with at least
-    ``Subject``, ``Session``, ``Task``, ``onset_t``, ``offset_t`` columns.
-
-    Produces three DataFrames:
-
-    * ``eta_events``  — per-event ETA traces
-    * ``eta_session`` — mean per (Subject, Session, EventType, ROI, rel_time)
-    * ``eta_group``   — group mean ± SEM across sessions
-
-    Usage::
-
-        analysis = EventTriggeredAverageAnalysis(
-            roi_cols=("L_VISp", "pupil_diameter_mm"),
-            task="task-widefield",
-            window=(-2.0, 3.0),
-            dt=0.02,
-            baseline=(-2.0, -0.5),
-            events=osc_events,
-        )
-        bench.analyze(analysis)   # auto-supplies bench.long
-    """
-
-    name: str = "event_triggered_average"
-    roi_cols: tuple[str, ...] = ()
-    task: str = ""
-    event_types: tuple[str, ...] = ("onset", "offset")
-    window: tuple[float, float] = (-2.0, 3.0)
-    dt: float = 0.02
-    baseline: tuple[float, float] = (-2.0, -0.5)
-    events: Optional[pd.DataFrame] = None
+    # Data access details
+    source: str = "mesomap"
+    reference_source: str = "mesomap"
+    time_column: str = "time_elapsed_s"
+    alignment_tolerance_s: float = 0.05
 
     def run(
         self,
-        long: pd.DataFrame,
-    ) -> AnalysisResult:
-        if self.events is None or self.events.empty:
+        sessions: "SessionGroup",
+        events: "pd.DataFrame",
+        *,
+        aligned: list["AlignedData"] | None = None,
+        condition_map: Mapping[str, str] | None = None,
+    ) -> "EtaResult":
+        """Run the ETA analysis across all sessions.
+
+        Parameters
+        ----------
+        sessions : SessionGroup
+            Sessions to analyze.
+        events : pd.DataFrame
+            Events table with at least ``Subject``, ``Session``, ``Task``,
+            ``EventType``, ``event_time``.  An optional ``Condition`` column
+            overrides *condition_map*.  Produce this with
+            :func:`~databench._signal.events.locomotion_events`,
+            :func:`~databench._signal.events.make_events`, or any custom
+            function.
+        aligned : list of AlignedData, optional
+            Pre-computed aligned data for each session.  When ``None``,
+            alignment is computed automatically using ``session.align()``.
+        condition_map : dict, optional
+            Maps task name (or ``"subject,session,task"`` key) to condition
+            label.  Only used for sessions whose events lack a ``Condition``
+            column.
+
+        Returns
+        -------
+        EtaResult
+        """
+        from databench.session import AlignedData
+
+        if not self.roi_columns:
+            raise ValueError("roi_columns cannot be empty")
+
+        # Validate events schema
+        required = {"Subject", "Session", "Task", "EventType", "event_time"}
+        missing = required - set(events.columns)
+        if missing:
             raise ValueError(
-                "EventTriggeredAverageAnalysis requires an events DataFrame. "
-                "Pass it at construction: EventTriggeredAverageAnalysis(events=df)."
-            )
-        events = self.events
-        roi_cols = list(self.roi_cols)
-        task = self.task
-
-        # Build per-session event map from the supplied events table
-        event_map: dict[tuple, dict[str, np.ndarray]] = {}
-        for (subj, ses, task_name), grp in events.groupby(
-            ["Subject", "Session", "Task"], sort=False,
-        ):
-            event_map[(subj, ses, task_name)] = {
-                "onset": grp["onset_t"].to_numpy(),
-                "offset": grp["offset_t"].to_numpy(),
-            }
-
-        rows: list[pd.DataFrame] = []
-        for (subj, ses, task_name), g in long.groupby(
-            ["Subject", "Session", "Task"], sort=False,
-        ):
-            if task and task_name != task:
-                continue
-            transitions = event_map.get((subj, ses, task_name))
-            if transitions is None:
-                continue
-            for event_type in self.event_types:
-                event_times = transitions.get(event_type, np.array([]))
-                if event_times.size == 0:
-                    continue
-                eta = eta_baselined(
-                    g,
-                    event_times,
-                    roi_cols,
-                    window=self.window,
-                    dt=self.dt,
-                    baseline=self.baseline,
-                )
-                if eta.empty:
-                    continue
-                eta.insert(0, "EventType", event_type)
-                eta.insert(0, "Task", task_name)
-                eta.insert(0, "Session", ses)
-                eta.insert(0, "Subject", subj)
-                rows.append(eta)
-
-        eta_events = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
-
-        if eta_events.empty:
-            return AnalysisResult(
-                name=self.name,
-                data={
-                    "eta_events": eta_events,
-                    "eta_session": pd.DataFrame(),
-                    "eta_group": pd.DataFrame(),
-                },
-                meta={"task": task, "window": self.window, "dt": self.dt, "baseline": self.baseline},
+                f"Events table is missing required columns: {missing}. "
+                f"Expected: {sorted(required)}"
             )
 
-        eta_session = (
-            eta_events.groupby(
-                ["Subject", "Session", "Task", "EventType", "ROI", "rel_time"],
-                as_index=False,
+        has_condition = "Condition" in events.columns
+
+        all_events: list[pd.DataFrame] = []
+        all_eta: list[pd.DataFrame] = []
+
+        for i, sess in enumerate(sessions):
+            # Filter events for this session
+            sess_mask = (
+                (events["Subject"] == sess.subject)
+                & (events["Session"] == sess.session)
+                & (events["Task"] == sess.task)
             )
-            .agg(value=("value", "mean"))
-        )
-
-        eta_group = (
-            eta_session.groupby(
-                ["Task", "EventType", "ROI", "rel_time"],
-                as_index=False,
-            )
-            .agg(
-                mean=("value", "mean"),
-                sem=("value", _safe_sem),
-                n_sessions=("Session", "nunique"),
-                n_subjects=("Subject", "nunique"),
-            )
-        )
-
-        return AnalysisResult(
-            name=self.name,
-            data={
-                "eta_events": eta_events,
-                "eta_session": eta_session,
-                "eta_group": eta_group,
-            },
-            meta={"task": task, "window": self.window, "dt": self.dt, "baseline": self.baseline},
-        )
-
-
-# ---------------------------------------------------------------------------
-# Analysis: longitudinal day-by-day ETA
-# ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class EtaLongitudinalAnalysis(Analysis):
-    """Longitudinal ETA analysis across sessions (days).
-
-    Produces seven DataFrames:
-
-    * ``events`` — bout events
-    * ``eta_events`` — per-event traces
-    * ``eta_subj_day`` — per (Subject, Session, day_n, EventType, ROI, rel_time) mean
-    * ``eta_group`` — pooled across all days
-    * ``eta_longitudinal`` — per (day_n, EventType, ROI, rel_time) mean ± SEM
-    * ``eta_day_metric`` — subject-level scalar metric in *metric_window*
-    * ``eta_day_metric_group`` — group-averaged metric over days
-    """
-
-    name: str = "eta_widefield_longitudinal"
-    roi_cols: tuple[str, ...] = ()
-    task: str = "task-widefield"
-    event_types: tuple[str, ...] = ("onset", "offset")
-    window: tuple[float, float] = (-1.0, 3.0)
-    dt: float = 0.05
-    baseline: tuple[float, float] = (-5.0, 0.0)
-    baseline_exclude_bouts: bool = True
-    min_clean_baseline_points: int = 3
-    fallback_to_full_baseline: bool = True
-    metric_window: tuple[float, float] = (0.0, 1.0)
-    bout_events_extractor: Any = LocomotionBoutEventsExtractor()
-
-    def run(self, long: pd.DataFrame) -> AnalysisResult:
-        roi_cols = list(self.roi_cols)
-        required = ["Subject", "Session", "Task", "time_elapsed_s", "speed_mm", *roi_cols]
-        missing = [c for c in required if c not in long.columns]
-        if missing:
-            raise ValueError(f"Missing required columns in long table: {', '.join(missing)}")
-
-        d = long.loc[long["Task"] == self.task].copy()
-        if d.empty:
-            raise ValueError(f"No rows found for task={self.task!r}.")
-
-        d["day_n"] = d["Session"].map(_session_to_day)
-
-        events = self.bout_events_extractor(d)
-        if not isinstance(events, pd.DataFrame):
-            raise TypeError("bout_events_extractor must return a pandas DataFrame.")
-
-        required_event_cols = {"Subject", "Session", "Task", "onset_t", "offset_t"}
-        missing_event_cols = sorted(required_event_cols.difference(events.columns))
-        if missing_event_cols:
-            raise ValueError(f"Extracted event table missing columns: {', '.join(missing_event_cols)}")
-
-        events = events.loc[events["Task"] == self.task].copy()
-        if not events.empty:
-            events["day_n"] = events["Session"].map(_session_to_day)
-
-        event_map = {
-            (subj, ses, task_name): {
-                "onset": grp["onset_t"].to_numpy(),
-                "offset": grp["offset_t"].to_numpy(),
-                "intervals": grp[["onset_t", "offset_t"]].to_numpy(dtype=float),
-            }
-            for (subj, ses, task_name), grp in events.groupby(
-                ["Subject", "Session", "Task"], sort=False
-            )
-        }
-
-        rows = []
-        for (subj, ses, task_name), g in d.groupby(
-            ["Subject", "Session", "Task"], sort=False
-        ):
-            transitions = event_map.get(
-                (subj, ses, task_name),
-                {"onset": np.array([]), "offset": np.array([])},
-            )
-            day_n = _session_to_day(ses)
-            bout_intervals = transitions.get("intervals", np.empty((0, 2), dtype=float))
-
-            for event_type in self.event_types:
-                event_times = transitions.get(event_type, np.array([]))
-                if event_times.size == 0:
-                    continue
-
-                eta = eta_baselined(
-                    g,
-                    event_times,
-                    roi_cols,
-                    window=self.window,
-                    dt=self.dt,
-                    baseline=self.baseline,
-                    bout_intervals=bout_intervals,
-                    exclude_events_in_bouts=False,
-                    baseline_exclude_bouts=self.baseline_exclude_bouts,
-                    min_clean_baseline_points=self.min_clean_baseline_points,
-                    fallback_to_full_baseline=self.fallback_to_full_baseline,
-                )
-                if eta.empty:
-                    continue
-
-                eta.insert(0, "EventType", event_type)
-                eta.insert(0, "day_n", day_n)
-                eta.insert(0, "Task", task_name)
-                eta.insert(0, "Session", ses)
-                eta.insert(0, "Subject", subj)
-                rows.append(eta)
-
-        eta_events = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
-
-        empty_result = AnalysisResult(
-            name=self.name,
-            data={
-                "events": events,
-                "eta_events": eta_events,
-                "eta_subj_day": pd.DataFrame(),
-                "eta_group": pd.DataFrame(),
-                "eta_longitudinal": pd.DataFrame(),
-                "eta_day_metric": pd.DataFrame(),
-                "eta_day_metric_group": pd.DataFrame(),
-            },
-            meta={
-                "task": self.task,
-                "baseline": self.baseline,
-                "baseline_exclude_bouts": self.baseline_exclude_bouts,
-                "min_clean_baseline_points": self.min_clean_baseline_points,
-                "fallback_to_full_baseline": self.fallback_to_full_baseline,
-                "window": self.window,
-                "metric_window": self.metric_window,
-                "dt": self.dt,
-            },
-        )
-        if eta_events.empty:
-            return empty_result
-
-        eta_subj_day = (
-            eta_events.groupby(
-                ["Subject", "Session", "day_n", "Task", "EventType", "ROI", "rel_time"],
-                as_index=False,
-            )
-            .agg(value=("value", "mean"))
-        )
-
-        eta_group = (
-            eta_subj_day.groupby(
-                ["Task", "EventType", "ROI", "rel_time"], as_index=False
-            )
-            .agg(mean=("value", "mean"), sem=("value", _safe_sem), n_subjects=("Subject", "nunique"))
-        )
-
-        eta_longitudinal = (
-            eta_subj_day.groupby(
-                ["day_n", "Task", "EventType", "ROI", "rel_time"], as_index=False
-            )
-            .agg(mean=("value", "mean"), sem=("value", _safe_sem), n_subjects=("Subject", "nunique"))
-            .sort_values(["day_n", "EventType", "ROI", "rel_time"])
-        )
-
-        metric_mask = (
-            (eta_subj_day["rel_time"] >= self.metric_window[0])
-            & (eta_subj_day["rel_time"] <= self.metric_window[1])
-        )
-        eta_day_metric = (
-            eta_subj_day.loc[metric_mask]
-            .groupby(
-                ["Subject", "Session", "day_n", "Task", "EventType", "ROI"],
-                as_index=False,
-            )
-            .agg(metric_value=("value", "mean"))
-        )
-        eta_day_metric_group = (
-            eta_day_metric.groupby(
-                ["day_n", "Task", "EventType", "ROI"], as_index=False
-            )
-            .agg(
-                mean=("metric_value", "mean"),
-                sem=("metric_value", _safe_sem),
-                n_subjects=("Subject", "nunique"),
-            )
-            .sort_values(["day_n", "EventType", "ROI"])
-        )
-
-        return AnalysisResult(
-            name=self.name,
-            data={
-                "events": events,
-                "eta_events": eta_events,
-                "eta_subj_day": eta_subj_day,
-                "eta_group": eta_group,
-                "eta_longitudinal": eta_longitudinal,
-                "eta_day_metric": eta_day_metric,
-                "eta_day_metric_group": eta_day_metric_group,
-            },
-            meta={
-                "task": self.task,
-                "baseline": self.baseline,
-                "baseline_exclude_bouts": self.baseline_exclude_bouts,
-                "min_clean_baseline_points": self.min_clean_baseline_points,
-                "fallback_to_full_baseline": self.fallback_to_full_baseline,
-                "window": self.window,
-                "metric_window": self.metric_window,
-                "dt": self.dt,
-            },
-        )
-
-
-# ---------------------------------------------------------------------------
-# Analysis: pre/post scalar difference
-# ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class EtaPrePostDiffAnalysis(Analysis):
-    """Compute scalar pre-vs-post dF/F difference per event.
-
-    Produces four DataFrames:
-
-    * ``events`` — extracted bout events
-    * ``event_diff`` — per-event pre/post difference
-    * ``subject_diff`` — mean diff per subject
-    * ``group_diff`` — group mean ± SEM across subjects
-    """
-
-    name: str = "eta_prepost_diff"
-    roi_cols: tuple[str, ...] = ("L_MOp", "R_MOp", "L_MOs", "R_MOs")
-    task: str = "task-spont"
-    condition_col: str = "Condition"
-    pre_window: tuple[float, float] = (-1.0, 0.0)
-    post_window: tuple[float, float] = (0.0, 1.0)
-    dt: float = 0.02
-    reverse_for_offset: bool = False
-    bout_events_extractor: Any = LocomotionBoutEventsExtractor()
-
-    def run(self, long: pd.DataFrame) -> AnalysisResult:
-        roi_cols = list(self.roi_cols)
-        required = [
-            "Subject", "Session", "Task",
-            self.condition_col, "time_elapsed_s", "speed_mm",
-            *roi_cols,
-        ]
-        missing = [c for c in required if c not in long.columns]
-        if missing:
-            raise ValueError(f"Missing required columns in long table: {', '.join(missing)}")
-
-        d = long.loc[long["Task"] == self.task].copy()
-        events = self.bout_events_extractor(d)
-        if not isinstance(events, pd.DataFrame):
-            raise TypeError("bout_events_extractor must return a pandas DataFrame.")
-
-        required_event_cols = {"Subject", "Session", "Task", "bout_id", "onset_t", "offset_t"}
-        missing_event_cols = sorted(required_event_cols.difference(events.columns))
-        if missing_event_cols:
-            raise ValueError(f"Extracted event table missing columns: {', '.join(missing_event_cols)}")
-
-        key_cols = ["Subject", "Session", "Task"]
-        grouped_events = {
-            k: g.reset_index(drop=True)
-            for k, g in events.groupby(key_cols, sort=False)
-        }
-
-        rows: list[dict[str, Any]] = []
-
-        for key, g in d.groupby(key_cols, sort=False):
-            subj, ses, task_name = key
-            cond = g[self.condition_col].iloc[0]
-            ge = grouped_events.get(key)
-            if ge is None or ge.empty:
+            sess_events = events.loc[sess_mask].copy()
+            if sess_events.empty:
                 continue
 
-            g = g.sort_values("time_elapsed_s")
-            t = g["time_elapsed_s"].to_numpy()
+            # Fill Condition column if missing
+            if not has_condition:
+                if condition_map is not None:
+                    key = f"{sess.subject},{sess.session},{sess.task}"
+                    cond = condition_map.get(key, condition_map.get(sess.task, "all"))
+                else:
+                    cond = "all"
+                sess_events["Condition"] = cond
 
-            for _, event_row in ge.iterrows():
-                event_type_to_time = {
-                    "onset": float(event_row["onset_t"]),
-                    "offset": float(event_row["offset_t"]),
+            all_events.append(sess_events)
+
+            # Align if needed
+            if aligned is not None:
+                ad = aligned[i]
+            else:
+                sources_dict: dict[str, list[str]] = {
+                    self.source: list(self.roi_columns),
                 }
-                bout_id = int(event_row["bout_id"])
+                ad = sess.align(
+                    sources_dict,
+                    reference=self.reference_source,
+                    tolerance_s=self.alignment_tolerance_s,
+                    time_column=self.time_column,
+                )
 
-                for event_type, event_time in event_type_to_time.items():
-                    for roi in roi_cols:
-                        y = g[roi].to_numpy()
-                        rel_t, yy = extract_epoch_interpolated(
-                            t, y, event_time,
-                            window=(self.pre_window[0], self.post_window[1]),
-                            dt=self.dt,
-                        )
-                        if rel_t is None:
-                            continue
+            df = ad.df
 
-                        pre_mask = (rel_t >= self.pre_window[0]) & (rel_t < self.pre_window[1])
-                        post_mask = (rel_t >= self.post_window[0]) & (rel_t <= self.post_window[1])
-                        if not pre_mask.any() or not post_mask.any():
-                            continue
+            # Compute ETA for each event type present in this session
+            for etype, etype_group in sess_events.groupby("EventType", sort=False):
+                event_times = etype_group["event_time"].to_numpy()
+                if len(event_times) == 0:
+                    continue
 
-                        pre_mean = float(np.nanmean(yy[pre_mask]))
-                        post_mean = float(np.nanmean(yy[post_mask]))
-                        if not np.isfinite(pre_mean) or not np.isfinite(post_mean):
-                            continue
+                eta_df = eta_baselined(
+                    df,
+                    event_times,
+                    list(self.roi_columns),
+                    time_column=self.time_column,
+                    window=self.window,
+                    dt=self.dt,
+                    baseline=self.baseline,
+                )
+                if eta_df.empty:
+                    continue
 
-                        diff = post_mean - pre_mean
-                        if self.reverse_for_offset and event_type == "offset":
-                            diff = pre_mean - post_mean
+                cond_val = etype_group["Condition"].iloc[0] if "Condition" in etype_group.columns else "all"
+                eta_df["Subject"] = sess.subject
+                eta_df["Session"] = sess.session
+                eta_df["Task"] = sess.task
+                eta_df["Condition"] = cond_val
+                eta_df["EventType"] = etype
+                all_eta.append(eta_df)
 
-                        rows.append({
-                            "Subject": subj,
-                            "Session": ses,
-                            "Task": task_name,
-                            self.condition_col: cond,
-                            "EventType": event_type,
-                            "ROI": roi,
-                            "bout_id": bout_id,
-                            "event_time": event_time,
-                            "pre_mean": pre_mean,
-                            "post_mean": post_mean,
-                            "diff": float(diff),
-                        })
+        # Combine
+        base_cols = [
+            "Subject", "Session", "Task", "Condition", "EventType",
+            "event_id", "rel_time", "ROI", "value",
+        ]
+        if all_eta:
+            eta_events = pd.concat(all_eta, ignore_index=True)
+        else:
+            eta_events = pd.DataFrame(columns=base_cols)
 
-        event_diff = pd.DataFrame(rows)
-        if event_diff.empty:
-            return AnalysisResult(
-                name=self.name,
-                data={
-                    "events": events,
-                    "event_diff": event_diff,
-                    "subject_diff": pd.DataFrame(),
-                    "group_diff": pd.DataFrame(),
-                },
-                meta={
-                    "task": self.task,
-                    "pre_window": self.pre_window,
-                    "post_window": self.post_window,
-                    "reverse_for_offset": self.reverse_for_offset,
-                    "dt": self.dt,
-                    "condition_col": self.condition_col,
-                },
+        if all_events:
+            combined_events = pd.concat(all_events, ignore_index=True)
+        else:
+            combined_events = pd.DataFrame(
+                columns=["Subject", "Session", "Task", "Condition", "EventType", "event_time"]
             )
 
-        subject_diff = (
-            event_diff.groupby(
-                ["Subject", self.condition_col, "Task", "EventType", "ROI"],
-                as_index=False,
-            )
-            .agg(diff_mean=("diff", "mean"), n_events=("diff", "size"))
+        # Infer event types from what was actually found
+        event_types = sorted(combined_events["EventType"].unique().tolist()) if not combined_events.empty else []
+
+        # Aggregate: subject-level means
+        subject_means = self._aggregate_subject(eta_events)
+
+        # Aggregate: group means ± SEM
+        group_means = self._aggregate_group(subject_means)
+
+        return EtaResult(
+            events=combined_events,
+            eta_events=eta_events,
+            subject_means=subject_means,
+            group_means=group_means,
+            roi_columns=list(self.roi_columns),
+            event_types=event_types,
+            window=self.window,
+            baseline=self.baseline,
+            _context=sessions[0]._context if len(sessions) > 0 else None,
         )
 
-        group_diff = (
-            subject_diff.groupby(
-                [self.condition_col, "Task", "EventType", "ROI"],
-                as_index=False,
+    # ── Aggregation helpers ────────────────────────────────────────────────
+
+    @staticmethod
+    def _aggregate_subject(eta_events: pd.DataFrame) -> pd.DataFrame:
+        """Per-subject mean across events: mean(event_id) per (Subject, Condition, EventType, ROI, rel_time)."""
+        if eta_events.empty:
+            return pd.DataFrame(
+                columns=["Subject", "Condition", "EventType", "ROI", "rel_time", "mean"]
             )
-            .agg(
-                mean=("diff_mean", "mean"),
-                sem=("diff_mean", lambda x: x.std(ddof=1) / np.sqrt(x.notna().sum())),
-                n_subjects=("Subject", "nunique"),
-            )
+        return (
+            eta_events
+            .groupby(["Subject", "Condition", "EventType", "ROI", "rel_time"], sort=False)
+            .agg(mean=("value", "mean"))
+            .reset_index()
         )
 
-        return AnalysisResult(
-            name=self.name,
-            data={
-                "events": events,
-                "event_diff": event_diff,
-                "subject_diff": subject_diff,
-                "group_diff": group_diff,
-            },
-            meta={
-                "task": self.task,
-                "pre_window": self.pre_window,
-                "post_window": self.post_window,
-                "reverse_for_offset": self.reverse_for_offset,
-                "dt": self.dt,
-                "condition_col": self.condition_col,
-            },
+    @staticmethod
+    def _aggregate_group(subject_means: pd.DataFrame) -> pd.DataFrame:
+        """Group mean ± SEM across subjects."""
+        if subject_means.empty:
+            return pd.DataFrame(
+                columns=["Condition", "EventType", "ROI", "rel_time", "mean", "sem"]
+            )
+        return (
+            subject_means
+            .groupby(["Condition", "EventType", "ROI", "rel_time"], sort=False)
+            .agg(mean=("mean", "mean"), sem=("mean", _safe_sem))
+            .reset_index()
+        )
+
+
+# ── EtaResult ──────────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class EtaResult:
+    """Result of an ETA analysis.
+
+    Attributes
+    ----------
+    events : DataFrame
+        Bout event table with ``Subject``, ``Session``, ``Task``,
+        ``Condition``, ``EventType``, ``event_time``.
+    eta_events : DataFrame
+        Per-event ETA traces (columns: ``event_id``, ``rel_time``,
+        ``ROI``, ``value``, plus session/condition columns).
+    subject_means : DataFrame
+        Mean per (Subject, Condition, EventType, ROI, rel_time).
+    group_means : DataFrame
+        Group mean ± SEM per (Condition, EventType, ROI, rel_time).
+    roi_columns : list of str
+    event_types : list of str
+    window, baseline : tuple of floats
+    """
+
+    events: pd.DataFrame
+    eta_events: pd.DataFrame
+    subject_means: pd.DataFrame
+    group_means: pd.DataFrame
+    roi_columns: list[str]
+    event_types: list[str]
+    window: Tuple[float, float]
+    baseline: Tuple[float, float]
+
+    _context: OutputContext | None = field(repr=False, default=None)
+
+    # ── Plotting ───────────────────────────────────────────────────────────
+
+    def plot(
+        self,
+        event: str = "onset",
+        *,
+        rois: list[str] | None = None,
+        conditions: list[str] | None = None,
+        condition_colors: Dict[str, str] | None = None,
+        ncols: int = 2,
+        task: str | None = None,
+    ) -> "SaveableFigure":
+        """Plot group-mean ± SEM ETA traces.
+
+        Parameters
+        ----------
+        event : str
+            Event type to display (e.g. ``"onset"``).
+        rois : list of str, optional
+            ROIs to include. Defaults to all ``roi_columns``.
+        conditions : list of str, optional
+            Condition ordering.
+        condition_colors : dict, optional
+            Mapping from condition → color string.
+        ncols : int
+            Number of subplot columns.
+        task : str, optional
+            Filter group_means to a specific task.
+
+        Returns
+        -------
+        SaveableFigure
+        """
+        from databench._plotting.eta import plot_eta_by_condition
+        from databench.session import SaveableFigure
+
+        rois_to_plot = rois if rois is not None else self.roi_columns
+
+        fig = plot_eta_by_condition(
+            self.group_means,
+            event=event,
+            rois=rois_to_plot,
+            conditions=conditions,
+            condition_colors=condition_colors,
+            baseline_s=self.baseline,
+            ncols=ncols,
+            task=task,
+        )
+        return SaveableFigure(fig, self._context)
+
+    # ── Saving ─────────────────────────────────────────────────────────────
+
+    def save_tables(self, prefix: str = "eta") -> dict[str, Path]:
+        """Save the main DataFrames to CSV.
+
+        Returns
+        -------
+        dict
+            Mapping from table name to saved file path.
+        """
+        if self._context is None:
+            raise RuntimeError("Cannot save — no output context available.")
+        out_dir = self._context.stats_dir
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        paths: dict[str, Path] = {}
+        for name, df in [
+            ("events", self.events),
+            ("eta_events", self.eta_events),
+            ("subject_means", self.subject_means),
+            ("group_means", self.group_means),
+        ]:
+            p = out_dir / f"{prefix}_{name}.csv"
+            df.to_csv(p, index=False)
+            paths[name] = p
+        return paths
+
+    def save_summary(self, name: str = "eta_summary.json") -> Path:
+        """Save a JSON summary of the analysis."""
+        if self._context is None:
+            raise RuntimeError("Cannot save — no output context available.")
+        out_dir = self._context.run_dir
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / name
+
+        n_subj = int(self.events["Subject"].nunique()) if not self.events.empty else 0
+        conds = sorted(self.events["Condition"].unique().tolist()) if not self.events.empty else []
+
+        summary = {
+            "analysis": "event_triggered_average",
+            "created_at": datetime.now().isoformat(),
+            "analyst": self._context.analyst,
+            "lab": self._context.lab,
+            "run_name": self._context.run_name,
+            "tag": self._context.tag,
+            "roi_columns": self.roi_columns,
+            "event_types": self.event_types,
+            "window": list(self.window),
+            "baseline": list(self.baseline),
+            "n_events": int(len(self.events)),
+            "n_subjects": n_subj,
+            "conditions": conds,
+        }
+        with open(path, "w") as f:
+            json.dump(summary, f, indent=2)
+        return path
+
+    # ── Reporting ──────────────────────────────────────────────────────────
+
+    def _report_section(self) -> "ReportSection":
+        """Build a :class:`~databench._reporting.ReportSection` for this result."""
+        from databench._reporting import ReportSection
+
+        n_subj = int(self.events["Subject"].nunique()) if not self.events.empty else 0
+        conds = sorted(self.events["Condition"].unique().tolist()) if not self.events.empty else []
+        notes = (
+            f"**{len(self.events)} events** across **{n_subj} subjects**.\n\n"
+            f"Conditions: {', '.join(conds) if conds else 'all'}.\n\n"
+            f"ROIs: {', '.join(self.roi_columns)}."
+        )
+        params = {
+            "roi_columns": self.roi_columns,
+            "event_types": self.event_types,
+            "window": self.window,
+            "baseline": self.baseline,
+            "n_events": len(self.events),
+            "n_subjects": n_subj,
+        }
+        figures = []
+        tables = []
+        if self._context is not None:
+            figures = sorted(self._context.plots_dir.glob("*.svg")) + sorted(self._context.plots_dir.glob("*.png"))
+            tables = sorted(self._context.stats_dir.glob("*.csv"))
+        return ReportSection(
+            heading="Event-Triggered Average",
+            params=params,
+            notes=notes,
+            figures=figures,
+            tables=tables,
         )

@@ -109,3 +109,29 @@ def resolve_dataset(alias: str | None = None) -> Path:
     if not path.exists():
         raise FileNotFoundError(f"Dataset file not found: {path}")
     return path
+
+
+# -- Output context (new API) -----------------------------------------------
+
+@dataclass(frozen=True)
+class OutputContext:
+    """Lightweight value object carrying output directory information.
+
+    Built internally by :class:`~databench.project.Project`.
+    Not intended for direct user construction.
+    """
+
+    run_dir: Path
+    plots_dir: Path
+    stats_dir: Path
+    reports_dir: Path
+    analyst: str = ""
+    lab: str = ""
+    run_name: str = "databench"
+    tag: str = ""
+    script_name: str = field(default_factory=_detect_script_name)
+
+    def ensure_dirs(self) -> None:
+        """Create all output directories if they don't exist."""
+        for d in (self.run_dir, self.plots_dir, self.stats_dir, self.reports_dir):
+            d.mkdir(parents=True, exist_ok=True)

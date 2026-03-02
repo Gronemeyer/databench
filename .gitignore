@@ -7,4 +7,5 @@
 /.DS_Store
 *.log
 /Scripts
+/scriptings
 datasets.toml
