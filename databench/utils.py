@@ -49,10 +49,6 @@ def clean_xy(t, y):
     return t[order], y[order]
 
 
-def get_value(row: pd.Series, source: str, feature: str):
-    return row.get((source, feature)) if isinstance(row.index, pd.MultiIndex) else row.get(feature)
-
-
 def get_first(row: pd.Series, keys):
     for key in keys:
         val = row.get(key)

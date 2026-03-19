@@ -34,12 +34,12 @@ def smooth_savgol(signal: np.ndarray, window_s: float, fs: float, polyorder: int
     """Apply Savitzky-Golay smoothing. Returns original if window is too short."""
     if signal is None or len(signal) == 0:
         return signal
-    wl = int(round(window_s * fs))
-    if wl % 2 == 0:
-        wl += 1
-    wl = max(3, wl)
-    if len(signal) > wl:
-        return savgol_filter(signal, window_length=wl, polyorder=polyorder)
+    window_length = int(round(window_s * fs))
+    if window_length % 2 == 0:
+        window_length += 1
+    window_length = max(3, window_length)
+    if len(signal) > window_length:
+        return savgol_filter(signal, window_length=window_length, polyorder=polyorder)
     return signal
 
 
@@ -121,16 +121,16 @@ class OscillationOverviewPlotter(Plotter):
         )
         axes = np.atleast_1d(axes)
 
-        t = osc.t
-        _, sl = time_mask(t, window)
-        ts = t[sl]
-        xlim = (ts[0], ts[-1])
+        t = osc.time
+        _, time_slice = time_mask(t, window)
+        time_visible = t[time_slice]
+        xlim = (time_visible[0], time_visible[-1])
 
         band_label = self.band_label or f"{osc.band[0]}–{osc.band[1]} Hz"
 
         # Panel 1: raw ROI trace + burst shading
         ax = axes[0]
-        ax.plot(ts, osc.x[sl], color="#1f77b4", lw=1.4, alpha=0.9)
+        ax.plot(time_visible, osc.raw_signal[time_slice], color="#1f77b4", lw=1.4, alpha=0.9)
         shade_bursts(ax, t, osc.bursts, *xlim)
         ax.set_ylabel("ΔF/F", fontsize=10)
         ax.set_title(
@@ -142,10 +142,10 @@ class OscillationOverviewPlotter(Plotter):
 
         # Panel 2: bandpassed + envelope + threshold
         ax = axes[1]
-        ax.plot(ts, osc.xf[sl], color="#2ca02c", lw=0.8, alpha=0.8, label="bandpassed")
-        ax.plot(ts, osc.env[sl], color="#d62728", lw=1.2, alpha=0.9, label="envelope")
-        ax.axhline(osc.thr, color="#d62728", ls="--", lw=0.9, alpha=0.6,
-                    label=f"threshold ({osc.thr:.4f})")
+        ax.plot(time_visible, osc.filtered_signal[time_slice], color="#2ca02c", lw=0.8, alpha=0.8, label="bandpassed")
+        ax.plot(time_visible, osc.envelope[time_slice], color="#d62728", lw=1.2, alpha=0.9, label="envelope")
+        ax.axhline(osc.threshold_value, color="#d62728", ls="--", lw=0.9, alpha=0.6,
+                    label=f"threshold ({osc.threshold_value:.4f})")
         shade_bursts(ax, t, osc.bursts, *xlim)
         ax.set_ylabel("Amplitude", fontsize=9)
         ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(0.01, 0.98), ncol=1, frameon=False)
@@ -156,9 +156,9 @@ class OscillationOverviewPlotter(Plotter):
         # Panel 3: pupil
         if has_pupil:
             ax = axes[panel_idx]
-            pm, _ = time_mask(t_aligned, (xlim[0], xlim[1]))
-            if pm is not None:
-                ax.plot(t_aligned[pm], pupil[pm], color="#EF553B", lw=1.6, alpha=0.9)
+            pupil_time_mask, _ = time_mask(t_aligned, (xlim[0], xlim[1]))
+            if pupil_time_mask is not None:
+                ax.plot(t_aligned[pupil_time_mask], pupil[pupil_time_mask], color="#EF553B", lw=1.6, alpha=0.9)
             shade_bursts(ax, t, osc.bursts, *xlim)
             ax.set_ylabel("Pupil (mm)", fontsize=9)
             ax.tick_params(labelsize=9)
@@ -167,9 +167,9 @@ class OscillationOverviewPlotter(Plotter):
         # Panel 4: locomotion speed
         if has_speed:
             ax = axes[panel_idx]
-            sm, _ = time_mask(t_aligned, (xlim[0], xlim[1]))
-            if sm is not None:
-                ax.plot(t_aligned[sm], speed[sm], color="#00CC96", lw=1.6, alpha=0.9)
+            speed_time_mask, _ = time_mask(t_aligned, (xlim[0], xlim[1]))
+            if speed_time_mask is not None:
+                ax.plot(t_aligned[speed_time_mask], speed[speed_time_mask], color="#00CC96", lw=1.6, alpha=0.9)
             shade_bursts(ax, t, osc.bursts, *xlim)
             ax.set_ylabel("Speed (mm)", fontsize=9)
             ax.tick_params(labelsize=9)
@@ -211,17 +211,17 @@ class OscillationBurstDetailPlotter(Plotter):
         burst_idx: int,
         fs: float = 50.0,
     ):
-        s, e = osc.bursts[burst_idx]
-        t_start = osc.t[s] - self.pad_s
-        t_end = osc.t[e] + self.pad_s
+        burst_start, burst_end = osc.bursts[burst_idx]
+        t_start = osc.time[burst_start] - self.pad_s
+        t_end = osc.time[burst_end] + self.pad_s
         window = (t_start, t_end)
 
         fig, axes = self.overview.plot_overview(osc, long, window=window)
-        burst_dur = (e - s + 1) / fs
-        peak_env = float(osc.env[s:e + 1].max())
+        burst_dur = (burst_end - burst_start + 1) / fs
+        peak_env = float(osc.envelope[burst_start:burst_end + 1].max())
         fig.suptitle(
             f"Burst #{burst_idx + 1} — {osc.context.label()}\n"
-            f"{osc.t[s]:.1f}–{osc.t[e]:.1f} s  (dur={burst_dur:.1f}s, peak_env={peak_env:.4f})",
+            f"{osc.time[burst_start]:.1f}–{osc.time[burst_end]:.1f} s  (dur={burst_dur:.1f}s, peak_env={peak_env:.4f})",
             fontsize=10, y=1.03,
         )
         return fig, axes
@@ -264,7 +264,11 @@ class OscillationReportPagePlotter(Plotter):
         pupil_time: np.ndarray | None = None,
         time_window: Tuple[float, float] | None = None,
     ):
-        t, x, xf, env, thr = osc.t, osc.x, osc.xf, osc.env, osc.thr
+        t = osc.time
+        raw_signal = osc.raw_signal
+        filtered = osc.filtered_signal
+        envelope = osc.envelope
+        threshold_val = osc.threshold_value
         ctx = osc.context
         band_label = self.band_label or f"{osc.band[0]}–{osc.band[1]} Hz"
 
@@ -282,15 +286,15 @@ class OscillationReportPagePlotter(Plotter):
         n_panels = 3 if has_pupil else 2
         fig, axes = plt.subplots(n_panels, 1, figsize=(14, 3.2 * n_panels))
 
-        tm = t[mask]
+        time_masked = t[mask]
 
         # Panel 1: raw signal + burst shading
         ax0 = axes[0]
-        ax0.plot(tm, x[mask], color="#1f77b4", lw=0.6, alpha=0.8)
-        for s, e in osc.bursts:
-            if t[s] > tm[-1] or t[e] < tm[0]:
+        ax0.plot(time_masked, raw_signal[mask], color="#1f77b4", lw=0.6, alpha=0.8)
+        for burst_start, burst_end in osc.bursts:
+            if t[burst_start] > time_masked[-1] or t[burst_end] < time_masked[0]:
                 continue
-            ax0.axvspan(t[s], t[e], color="#ff7f0e", alpha=0.15)
+            ax0.axvspan(t[burst_start], t[burst_end], color="#ff7f0e", alpha=0.15)
         ax0.set_ylabel(f"{ctx.signal_key} (raw)", fontsize=9)
         ax0.set_title(
             f"{ctx.label()} | {ctx.signal_key} | {band_label}\n"
@@ -301,13 +305,13 @@ class OscillationReportPagePlotter(Plotter):
 
         # Panel 2: band-passed + envelope + threshold
         ax1 = axes[1]
-        ax1.plot(tm, xf[mask], color="#2ca02c", lw=0.5, alpha=0.7, label="bandpassed")
-        ax1.plot(tm, env[mask], color="#d62728", lw=0.8, label="envelope")
-        ax1.axhline(thr, color="#d62728", ls="--", lw=0.8, alpha=0.6, label=f"threshold ({thr:.4f})")
-        for s, e in osc.bursts:
-            if t[s] > tm[-1] or t[e] < tm[0]:
+        ax1.plot(time_masked, filtered[mask], color="#2ca02c", lw=0.5, alpha=0.7, label="bandpassed")
+        ax1.plot(time_masked, envelope[mask], color="#d62728", lw=0.8, label="envelope")
+        ax1.axhline(threshold_val, color="#d62728", ls="--", lw=0.8, alpha=0.6, label=f"threshold ({threshold_val:.4f})")
+        for burst_start, burst_end in osc.bursts:
+            if t[burst_start] > time_masked[-1] or t[burst_end] < time_masked[0]:
                 continue
-            ax1.axvspan(t[s], t[e], color="#ff7f0e", alpha=0.15)
+            ax1.axvspan(t[burst_start], t[burst_end], color="#ff7f0e", alpha=0.15)
         ax1.set_ylabel("Amplitude", fontsize=9)
         ax1.legend(fontsize=7, loc="upper right", frameon=False)
         ax1.tick_params(axis="both", labelsize=8)
@@ -316,19 +320,19 @@ class OscillationReportPagePlotter(Plotter):
         if has_pupil:
             ax2 = axes[2]
             if time_window is not None:
-                pmask = (pupil_time >= time_window[0]) & (pupil_time <= time_window[1])
+                pupil_mask = (pupil_time >= time_window[0]) & (pupil_time <= time_window[1])
             else:
-                pmask = np.ones(len(pupil_time), dtype=bool)
-            ax2.plot(pupil_time[pmask], pupil[pmask], color="#9467bd", lw=0.6, alpha=0.8)
-            for s, e in osc.bursts:
-                if t[s] > tm[-1] or t[e] < tm[0]:
+                pupil_mask = np.ones(len(pupil_time), dtype=bool)
+            ax2.plot(pupil_time[pupil_mask], pupil[pupil_mask], color="#9467bd", lw=0.6, alpha=0.8)
+            for burst_start, burst_end in osc.bursts:
+                if t[burst_start] > time_masked[-1] or t[burst_end] < time_masked[0]:
                     continue
-                ax2.axvspan(t[s], t[e], color="#ff7f0e", alpha=0.15)
+                ax2.axvspan(t[burst_start], t[burst_end], color="#ff7f0e", alpha=0.15)
             ax2.set_ylabel("Pupil diameter (mm)", fontsize=9)
             ax2.tick_params(axis="both", labelsize=8)
 
         # Sync x-limits across all panels
-        xlim = (tm[0], tm[-1])
+        xlim = (time_masked[0], time_masked[-1])
         for ax in axes:
             ax.set_xlim(xlim)
         axes[-1].set_xlabel("Time (s)", fontsize=9)

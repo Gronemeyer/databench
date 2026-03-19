@@ -58,60 +58,57 @@ that produce a result when you call `.run()`.
 
 ---
 
-## Quickstart — Oscillation Detection
+## Discovering Your Data
+
+After opening a project, inspect what's available:
 
 ```python
-from databench import Project, OscillationDetector
-from databench.config import resolve_dataset
+from databench import Project, resolve_dataset
 
-# ─── Setup ────────────────────────────────────────────────────────────────
-proj = Project(
-    dataset=resolve_dataset("etoh"),
-    analyst="Jacob Gronemeyer",
-    lab="Sipe Lab",
-    run_name="oscillations",
-    tag="L_VISp-spont",
-)
+proj = Project(dataset=resolve_dataset("etoh"), run_name="explore", tag="test")
 
-session = proj.session(subject="GS28", session="ses-01", task="task-spont")
-
-# ─── Align auxiliary traces onto ROI timebase ─────────────────────────────
-aligned = session.align(
-    {"mesomap": ["L_VISp"], "pupil": ["pupil_diameter_mm"], "treadmill": ["speed_mm"]},
-    reference="mesomap",
-    tolerance_s=0.25,
-)
-
-# ─── Configure and run ───────────────────────────────────────────────────
-detector = OscillationDetector(
-    source="mesomap",
-    signal="L_VISp",
-    fs=50.0,
-    band_hz=(2.0, 4.0),
-    filter_order=4,
-    threshold=0.02,
-    min_duration_s=1.0,
-    merge_gap_s=0.5,
-)
-result = detector.run(session)
-
-# ─── Plot, save, report ──────────────────────────────────────────────────
-result.plot_overview(
-    aligned=aligned,
-    pupil="pupil_diameter_mm",
-    speed="speed_mm",
-).save("overview.svg")
-
-result.plot_bursts(aligned=aligned, pupil="pupil_diameter_mm", speed="speed_mm")
-result.save_events("bursts.csv")
-result.save_summary()
-
-proj.save_report(result, notes=f"Detected {len(result.bursts)} bursts.")
+proj.subjects       # ['GS26', 'GS27', 'GS28', 'GS29']
+proj.tasks          # ['task-movies', 'task-spont']
+proj.all_sessions   # ['ses-01', 'ses-02', 'ses-03', 'ses-04']
 ```
 
-Raw treadmill arrays are extracted **internally** from the session — scripts
-never need to manually call `session.time("treadmill")` /
-`session.signal("treadmill", ...)` for plotting.
+Error messages always list valid options.  Pass a wrong signal name and the
+error will show every available signal for that source:
+
+```
+SignalNotFoundError: Signal 'FAKE' not found in source 'mesomap'.
+  Available signals for 'mesomap': ['L_MOp', 'L_MOs', 'L_VISp', ...]
+  Available sources: ['mesomap', 'pupil', 'treadmill']
+```
+
+---
+
+## Example Scripts
+
+Runnable analyses live in `Scripts/scriptings/`.  Each script's header
+docstring is a self-contained usage guide — read it before running.
+
+```bash
+python Scripts/scriptings/event-based.py
+```
+
+| Script | Description |
+|---|---|
+| `blessed-workflow.py` | Novice-friendly procedural example: load → features → delta → plot → save |
+| `event-based.py` | Event-triggered averages across conditions (locomotion-bout ETA) |
+| `event-based-widefield-longitudinal.py` | Longitudinal ETA for widefield sessions |
+| `extract-features-csv.py` | Batch feature extraction to long-format CSV |
+| `locomotion-bouts.py` | Locomotion bout detection, speed/distance stats, PDF report |
+| `locomotion-across-conditions.py` | Per-condition bout statistics with boxplots |
+| `locomotion-condition-task-compare.py` | Paired boxplots: conditions × tasks |
+| `pupil-at-running-scatter.py` | Pupil diameter at bout onset/offset scatter |
+| `habituation-oscillation-coupling.py` | Oscillation habituation across 10 days |
+| `oscillations/oscillation-detector.py` | Single-session oscillation burst detection |
+| `oscillations/oscillation-descriptive-stats.py` | Oscillation descriptive statistics |
+| `oscillations/oscillation-timing-analysis.py` | Burst timing and inter-burst intervals |
+| `oscillations/oscillation-locomotion-prediction.py` | Oscillation–locomotion coupling |
+| `oscillations/oscillation-pupil-eta.py` | Pupil ETA around oscillation bursts |
+| `oscillations/quiescent-oscillation-probability.py` | Quiescent-state oscillation probability |
 
 ---
 
@@ -163,46 +160,17 @@ proj = Project(
 | `time(source, column)` | `np.ndarray` | Extract the time array |
 | `align(sources, reference=, tolerance_s=)` | `AlignedData` | Time-align signals via `merge_asof` |
 
-### `OscillationDetector`
+### Analysis APIs
 
-| Parameter | Default | Description |
-|---|---|---|
-| `source` | *(required)* | Data source (e.g. `"mesomap"`) |
-| `signal` | *(required)* | Signal name (e.g. `"L_VISp"`) |
-| `fs` | `50.0` | Sampling rate (Hz) |
-| `band_hz` | `(3.1, 4.3)` | Bandpass frequency range |
-| `filter_order` | `4` | Butterworth filter order |
-| `threshold` | `None` | Fixed threshold (`None` = adaptive) |
-| `threshold_k` | `4.0` | Adaptive threshold multiplier |
-| `min_duration_s` | `0.5` | Minimum burst duration |
-| `merge_gap_s` | `0.25` | Merge bursts closer than this |
+Analysis-specific parameter tables and usage examples live in module
+docstrings and script headers:
 
-`detector.run(session) → OscillationResult`
-
-### `OscillationResult`
-
-| Method | Returns | Description |
-|---|---|---|
-| `plot_overview(aligned=, pupil=, speed=, window=)` | `SaveableFigure` | Full-session multi-panel plot |
-| `plot_bursts(aligned=, max_examples=12, pad_s=5.0, ...)` | `list[SaveableFigure]` | Zoomed per-burst detail plots |
-| `save_events(name)` | `Path` | Burst table as CSV |
-| `save_summary(name)` | `Path` | JSON run metadata |
-
-### `EtaAnalysis`
-
-```python
-eta = EtaAnalysis(
-    roi_columns=("L_VISp", "R_VISp"),
-    window=(-2.0, 5.0),
-    dt=0.05,
-    baseline=(-2.0, -1.0),
-    source="mesomap",
-)
-result = eta.run(sessions, events, condition_map={"baseline": [...], ...})
-result.plot(event="onset", conditions=["baseline", "ethanol_low"]).save("eta.svg")
-result.save_tables()
-result.save_summary()
-```
+- **OscillationDetector / OscillationResult** — see `databench/analysis/oscillation.py`
+  and `Scripts/scriptings/oscillations/oscillation-detector.py`
+- **EtaAnalysis / EtaResult** — see `databench/analysis/eta.py`
+  and `Scripts/scriptings/event-based.py`
+- **Event generation** (`locomotion_events`, `make_events`) — see
+  `databench/_signal/events.py`
 
 ---
 
@@ -232,23 +200,64 @@ entry in `TRACE_STYLES`.
 ```
 databench/
 ├── __init__.py              # Public exports
-├── project.py               # Project entry point
+├── bench.py                 # Internal coordinator (not part of the script-facing API)
+├── project.py               # Project entry point, output directory management
 ├── session.py               # Session, SessionGroup, AlignedData, SaveableFigure
 ├── config.py                # OutputContext, resolve_dataset, condition colours
+├── registry.py              # Internal registration decorators
+├── provenance.py            # Run metadata and provenance tracking
+├── utils.py                 # Shared array utilities (as_1d, clean_xy, get_first, etc.)
+├── debug.py                 # Diagnostic helpers
 ├── _reporting.py            # Markdown report writer
+├── _io/
+│   ├── __init__.py
+│   └── loader.py            # Dataset loading (pickle / HDF5)
+├── _utils/
+│   ├── __init__.py
+│   └── _logger.py           # Logging configuration
+├── _signal/
+│   ├── __init__.py
+│   ├── bandpass.py           # Butterworth bandpass filter + Hilbert envelope
+│   ├── bouts.py             # Locomotion bout detection from speed traces
+│   ├── epochs.py            # Peri-event epoch extraction and interpolation
+│   ├── eta_core.py          # Event-triggered average computation core
+│   ├── events.py            # Event detection (locomotion_events, etc.)
+│   └── segments.py          # Contiguous-segment detection, merging, filtering
 ├── analysis/
-│   ├── oscillation.py       # OscillationDetector, OscillationResult
-│   └── eta.py               # EtaAnalysis, EtaResult
+│   ├── __init__.py
+│   ├── base.py              # Analysis base utilities
+│   ├── oscillation.py       # OscillationDetector, OscillationResult (primary API)
+│   ├── oscillation_detector.py  # Legacy oscillation detector with plotting/saving
+│   ├── eta.py               # EtaAnalysis, EtaResult (primary API)
+│   ├── eta_old.py           # Legacy ETA implementation
+│   ├── longitudinal.py      # Longitudinal / multi-session analysis
+│   └── mesomap_hilbert.py   # Mesomap Hilbert envelope analysis (spectrograms)
+├── features/
+│   ├── __init__.py
+│   ├── base.py              # FeatureFn base class, @register_feature decorator
+│   ├── meso.py              # Mesoscale imaging features
+│   ├── pupil.py             # Pupil diameter features
+│   └── treadmill.py         # Treadmill / locomotion features and bout stats
 ├── _plotting/
+│   ├── __init__.py
 │   ├── trace_config.py      # TraceStyle, TRACE_STYLES, get_style
 │   ├── traces.py            # Signal conditioning & trace plotting helpers
-│   └── oscillation.py       # Oscillation-specific multi-panel plots
-├── _signal/
-│   ├── bandpass.py           # Bandpass filter + Hilbert envelope
-│   ├── events.py             # Event detection (locomotion_events, etc.)
-│   └── segments.py           # Burst segment utils
-├── features/                 # Feature extraction modules
-└── plotting/                 # Legacy plotter modules
+│   ├── oscillation.py       # Oscillation-specific multi-panel plots (internal)
+│   └── eta.py               # ETA plotting helpers (internal)
+└── plotting/
+    ├── __init__.py
+    ├── base.py              # Shared plotting base utilities
+    ├── core.py              # Core plotter infrastructure
+    ├── axes.py              # Axes layout and formatting helpers
+    ├── oscillation.py       # Registered oscillation plotters (Overview, BurstDetail, etc.)
+    ├── eta.py               # Registered ETA plotters
+    ├── mesomap.py           # Mesomap spatial overlay plots
+    ├── alignment.py         # Alignment / multi-trace overlay plots
+    ├── overview.py          # Session overview figures
+    └── treadmill.py         # Treadmill-specific plots
+
 Scripts/                      # Runnable analysis scripts
+├── legacy/                   # Older analysis scripts
+└── scriptings/               # Active analysis scripts and explorations
 datasets.toml                 # Local dataset path aliases
 ```

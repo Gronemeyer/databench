@@ -38,6 +38,6 @@ def extract_epoch_interpolated(
     if t_valid.size < 2:
         return None, None
     rel_t = np.arange(window[0], window[1] + 1e-12, dt)
-    tgt = t0 + rel_t
-    yy = np.interp(tgt, t_valid, y_valid)
-    return rel_t, yy
+    target_times = t0 + rel_t
+    interpolated_values = np.interp(target_times, t_valid, y_valid)
+    return rel_t, interpolated_values

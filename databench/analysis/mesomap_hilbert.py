@@ -28,11 +28,11 @@ _DEFAULT_TARGETS: Dict[str, str] = {
 
 
 def detrend_zscore_1d(x: np.ndarray) -> np.ndarray:
-    xd = signal.detrend(x, type="linear")
-    sd = xd.std(ddof=1)
-    if sd == 0:
-        sd = 1.0
-    return (xd - xd.mean()) / sd
+    detrended = signal.detrend(x, type="linear")
+    std_dev = detrended.std(ddof=1)
+    if std_dev == 0:
+        std_dev = 1.0
+    return (detrended - detrended.mean()) / std_dev
 
 
 def bandpass_1d(x: np.ndarray, fs: float, lo: float, hi: float, order: int = 4) -> np.ndarray:
@@ -44,7 +44,7 @@ def bandpass_1d(x: np.ndarray, fs: float, lo: float, hi: float, order: int = 4) 
 def spectrogram_db(x: np.ndarray, fs: float, win_s: float, overlap_frac: float):
     nperseg = int(win_s * fs)
     noverlap = int(nperseg * overlap_frac)
-    f, tt, Sxx = signal.spectrogram(
+    freqs, spec_time, power = signal.spectrogram(
         x,
         fs=fs,
         window="hann",
@@ -54,7 +54,7 @@ def spectrogram_db(x: np.ndarray, fs: float, win_s: float, overlap_frac: float):
         scaling="density",
         mode="psd",
     )
-    return f, tt, 10 * np.log10(Sxx + 1e-12)
+    return freqs, spec_time, 10 * np.log10(power + 1e-12)
 
 
 @dataclass(frozen=True)
@@ -104,30 +104,30 @@ class MesomapHilbert(AnalysisFn):
             arr = np.asarray(x, dtype=float)
             stacked.append(arr.ravel())
         n = min(len(arr) for arr in stacked)
-        X_all = np.vstack([arr[:n] for arr in stacked])
-        X_all = signal.detrend(X_all, axis=1, type="linear")
-        g = X_all.mean(axis=0)
-        g = detrend_zscore_1d(g)
-        signals["GLOBAL"] = g
+        all_regions = np.vstack([arr[:n] for arr in stacked])
+        all_regions = signal.detrend(all_regions, axis=1, type="linear")
+        global_mean = all_regions.mean(axis=0)
+        global_mean = detrend_zscore_1d(global_mean)
+        signals["GLOBAL"] = global_mean
 
-        n = len(g)
+        n = len(global_mean)
         t = np.arange(n) / fs
 
-        envs = {}
-        specs: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
-        for k, x0 in signals.items():
-            xb = bandpass_1d(x0, fs, band_lo, band_hi)
-            hb = cast(np.ndarray, signal.hilbert(xb))
-            envs[k] = np.abs(hb)
+        envelopes = {}
+        spectrograms: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+        for region_key, region_signal in signals.items():
+            bandpassed = bandpass_1d(region_signal, fs, band_lo, band_hi)
+            analytic = cast(np.ndarray, signal.hilbert(bandpassed))
+            envelopes[region_key] = np.abs(analytic)
 
-            f, tt, Sdb = spectrogram_db(xb, fs, win_s, overlap_frac)
-            m = (f >= 0) & (f <= fmax)
-            specs[k] = (f[m], tt, Sdb[m, :])
+            freqs, spec_time, power_db = spectrogram_db(bandpassed, fs, win_s, overlap_frac)
+            freq_mask = (freqs >= 0) & (freqs <= fmax)
+            spectrograms[region_key] = (freqs[freq_mask], spec_time, power_db[freq_mask, :])
 
         overlap = {}
-        g_env = envs["GLOBAL"]
-        for k in resolved.keys():
-            overlap[k] = float(np.corrcoef(envs[k], g_env)[0, 1])
+        global_envelope = envelopes["GLOBAL"]
+        for region_key in resolved.keys():
+            overlap[region_key] = float(np.corrcoef(envelopes[region_key], global_envelope)[0, 1])
 
         if debug:
             print(f"[mesomap] Resolved: {resolved} | {context}")
@@ -135,8 +135,8 @@ class MesomapHilbert(AnalysisFn):
         return {
             "t": t,
             "signals": signals,
-            "envs": envs,
-            "specs": specs,
+            "envs": envelopes,
+            "specs": spectrograms,
             "resolved": resolved,
             "overlap": overlap,
         }

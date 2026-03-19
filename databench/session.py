@@ -198,10 +198,14 @@ class Session:
         value = self._row.get((source, name))
         if value is None:
             available = self._available_signals(source)
-            raise SignalNotFoundError(
+            sources = self._available_sources()
+            msg = (
                 f"Signal {name!r} not found in source {source!r}.\n"
                 f"  Available signals for {source!r}: {available}"
             )
+            if not available:
+                msg += f"\n  Available sources: {sources}"
+            raise SignalNotFoundError(msg)
         arr = np.asarray(value)
         if arr.ndim == 0:
             # Scalar stored in the dataset — promote to 1-element array
@@ -249,6 +253,12 @@ class Session:
                 if arr.ndim >= 1 and arr.size >= min_len:
                     signals.append(name)
         return sorted(signals)
+
+    def _available_sources(self) -> list[str]:
+        """List source names present in this session's data."""
+        if not isinstance(self._row.index, pd.MultiIndex):
+            return []
+        return sorted({src for src, _name in self._row.index})
 
     # ── Alignment ──────────────────────────────────────────────────────────
 

@@ -75,11 +75,11 @@ def smooth_savgol(
     """
     if sig is None or len(sig) == 0:
         return sig
-    wl = int(round(window_s * fs))
-    if wl % 2 == 0:
-        wl += 1
-    wl = max(3, wl)
-    if len(sig) <= wl:
+    window_length = int(round(window_s * fs))
+    if window_length % 2 == 0:
+        window_length += 1
+    window_length = max(3, window_length)
+    if len(sig) <= window_length:
         return sig
 
     nan_mask = np.isnan(sig)
@@ -92,10 +92,10 @@ def smooth_savgol(
             np.flatnonzero(~nan_mask),
             sig[~nan_mask],
         )
-        out = savgol_filter(filled, window_length=wl, polyorder=polyorder)
+        out = savgol_filter(filled, window_length=window_length, polyorder=polyorder)
         out[nan_mask] = np.nan
         return out
-    return savgol_filter(sig, window_length=wl, polyorder=polyorder)
+    return savgol_filter(sig, window_length=window_length, polyorder=polyorder)
 
 
 def smooth_dense(
@@ -128,12 +128,12 @@ def smooth_dense(
     if sig is None or len(sig) <= window:
         return sig
     out = median_filter(sig, size=median_size)
-    wl = window
-    if wl % 2 == 0:
-        wl -= 1
-    wl = max(3, wl)
-    if len(out) > wl and wl >= polyorder + 1:
-        out = savgol_filter(out, wl, polyorder)
+    window_length = window
+    if window_length % 2 == 0:
+        window_length -= 1
+    window_length = max(3, window_length)
+    if len(out) > window_length and window_length >= polyorder + 1:
+        out = savgol_filter(out, window_length, polyorder)
     return out
 
 

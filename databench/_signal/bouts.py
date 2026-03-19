@@ -21,8 +21,8 @@ def _merge_gaps_by_time(
         if not merged:
             merged.append((s, e))
             continue
-        _, pe = merged[-1]
-        gap = float(t[s] - t[pe])
+        _, prev_end = merged[-1]
+        gap = float(t[s] - t[prev_end])
         if gap <= min_gap_s:
             merged[-1] = (merged[-1][0], e)
         else:
@@ -35,10 +35,10 @@ def _apply_min_duration_by_time(
     t: np.ndarray,
     min_duration_s: float,
 ) -> list[Tuple[int, int]]:
-    dt = float(np.nanmedian(np.diff(t))) if t.size > 1 else 0.0
+    sample_interval = float(np.nanmedian(np.diff(t))) if t.size > 1 else 0.0
     return [
         (s, e) for s, e in segments
-        if float(t[e] - t[s] + dt) >= min_duration_s
+        if float(t[e] - t[s] + sample_interval) >= min_duration_s
     ]
 
 
@@ -89,9 +89,9 @@ def locomotion_bout_events(
             t_raw = group[time_col].to_numpy()
             v_raw = group[speed_col].to_numpy()
             valid = np.isfinite(t_raw) & np.isfinite(v_raw)
-            tt = t_raw[valid]
-            vv = v_raw[valid]
-            if tt.size < 3:
+            time_valid = t_raw[valid]
+            speed_valid = v_raw[valid]
+            if time_valid.size < 3:
                 continue
             local_context = {
                 col: val
@@ -100,8 +100,8 @@ def locomotion_bout_events(
             if context:
                 local_context.update(dict(context))
             bout_table = locomotion_bout_events(
-                tt,
-                vv / speed_scale_to_cms,
+                time_valid,
+                speed_valid / speed_scale_to_cms,
                 min_speed_cms=min_speed_cms,
                 min_duration_s=min_duration_s,
                 merge_gap_s=merge_gap_s,

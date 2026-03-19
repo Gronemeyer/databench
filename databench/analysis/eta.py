@@ -125,6 +125,12 @@ class EtaAnalysis:
         if not self.roi_columns:
             raise ValueError("roi_columns cannot be empty")
 
+        if not isinstance(events, pd.DataFrame):
+            raise TypeError(
+                f"'events' must be a pandas DataFrame, got {type(events).__name__}. "
+                "Use locomotion_events() or make_events() to produce one."
+            )
+
         # Validate events schema
         required = {"Subject", "Session", "Task", "EventType", "event_time"}
         missing = required - set(events.columns)

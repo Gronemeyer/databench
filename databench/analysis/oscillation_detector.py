@@ -52,33 +52,35 @@ def plot_oscillation_overlay(
     if window is not None:
         mask = (t >= window[0]) & (t <= window[1])
         idx_slice = np.where(mask)[0]
-        sl = slice(idx_slice[0], idx_slice[-1] + 1)
+        time_slice = slice(idx_slice[0], idx_slice[-1] + 1)
     else:
-        sl = slice(None)
+        time_slice = slice(None)
 
-    ts = t[sl]
+    time_visible = t[time_slice]
 
     # --- Axis 0: raw signal ---
     ax0 = axes[0]
-    ax0.plot(ts, x[sl], linewidth=0.5, color="k", alpha=0.7, label=signal_key)
+    ax0.plot(time_visible, x[time_slice], linewidth=0.5, color="k", alpha=0.7, label=signal_key)
     for s, e in bursts:
-        bs, be = max(s, sl.start or 0), min(e, (sl.stop or len(t)) - 1)
-        if bs <= be:
-            ax0.axvspan(t[bs], t[be], color="tomato", alpha=0.15)
+        visible_start = max(s, time_slice.start or 0)
+        visible_end = min(e, (time_slice.stop or len(t)) - 1)
+        if visible_start <= visible_end:
+            ax0.axvspan(t[visible_start], t[visible_end], color="tomato", alpha=0.15)
     ax0.set_ylabel(signal_key)
     ax0.set_title(title or f"{signal_key} with detected bursts")
     ax0.legend(loc="upper right", fontsize=8)
 
     # --- Axis 1: bandpassed + envelope + threshold ---
     ax1 = axes[1]
-    ax1.plot(ts, xf[sl], linewidth=0.5, color="steelblue", alpha=0.7,
+    ax1.plot(time_visible, xf[time_slice], linewidth=0.5, color="steelblue", alpha=0.7,
              label=f"BP {band[0]}-{band[1]} Hz")
-    ax1.plot(ts, env[sl], linewidth=0.8, color="darkorange", label="envelope")
+    ax1.plot(time_visible, env[time_slice], linewidth=0.8, color="darkorange", label="envelope")
     ax1.axhline(thr, color="red", linestyle="--", linewidth=0.8, label=f"threshold={thr:.4f}")
     for s, e in bursts:
-        bs, be = max(s, sl.start or 0), min(e, (sl.stop or len(t)) - 1)
-        if bs <= be:
-            ax1.axvspan(t[bs], t[be], color="tomato", alpha=0.15)
+        visible_start = max(s, time_slice.start or 0)
+        visible_end = min(e, (time_slice.stop or len(t)) - 1)
+        if visible_start <= visible_end:
+            ax1.axvspan(t[visible_start], t[visible_end], color="tomato", alpha=0.15)
     ax1.set_ylabel("Amplitude")
     ax1.legend(loc="upper right", fontsize=8)
 
@@ -93,16 +95,17 @@ def plot_oscillation_overlay(
             ov_data = np.interp(t, ov_t, ov_data)
         if overlay_subplot:
             ax_ov = axes[2]
-            ax_ov.plot(ts, ov_data[sl], linewidth=0.6, color="purple", label=ov_label)
+            ax_ov.plot(time_visible, ov_data[time_slice], linewidth=0.6, color="purple", label=ov_label)
             for s, e in bursts:
-                bs, be = max(s, sl.start or 0), min(e, (sl.stop or len(t)) - 1)
-                if bs <= be:
-                    ax_ov.axvspan(t[bs], t[be], color="tomato", alpha=0.15)
+                visible_start = max(s, time_slice.start or 0)
+                visible_end = min(e, (time_slice.stop or len(t)) - 1)
+                if visible_start <= visible_end:
+                    ax_ov.axvspan(t[visible_start], t[visible_end], color="tomato", alpha=0.15)
             ax_ov.set_ylabel(ov_label)
             ax_ov.legend(loc="upper right", fontsize=8)
         else:
             ax_tw = ax0.twinx()
-            ax_tw.plot(ts, ov_data[sl], linewidth=0.6, color="purple", alpha=0.5, label=ov_label)
+            ax_tw.plot(time_visible, ov_data[time_slice], linewidth=0.6, color="purple", alpha=0.5, label=ov_label)
             ax_tw.set_ylabel(ov_label, color="purple")
             ax_tw.tick_params(axis="y", labelcolor="purple")
 
@@ -127,9 +130,9 @@ def _as_time_vector(tt: np.ndarray, n: int) -> np.ndarray:
 def _bandpass_env(x: np.ndarray, fs: float, band: Tuple[float, float], order: int) -> Tuple[np.ndarray, np.ndarray]:
     nyq = 0.5 * fs
     sos = signal.butter(order, [band[0] / nyq, band[1] / nyq], btype="band", output="sos")
-    xf = signal.sosfiltfilt(sos, x)
-    env = np.abs(np.asarray(signal.hilbert(xf)))
-    return xf, env
+    filtered = signal.sosfiltfilt(sos, x)
+    envelope = np.abs(np.asarray(signal.hilbert(filtered)))
+    return filtered, envelope
 
 
 def _robust_threshold(env: np.ndarray, k: float) -> Tuple[float, float, float]:
@@ -161,9 +164,9 @@ def _merge_gaps(segments: Iterable[Tuple[int, int]], min_gap: int) -> list[Tuple
         if not merged:
             merged.append((s, e))
             continue
-        ps, pe = merged[-1]
-        if s - pe - 1 <= min_gap:
-            merged[-1] = (ps, e)
+        prev_start, prev_end = merged[-1]
+        if s - prev_end - 1 <= min_gap:
+            merged[-1] = (prev_start, e)
         else:
             merged.append((s, e))
     return merged
@@ -215,12 +218,12 @@ class OscillationContext:
 class OscillationResult:
     context: OscillationContext
     band: Tuple[float, float]
-    t: np.ndarray
-    x: np.ndarray
-    xf: np.ndarray
-    env: np.ndarray
-    thr: float
-    med: float
+    time: np.ndarray
+    raw_signal: np.ndarray
+    filtered_signal: np.ndarray
+    envelope: np.ndarray
+    threshold_value: float
+    median_envelope: float
     robust_std: float
     bursts: list[Tuple[int, int]]
     table: pd.DataFrame
@@ -263,33 +266,33 @@ class OscillationDetector(AnalysisFn):
         x = x[:n]
         t = t[:n]
 
-        xf, env = _bandpass_env(x, fs, band, order)
+        filtered, envelope = _bandpass_env(x, fs, band, order)
 
         if threshold is not None:
-            thr = threshold
-            med = float(np.median(env))
+            threshold_value = threshold
+            median_envelope = float(np.median(envelope))
             robust_std = 0.0
         else:
-            thr, med, robust_std = _robust_threshold(env, k)
+            threshold_value, median_envelope, robust_std = _robust_threshold(envelope, k)
 
-        segments = _segments_from_mask(env > thr)
+        segments = _segments_from_mask(envelope > threshold_value)
         min_gap = int(round(merge_gap_s * fs))
         merged = _merge_gaps(segments, min_gap)
         min_len = int(round(min_duration_s * fs))
         bursts = _apply_min_duration(merged, min_len)
 
-        table = _burst_table(t, env, bursts, fs)
+        table = _burst_table(t, envelope, bursts, fs)
 
         if debug:
             print(f"[oscillation_detector] bursts={len(bursts)} | {context}")
 
         return {
-            "t": t,
-            "x": x,
-            "xf": xf,
-            "env": env,
-            "thr": thr,
-            "med": med,
+            "time": t,
+            "raw_signal": x,
+            "filtered_signal": filtered,
+            "envelope": envelope,
+            "threshold_value": threshold_value,
+            "median_envelope": median_envelope,
             "robust_std": robust_std,
             "bursts": bursts,
             "table": table,
@@ -381,11 +384,11 @@ def save_oscillation_plot(
     name = filename or f"{result.context.slug()}_{signal_key}_bursts_overlay.svg"
     title = f"{result.context.label()} | Signal={signal_key}"
     fig, _ = plot_oscillation_overlay(
-        result.t,
-        result.x,
-        result.xf,
-        result.env,
-        result.thr,
+        result.time,
+        result.raw_signal,
+        result.filtered_signal,
+        result.envelope,
+        result.threshold_value,
         result.bursts,
         signal_key,
         band=result.band,
@@ -501,7 +504,7 @@ class OscillationDetectorAnalysis(Analysis):
             tbl.insert(2, "Task", ctx.task)
 
             if edge_pad_s > 0:
-                t_start, t_end = float(result.t[0]), float(result.t[-1])
+                t_start, t_end = float(result.time[0]), float(result.time[-1])
                 tbl = tbl[
                     (tbl["start_s"] - edge_pad_s >= t_start)
                     & (tbl["end_s"] + edge_pad_s <= t_end)
@@ -523,11 +526,11 @@ class OscillationDetectorAnalysis(Analysis):
         """Plot oscillation overlay from result.data (OscillationResult)."""
         res: OscillationResult = result.data
         return plot_oscillation_overlay(
-            res.t,
-            res.x,
-            res.xf,
-            res.env,
-            res.thr,
+            res.time,
+            res.raw_signal,
+            res.filtered_signal,
+            res.envelope,
+            res.threshold_value,
             res.bursts,
             res.context.signal_key or "signal",
             band=res.band,

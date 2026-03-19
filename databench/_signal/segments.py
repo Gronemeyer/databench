@@ -35,9 +35,9 @@ def merge_gaps(
         if not merged:
             merged.append((s, e))
             continue
-        ps, pe = merged[-1]
-        if s - pe - 1 <= min_gap:
-            merged[-1] = (ps, e)
+        prev_start, prev_end = merged[-1]
+        if s - prev_end - 1 <= min_gap:
+            merged[-1] = (prev_start, e)
         else:
             merged.append((s, e))
     return merged

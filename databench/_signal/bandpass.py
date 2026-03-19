@@ -19,9 +19,9 @@ def bandpass_envelope(
     """
     nyq = 0.5 * fs
     sos = signal.butter(order, [band[0] / nyq, band[1] / nyq], btype="band", output="sos")
-    xf = signal.sosfiltfilt(sos, x)
-    env = np.abs(np.asarray(signal.hilbert(xf)))
-    return xf, env
+    filtered = signal.sosfiltfilt(sos, x)
+    envelope = np.abs(np.asarray(signal.hilbert(filtered)))
+    return filtered, envelope
 
 
 def robust_threshold(

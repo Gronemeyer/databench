@@ -41,10 +41,10 @@ def _merge_gaps_by_time(
         if not merged:
             merged.append((s, e))
             continue
-        ps, pe = merged[-1]
-        gap = float(t[s] - t[pe])
+        prev_start, prev_end = merged[-1]
+        gap = float(t[s] - t[prev_end])
         if gap <= min_gap_s:
-            merged[-1] = (ps, e)
+            merged[-1] = (prev_start, e)
         else:
             merged.append((s, e))
     return merged
@@ -55,10 +55,10 @@ def _apply_min_duration_by_time(
     t: np.ndarray,
     min_duration_s: float,
 ) -> list[Tuple[int, int]]:
-    dt = float(np.nanmedian(np.diff(t))) if t.size > 1 else 0.0
+    sample_interval = float(np.nanmedian(np.diff(t))) if t.size > 1 else 0.0
     keep = []
     for s, e in segments:
-        duration = float(t[e] - t[s] + dt)
+        duration = float(t[e] - t[s] + sample_interval)
         if duration >= min_duration_s:
             keep.append((s, e))
     return keep
@@ -123,9 +123,9 @@ def locomotion_bout_events(
             t_raw = group[time_col].to_numpy()
             v_raw = group[speed_col].to_numpy()
             valid = np.isfinite(t_raw) & np.isfinite(v_raw)
-            tt = t_raw[valid]
-            vv = v_raw[valid]
-            if tt.size < 3:
+            time_valid = t_raw[valid]
+            speed_valid = v_raw[valid]
+            if time_valid.size < 3:
                 continue
 
             local_context = {col: val for col, val in zip(group_cols, key if isinstance(key, tuple) else (key,))}
@@ -133,8 +133,8 @@ def locomotion_bout_events(
                 local_context.update(dict(context))
 
             bout_table = locomotion_bout_events(
-                tt,
-                vv / speed_scale_to_cms,
+                time_valid,
+                speed_valid / speed_scale_to_cms,
                 min_speed_cms=min_speed_cms,
                 min_duration_s=min_duration_s,
                 merge_gap_s=merge_gap_s,
@@ -268,9 +268,9 @@ def extract_epoch_interpolated(
     y_valid = y[valid]
     bounds = epoch_indices(t_valid, t0, window=window)
     rel_t = np.arange(window[0], window[1] + 1e-12, dt)
-    tgt = t0 + rel_t
-    yy = np.interp(tgt, t_valid, y_valid)
-    return rel_t, yy
+    target_times = t0 + rel_t
+    interpolated_values = np.interp(target_times, t_valid, y_valid)
+    return rel_t, interpolated_values
 
 
 def _bout_stats(
@@ -281,15 +281,15 @@ def _bout_stats(
     mean_speeds: list[float] = []
     distances_m: list[float] = []
     durations_s: list[float] = []
-    dt_med = float(np.nanmedian(np.diff(t))) if t.size > 1 else 0.0
+    sample_interval = float(np.nanmedian(np.diff(t))) if t.size > 1 else 0.0
     for s, e in bouts:
         s = int(s)
         e = int(e)
-        duration = float(t[e] - t[s] + dt_med)
+        duration = float(t[e] - t[s] + sample_interval)
         durations_s.append(duration)
         mean_speeds.append(float(np.nanmean(np.abs(speed_cms[s : e + 1]))))
-        dt = np.diff(t[s : e + 1])
-        dist_cm = float(np.nansum(speed_cms[s + 1 : e + 1] * dt))
+        time_steps = np.diff(t[s : e + 1])
+        dist_cm = float(np.nansum(speed_cms[s + 1 : e + 1] * time_steps))
         distances_m.append(dist_cm / 100.0)
     return mean_speeds, distances_m, durations_s
 
@@ -352,18 +352,6 @@ class TotalDistanceM(FeatureFn):
         dist_mm = as_1d(get_first(row, [("treadmill", "distance_mm"), ("encoder", "distance")]))
         dist_mm = dist_mm[np.isfinite(dist_mm)]
         return float((dist_mm[-1] - dist_mm[0]) / 1000.0)
-
-        t, spd_mm = clean_xy(
-            get_first(row, [("treadmill", "time_elapsed_s"), ("encoder", "time_elapsed_s")]),
-            get_first(row, [("treadmill", "speed_mm"), ("encoder", "speed")]),
-        )
-        if t is None:
-            return np.nan
-        dt = np.diff(t)
-        if dt.size == 0:
-            return np.nan
-        dt = np.clip(dt, 0, np.nanpercentile(dt, 99))
-        return float(np.nansum(spd_mm[1:] * dt) / 1000.0)
 
 
 @dataclass(frozen=True)
