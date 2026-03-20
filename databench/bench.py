@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from databench.analysis import Analysis, AnalysisResult
+from databench.analysis.base import Analysis, AnalysisResult
 from databench.config import FilterConfig, IOConfig, OutputPaths
 from databench.features import FeatureFn
 from databench.plotting import Plotter
@@ -33,7 +33,7 @@ class Bench:
             .setup(path, run_name="260218", tag="eta")
             .build_long(sources=[("mesomap", rois), ("treadmill", ["speed_mm"])])
             .label_conditions(ses_to_cond)
-            .analyze(EtaByConditionAnalysis(...))
+            .analyze(EtaAnalysis(...))
             .plot(EtaConditionPlotter(...), save="eta_onset.png")
             .save_tables(prefix="eta"))
 
@@ -374,9 +374,6 @@ class Bench:
         if as_str not in self._saved_outputs[key]:
             self._saved_outputs[key].append(as_str)
 
-    # backward compat alias
-    _track_output = track_output
-
     def _log_saved_outputs(self, label: str, path: Path) -> None:
         self._logger.info(
             f"{label}: {path} (tables={len(self._saved_outputs.get('tables', []))}, "
@@ -618,7 +615,7 @@ class Bench:
         else:
             path = path.with_suffix(".csv")
             df.to_csv(path)
-        self._track_output(path, "tables")
+        self.track_output(path, "tables")
         return path
 
     def save_analysis_result_tables(
@@ -656,8 +653,8 @@ class Bench:
         config_dir = self.output_paths.config  # type: ignore[union-attr]
         config_dir.mkdir(parents=True, exist_ok=True)
         path, summary_path = provenance.save_provenance(self, output_dir=config_dir, name=name)
-        self._track_output(path, "other")
-        self._track_output(summary_path, "other")
+        self.track_output(path, "other")
+        self.track_output(summary_path, "other")
         self._log_saved_outputs("Save provenance", path)
         return path
 
@@ -706,7 +703,7 @@ class Bench:
         path = config_dir / name
         with path.open("w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, default=str)
-        self._track_output(path, "other")
+        self.track_output(path, "other")
         self._log_saved_outputs("Save run summary", path)
         return path
 
@@ -723,7 +720,7 @@ class Bench:
         path = out_dir / name
         path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(path, dpi=dpi, bbox_inches=bbox_inches)
-        self._track_output(path, "figures")
+        self.track_output(path, "figures")
         return path
 
     def save_feature_plot(
@@ -786,7 +783,7 @@ class Bench:
         out_path = out_dir / name
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_df.to_csv(out_path, index=False)
-        self._track_output(out_path, "tables")
+        self.track_output(out_path, "tables")
         return out_path
 
     @staticmethod

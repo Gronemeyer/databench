@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 from scipy.signal import savgol_filter
 
-from databench.analysis import AnalysisResult
+from databench.analysis.base import AnalysisResult
 from databench.analysis.oscillation_detector import OscillationResult
 from databench.plotting.base import Plotter
 from databench.registry import register_plotter

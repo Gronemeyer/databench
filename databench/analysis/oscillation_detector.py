@@ -9,9 +9,9 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy import signal
 
-from databench.analysis.base import AnalysisFn, Analysis, AnalysisResult
+from databench.analysis.base import Analysis, AnalysisResult
 from databench.registry import register_analysis
-from databench.utils import as_1d, get_first, strip_prefix
+from databench.utils import as_1d, strip_prefix
 
 
 # ---------------------------------------------------------------------------
@@ -229,74 +229,69 @@ class OscillationResult:
     table: pd.DataFrame
 
 
-@dataclass(frozen=True)
-class OscillationDetector(AnalysisFn):
-    name: str = "oscillation_detector"
+def _run_oscillation_detector_impl(
+    row: pd.Series,
+    *,
+    fs: float = _DEFAULT_FS,
+    band: Tuple[float, float] = _DEFAULT_BAND,
+    order: int = _DEFAULT_ORDER,
+    k: float = _DEFAULT_K,
+    min_duration_s: float = _DEFAULT_MIN_DURATION_S,
+    merge_gap_s: float = _DEFAULT_MERGE_GAP_S,
+    threshold: Optional[float] = None,
+    source: Optional[str] = None,
+    signal_key: Optional[str] = None,
+    time_key: Optional[str] = None,
+    debug: bool = False,
+    context: Optional[str] = None,
+):
+    if time_key is None:
+        time_key = "time_elapsed_s"
+    if source and isinstance(row.index, pd.MultiIndex):
+        signal_value = row.get((source, signal_key))
+        time_value = row.get((source, time_key))
+    else:
+        signal_value = row.get(signal_key)
+        time_value = row.get(time_key)
 
-    def _run_impl(
-        self,
-        row: pd.Series,
-        *,
-        fs: float = _DEFAULT_FS,
-        band: Tuple[float, float] = _DEFAULT_BAND,
-        order: int = _DEFAULT_ORDER,
-        k: float = _DEFAULT_K,
-        min_duration_s: float = _DEFAULT_MIN_DURATION_S,
-        merge_gap_s: float = _DEFAULT_MERGE_GAP_S,
-        threshold: Optional[float] = None,
-        source: Optional[str] = None,
-        signal_key: Optional[str] = None,
-        time_key: Optional[str] = None,
-        debug: bool = False,
-        context: Optional[str] = None,
-    ):
-        if time_key is None:
-            time_key = "time_elapsed_s"
-        if source and isinstance(row.index, pd.MultiIndex):
-            signal_value = row.get((source, signal_key))
-            time_value = row.get((source, time_key))
-        else:
-            signal_value = row.get(signal_key)
-            time_value = row.get(time_key)
+    x = signal_value
+    t_raw = as_1d(time_value)
+    t = _as_time_vector(t_raw, len(x))
+    n = min(len(t), len(x))
+    x = x[:n]
+    t = t[:n]
 
-        x = signal_value
-        t_raw = as_1d(time_value)
-        t = _as_time_vector(t_raw, len(x))
-        n = min(len(t), len(x))
-        x = x[:n]
-        t = t[:n]
+    filtered, envelope = _bandpass_env(x, fs, band, order)
 
-        filtered, envelope = _bandpass_env(x, fs, band, order)
+    if threshold is not None:
+        threshold_value = threshold
+        median_envelope = float(np.median(envelope))
+        robust_std = 0.0
+    else:
+        threshold_value, median_envelope, robust_std = _robust_threshold(envelope, k)
 
-        if threshold is not None:
-            threshold_value = threshold
-            median_envelope = float(np.median(envelope))
-            robust_std = 0.0
-        else:
-            threshold_value, median_envelope, robust_std = _robust_threshold(envelope, k)
+    segments = _segments_from_mask(envelope > threshold_value)
+    min_gap = int(round(merge_gap_s * fs))
+    merged = _merge_gaps(segments, min_gap)
+    min_len = int(round(min_duration_s * fs))
+    bursts = _apply_min_duration(merged, min_len)
 
-        segments = _segments_from_mask(envelope > threshold_value)
-        min_gap = int(round(merge_gap_s * fs))
-        merged = _merge_gaps(segments, min_gap)
-        min_len = int(round(min_duration_s * fs))
-        bursts = _apply_min_duration(merged, min_len)
+    table = _burst_table(t, envelope, bursts, fs)
 
-        table = _burst_table(t, envelope, bursts, fs)
+    if debug:
+        print(f"[oscillation_detector] bursts={len(bursts)} | {context}")
 
-        if debug:
-            print(f"[oscillation_detector] bursts={len(bursts)} | {context}")
-
-        return {
-            "time": t,
-            "raw_signal": x,
-            "filtered_signal": filtered,
-            "envelope": envelope,
-            "threshold_value": threshold_value,
-            "median_envelope": median_envelope,
-            "robust_std": robust_std,
-            "bursts": bursts,
-            "table": table,
-        }
+    return {
+        "time": t,
+        "raw_signal": x,
+        "filtered_signal": filtered,
+        "envelope": envelope,
+        "threshold_value": threshold_value,
+        "median_envelope": median_envelope,
+        "robust_std": robust_std,
+        "bursts": bursts,
+        "table": table,
+    }
 
 
 def _context_from_row(
@@ -337,7 +332,7 @@ def analyze_oscillation_row(
     debug: bool = False,
 ) -> Optional[OscillationResult]:
     ctx = _context_from_row(row, source=source, signal_key=signal_key, time_key=time_key)
-    out = OscillationDetector().run(
+    out = _run_oscillation_detector_impl(
         row,
         fs=fs,
         band=band,
@@ -486,7 +481,7 @@ class OscillationDetectorAnalysis(Analysis):
         """Build a standardised events table from oscillation detection results.
 
         Output columns: Subject, Session, Task, onset_t, offset_t,
-        duration_s, peak_env.  Ready for ``EventTriggeredAverageAnalysis``.
+        duration_s, peak_env. Ready for ``EtaAnalysis`` after event table conversion.
 
         Parameters
         ----------

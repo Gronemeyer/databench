@@ -26,7 +26,7 @@ from scipy.signal import savgol_filter
 
 
 # ── Defaults ───────────────────────────────────────────────────────────────
-# These mirror the proven values from the legacy overview.py / treadmill code.
+# Shared defaults for overview and treadmill trace rendering.
 
 GAP_THRESHOLD_S: float = 0.5
 """Gaps longer than this are *recording gaps*, not just irregular samples."""
@@ -146,7 +146,7 @@ def remap_previous_sample(
 ) -> np.ndarray:
     """Remap source values onto a reference timebase via previous-sample hold.
 
-    Equivalent to the legacy explorer rule:
+    Previous-sample hold mapping rule:
     ``idx = searchsorted(t_src, t_ref, side='right') - 1`` (clipped).
     """
     t_ref = np.asarray(reference_time, dtype=float)
@@ -224,7 +224,7 @@ def prepare_sparse_trace(
         Whether to apply :func:`smooth_dense` after gap filling.
     method : {"step_previous", "linear"}
         Mapping strategy from sparse samples to the aligned grid.
-        ``"step_previous"`` reproduces the legacy explorer locomotion view.
+        ``"step_previous"`` uses previous-sample hold behavior.
     median_size, savgol_window, savgol_polyorder
         Forwarded to :func:`smooth_dense`.
 
@@ -247,7 +247,7 @@ def prepare_sparse_trace(
     t_valid = aligned_time[valid_idx]
     s_valid = values[valid_idx]
 
-    # Sort and deduplicate valid times (legacy behavior for auxiliary traces)
+    # Sort and deduplicate valid times for auxiliary traces.
     order = np.argsort(t_valid)
     t_valid = t_valid[order]
     s_valid = s_valid[order]
@@ -259,7 +259,6 @@ def prepare_sparse_trace(
     if method == "linear":
         interp = np.interp(aligned_time, t_valid, s_valid)
     elif method == "step_previous":
-        # Legacy equivalent:
         # idx = searchsorted(t_src, t_ref, side="right") - 1, clipped
         idx = np.searchsorted(t_valid, aligned_time, side="right") - 1
         idx = np.clip(idx, 0, len(s_valid) - 1)

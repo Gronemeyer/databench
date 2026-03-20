@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from databench.analysis.base import AnalysisFn, Analysis, AnalysisResult
+from databench.analysis.base import Analysis, AnalysisResult
 from databench.debug import log_context
 from databench.utils import strip_prefix
 from databench.plotting import plot_stacked_envelopes, plot_spectrogram_panel
@@ -57,89 +57,84 @@ def spectrogram_db(x: np.ndarray, fs: float, win_s: float, overlap_frac: float):
     return freqs, spec_time, 10 * np.log10(power + 1e-12)
 
 
-@dataclass(frozen=True)
-class MesomapHilbert(AnalysisFn):
-    name: str = "mesomap_hilbert"
+def _run_mesomap_hilbert_impl(
+    row: pd.Series,
+    *,
+    fs: float = _DEFAULT_FS,
+    band_lo: float = _DEFAULT_BAND_LO,
+    band_hi: float = _DEFAULT_BAND_HI,
+    win_s: float = _DEFAULT_WIN_S,
+    overlap_frac: float = _DEFAULT_OVERLAP_FRAC,
+    fmax: float = _DEFAULT_FMAX,
+    targets: Optional[Dict[str, str]] = None,
+    source: str = "mesomap",
+    debug: bool = False,
+    context: Optional[str] = None,
+):
+    if targets is None:
+        targets = _DEFAULT_TARGETS
+    regions = [c[1] for c in row.index if c[0] == source]
 
-    def _run_impl(
-        self,
-        row: pd.Series,
-        *,
-        fs: float = _DEFAULT_FS,
-        band_lo: float = _DEFAULT_BAND_LO,
-        band_hi: float = _DEFAULT_BAND_HI,
-        win_s: float = _DEFAULT_WIN_S,
-        overlap_frac: float = _DEFAULT_OVERLAP_FRAC,
-        fmax: float = _DEFAULT_FMAX,
-        targets: Optional[Dict[str, str]] = None,
-        source: str = "mesomap",
-        debug: bool = False,
-        context: Optional[str] = None,
-    ):
-        if targets is None:
-            targets = _DEFAULT_TARGETS
-        regions = [c[1] for c in row.index if c[0] == source]
+    resolved: Dict[str, str] = {}
+    for key, col in targets.items():
+        if col in regions:
+            resolved[key] = col
+            continue
+        candidates = [region for region in regions if region.startswith("L_") and (key in region)]
+        if candidates:
+            resolved[key] = candidates[0]
+        elif regions:
+            resolved[key] = regions[0]
+        else:
+            resolved[key] = col
 
-        resolved: Dict[str, str] = {}
-        for key, col in targets.items():
-            if col in regions:
-                resolved[key] = col
-                continue
-            candidates = [region for region in regions if region.startswith("L_") and (key in region)]
-            if candidates:
-                resolved[key] = candidates[0]
-            elif regions:
-                resolved[key] = regions[0]
-            else:
-                resolved[key] = col
+    signals = {}
+    for k, col in resolved.items():
+        x = row.get((source, col))
+        signals[k] = detrend_zscore_1d(np.asarray(x, dtype=float))
 
-        signals = {}
-        for k, col in resolved.items():
-            x = row.get((source, col))
-            signals[k] = detrend_zscore_1d(np.asarray(x, dtype=float))
+    stacked = []
+    for region in regions:
+        x = row.get((source, region))
+        arr = np.asarray(x, dtype=float)
+        stacked.append(arr.ravel())
+    n = min(len(arr) for arr in stacked)
+    all_regions = np.vstack([arr[:n] for arr in stacked])
+    all_regions = signal.detrend(all_regions, axis=1, type="linear")
+    global_mean = all_regions.mean(axis=0)
+    global_mean = detrend_zscore_1d(global_mean)
+    signals["GLOBAL"] = global_mean
 
-        stacked = []
-        for region in regions:
-            x = row.get((source, region))
-            arr = np.asarray(x, dtype=float)
-            stacked.append(arr.ravel())
-        n = min(len(arr) for arr in stacked)
-        all_regions = np.vstack([arr[:n] for arr in stacked])
-        all_regions = signal.detrend(all_regions, axis=1, type="linear")
-        global_mean = all_regions.mean(axis=0)
-        global_mean = detrend_zscore_1d(global_mean)
-        signals["GLOBAL"] = global_mean
+    n = len(global_mean)
+    t = np.arange(n) / fs
 
-        n = len(global_mean)
-        t = np.arange(n) / fs
+    envelopes = {}
+    spectrograms: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    for region_key, region_signal in signals.items():
+        bandpassed = bandpass_1d(region_signal, fs, band_lo, band_hi)
+        analytic = cast(np.ndarray, signal.hilbert(bandpassed))
+        envelopes[region_key] = np.abs(analytic)
 
-        envelopes = {}
-        spectrograms: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
-        for region_key, region_signal in signals.items():
-            bandpassed = bandpass_1d(region_signal, fs, band_lo, band_hi)
-            analytic = cast(np.ndarray, signal.hilbert(bandpassed))
-            envelopes[region_key] = np.abs(analytic)
+        freqs, spec_time, power_db = spectrogram_db(bandpassed, fs, win_s, overlap_frac)
+        freq_mask = (freqs >= 0) & (freqs <= fmax)
+        spectrograms[region_key] = (freqs[freq_mask], spec_time, power_db[freq_mask, :])
 
-            freqs, spec_time, power_db = spectrogram_db(bandpassed, fs, win_s, overlap_frac)
-            freq_mask = (freqs >= 0) & (freqs <= fmax)
-            spectrograms[region_key] = (freqs[freq_mask], spec_time, power_db[freq_mask, :])
+    overlap = {}
+    global_envelope = envelopes["GLOBAL"]
+    for region_key in resolved.keys():
+        overlap[region_key] = float(np.corrcoef(envelopes[region_key], global_envelope)[0, 1])
 
-        overlap = {}
-        global_envelope = envelopes["GLOBAL"]
-        for region_key in resolved.keys():
-            overlap[region_key] = float(np.corrcoef(envelopes[region_key], global_envelope)[0, 1])
+    if debug:
+        print(f"[mesomap] Resolved: {resolved} | {context}")
 
-        if debug:
-            print(f"[mesomap] Resolved: {resolved} | {context}")
-
-        return {
-            "t": t,
-            "signals": signals,
-            "envs": envelopes,
-            "specs": spectrograms,
-            "resolved": resolved,
-            "overlap": overlap,
-        }
+    return {
+        "t": t,
+        "signals": signals,
+        "envs": envelopes,
+        "specs": spectrograms,
+        "resolved": resolved,
+        "overlap": overlap,
+    }
 
 
 def run_mesomap_hilbert(
@@ -156,7 +151,7 @@ def run_mesomap_hilbert(
     debug: bool = False,
     context: Optional[str] = None,
 ):
-    return MesomapHilbert().run(
+    return _run_mesomap_hilbert_impl(
         row,
         fs=fs,
         band_lo=band_lo,

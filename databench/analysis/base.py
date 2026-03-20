@@ -95,23 +95,3 @@ class StatFn:
 class AxisFn:
     name: str
     label: str
-
-
-# AnalysisFn is deprecated — use Analysis with run(df) -> AnalysisResult instead.
-# Kept temporarily for backward compatibility during migration.
-@dataclass(frozen=True)
-class AnalysisFn:
-    """Deprecated. Use ``Analysis`` subclass with ``run(df) -> AnalysisResult``."""
-    name: str
-
-    @log_this_fr
-    def run(self, row, debug: bool = False, context: str | None = None, **kwargs):
-        if debug:
-            print(f"[{self.name}] start | {context}")
-        out = self._run_impl(row, debug=debug, context=context, **kwargs)
-        if debug:
-            print(f"[{self.name}] done | {context}")
-        return out
-
-    def _run_impl(self, row, debug: bool = False, context: str | None = None, **kwargs):  # pragma: no cover
-        raise NotImplementedError

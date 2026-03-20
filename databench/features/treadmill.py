@@ -105,7 +105,7 @@ def locomotion_bout_events(
     as_table : bool
         If True, return a DataFrame with one row per bout and columns:
         ['bout_id', 'onset_idx', 'offset_idx', 'onset_t', 'offset_t'].
-        If False (default), return the legacy tuple
+        If False (default), return the tuple
         (bouts, onset_idx, offset_idx, onset_t, offset_t).
     context : mapping[str, Any] | None
         Optional constant columns to append to each returned bout row when

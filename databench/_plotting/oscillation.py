@@ -8,7 +8,6 @@ import numpy as np
 
 from databench._plotting.trace_config import get_style
 from databench._plotting.traces import (
-    smooth_savgol,
     prepare_trace_styled,
     plot_trace_styled,
     time_mask,
@@ -55,7 +54,6 @@ def plot_oscillation_overview(
     speed_time: np.ndarray | None = None,
     speed_values: np.ndarray | None = None,
     smooth_pupil_s: float = 0.5,
-    smooth_speed_s: float = 0.2,
     window: Tuple[float, float] | None = None,
 ) -> plt.Figure:
     """Create a multi-panel oscillation overview figure.
@@ -86,17 +84,6 @@ def plot_oscillation_overview(
             speed_values,
             tread_style,
         )
-    elif speed is not None and len(speed) > 0 and aligned_time is not None:
-        # Fallback: merge_asof-aligned speed (legacy compat)
-        from databench._plotting.traces import prepare_sparse_trace
-        speed = prepare_sparse_trace(
-            aligned_time,
-            speed,
-            method="linear",
-            gap_threshold_s=0.5,
-            smooth=True,
-        )
-        speed = smooth_savgol(speed, smooth_speed_s, est_fs)
 
     has_pupil = pupil is not None and len(pupil) > 0
     has_speed = speed is not None and len(speed) > 0
@@ -192,7 +179,6 @@ def plot_oscillation_burst(
     speed_time: np.ndarray | None = None,
     speed_values: np.ndarray | None = None,
     smooth_pupil_s: float = 0.5,
-    smooth_speed_s: float = 0.2,
 ) -> plt.Figure:
     """Plot a zoomed window around a single burst."""
     s, e = bursts[burst_idx]
@@ -218,7 +204,6 @@ def plot_oscillation_burst(
         speed_time=speed_time,
         speed_values=speed_values,
         smooth_pupil_s=smooth_pupil_s,
-        smooth_speed_s=smooth_speed_s,
         window=window,
     )
     burst_dur = (e - s + 1) / fs

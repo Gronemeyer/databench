@@ -5,10 +5,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from databench import Bench
-from databench.analysis import export_hilbert_envelopes
+from databench.bench import Bench
 from databench.analysis.longitudinal import LongitudinalAnalysis
-from databench.analysis.mesomap_hilbert import MesomapHilbertAnalysis
+from databench.analysis.mesomap_hilbert import MesomapHilbertAnalysis, export_hilbert_envelopes
 from databench.config import resolve_dataset
 from databench.plotting import plot_spectrogram_panel
 

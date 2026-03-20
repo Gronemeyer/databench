@@ -229,7 +229,6 @@ databench/
 │   ├── oscillation.py       # OscillationDetector, OscillationResult (primary API)
 │   ├── oscillation_detector.py  # Legacy oscillation detector with plotting/saving
 │   ├── eta.py               # EtaAnalysis, EtaResult (primary API)
-│   ├── eta_old.py           # Legacy ETA implementation
 │   ├── longitudinal.py      # Longitudinal / multi-session analysis
 │   └── mesomap_hilbert.py   # Mesomap Hilbert envelope analysis (spectrograms)
 ├── features/
@@ -256,8 +255,6 @@ databench/
     ├── overview.py          # Session overview figures
     └── treadmill.py         # Treadmill-specific plots
 
-Scripts/                      # Runnable analysis scripts
-├── legacy/                   # Older analysis scripts
-└── scriptings/               # Active analysis scripts and explorations
+pipeline_demo.py              # Runnable analysis script example
 datasets.toml                 # Local dataset path aliases
 ```
