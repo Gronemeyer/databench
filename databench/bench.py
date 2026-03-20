@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 
 from databench.analysis.base import Analysis, AnalysisResult
-from databench.config import FilterConfig, IOConfig, OutputPaths
+from databench.config import FilterConfig, IOConfig, OutputPaths, _resolve_dataset_alias_for_output
 from databench.features import FeatureFn
 from databench.plotting import Plotter
 from databench import provenance
@@ -788,11 +788,12 @@ class Bench:
 
     @staticmethod
     def _make_output_paths(cfg: IOConfig) -> OutputPaths:
-        # Structure: output_root / script_name / {run_name}_{tag} / YYMMDDHHMMSS
+        # Structure: output_root / dataset_alias / script_name / YYMMDD / tag
+        dataset_alias = _resolve_dataset_alias_for_output(cfg.input_path)
         script_name = cfg.script_name or "unknown"
-        run_tag = f"{cfg.run_name}_{cfg.tag}" if cfg.tag else cfg.run_name
-        timestamp = datetime.now().strftime("%y%m%d%H%M%S")
-        run_dir = cfg.output_root / script_name / run_tag / timestamp
+        date_stamp = datetime.now().strftime("%y%m%d")
+        tag = cfg.tag or "untagged"
+        run_dir = cfg.output_root / dataset_alias / script_name / date_stamp / tag
         plots = run_dir / "plots"
         reports = run_dir / "reports"
         stats = run_dir / "stats"

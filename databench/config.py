@@ -111,6 +111,47 @@ def resolve_dataset(alias: str | None = None) -> Path:
     return path
 
 
+def _resolve_dataset_alias_for_output(input_path: Path | None = None) -> str:
+    """Best-effort dataset alias for output folder naming.
+
+    Resolution order:
+      1. ``DATABENCH_DATASET`` env var
+      2. ``DATASET`` env var
+      3. Alias matching ``input_path`` in ``datasets.toml`` (if provided)
+      4. ``default`` in ``datasets.toml``
+      5. ``"dataset"`` fallback
+    """
+    alias = os.environ.get("DATABENCH_DATASET") or os.environ.get("DATASET")
+    if alias:
+        return alias
+
+    try:
+        toml_path = _find_datasets_toml()
+    except FileNotFoundError:
+        return "dataset"
+
+    with open(toml_path, "rb") as f:
+        cfg = tomllib.load(f)
+
+    datasets: dict[str, str] = cfg.get("datasets", {})
+
+    if input_path is not None:
+        try:
+            target = Path(input_path).resolve()
+            for name, raw_path in datasets.items():
+                if Path(raw_path).resolve() == target:
+                    return name
+        except Exception:
+            # Fall through to default alias resolution.
+            pass
+
+    default_alias = cfg.get("default")
+    if isinstance(default_alias, str) and default_alias:
+        return default_alias
+
+    return "dataset"
+
+
 # -- Output context (new API) -----------------------------------------------
 
 @dataclass(frozen=True)

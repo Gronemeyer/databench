@@ -24,7 +24,7 @@ from datetime import datetime
 import pandas as pd
 
 from databench._io.loader import load_dataset
-from databench.config import OutputContext, _detect_script_name
+from databench.config import OutputContext, _detect_script_name, _resolve_dataset_alias_for_output
 
 
 # ── Exceptions ─────────────────────────────────────────────────────────────
@@ -55,7 +55,7 @@ class Project:
     analyst, lab : str
         Metadata recorded in output provenance.
     run_name : str
-        Name for this analysis run (used in output directory structure).
+        Name for this analysis run (used in report/provenance metadata).
     tag : str
         Short tag appended to run directory name.
     """
@@ -74,12 +74,12 @@ class Project:
         self._df: pd.DataFrame = load_dataset(self._dataset_path)
 
         # Build output directory structure
-        # outputs/<run_name>_<tag>/<YYMMDD_HHMMSS>/{plots,reports,stats}
+        # outputs/<dataset_alias>/<script_name>/<YYMMDD>/<tag>/{plots,reports,stats}
+        dataset_alias = _resolve_dataset_alias_for_output(self._dataset_path)
         script_name = _detect_script_name()
-        tag_suffix = f"_{tag}" if tag else ""
-        run_root = Path(output_root) / f"{run_name}{tag_suffix}"
-        run_stamp = datetime.now().strftime("%y%m%d_%H%M%S")
-        run_dir = run_root / run_stamp
+        date_stamp = datetime.now().strftime("%y%m%d")
+        tag_folder = tag or "untagged"
+        run_dir = Path(output_root) / dataset_alias / script_name / date_stamp / tag_folder
 
         self._context = OutputContext(
             run_dir=run_dir,

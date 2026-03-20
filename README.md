@@ -117,12 +117,17 @@ python Scripts/scriptings/event-based.py
 Every script run produces a timestamped output folder:
 
 ```
-outputs/<run_name>_<tag>/<YYMMDD_HHMMSS>/
+outputs/<dataset_alias>/<script_name>/<YYMMDD>/<tag>/
 ├── plots/          # SVG/PNG figures
 ├── stats/          # CSV tables
 ├── reports/        # Markdown summary
 └── summary.json    # Machine-readable run metadata
 ```
+
+`dataset_alias` comes from `DATABENCH_DATASET` (or `DATASET`) when set,
+otherwise from the `default` entry in `datasets.toml`.
+`script_name` is the executing script stem, and `tag` defaults to `untagged`
+when no tag is provided.
 
 `SaveableFigure.save()` writes to `plots/`, `result.save_events()` writes to
 `stats/`, and `proj.save_report()` writes to `reports/`. Reports use relative
@@ -141,8 +146,8 @@ proj = Project(
     output_root="outputs",   # root output directory
     analyst="Name",          # recorded in reports
     lab="Lab Name",          # recorded in reports
-    run_name="my-analysis",  # output subfolder name
-    tag="description",       # appended to run_name
+    run_name="my-analysis",  # report/provenance label
+    tag="description",       # appended to run folder name
 )
 ```
 
