@@ -17,54 +17,16 @@ from typing import Optional, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.signal import savgol_filter
 
 from databench.analysis.base import AnalysisResult
 from databench.analysis.oscillation_detector import OscillationResult
 from databench.plotting.base import Plotter
 from databench.registry import register_plotter
 from databench._utils._logger import get_logger
+from databench._plotting.traces import smooth_savgol, time_mask
+from databench.analysis.oscillation import shade_bursts
 
 _LOG = get_logger("databench.plotting.oscillation")
-
-
-# ─── Utility helpers ──────────────────────────────────────────────────────
-
-def smooth_savgol(signal: np.ndarray, window_s: float, fs: float, polyorder: int = 3) -> np.ndarray:
-    """Apply Savitzky-Golay smoothing. Returns original if window is too short."""
-    if signal is None or len(signal) == 0:
-        return signal
-    window_length = int(round(window_s * fs))
-    if window_length % 2 == 0:
-        window_length += 1
-    window_length = max(3, window_length)
-    if len(signal) > window_length:
-        return savgol_filter(signal, window_length=window_length, polyorder=polyorder)
-    return signal
-
-
-def shade_bursts(ax, t: np.ndarray, bursts: list, t_lo: float | None = None, t_hi: float | None = None) -> None:
-    """Add translucent orange spans for each detected burst."""
-    for s, e in bursts:
-        ts, te = t[s], t[e]
-        if t_lo is not None and te < t_lo:
-            continue
-        if t_hi is not None and ts > t_hi:
-            continue
-        ax.axvspan(ts, te, color="#ff7f0e", alpha=0.12)
-
-
-def time_mask(t: np.ndarray, window: Tuple[float, float] | None):
-    """Boolean mask + index slice for a time window. Returns (None, None) if empty."""
-    if t is None or len(t) == 0:
-        return None, None
-    if window is None:
-        return np.ones(len(t), dtype=bool), slice(None)
-    m = (t >= window[0]) & (t <= window[1])
-    idx = np.where(m)[0]
-    if len(idx) == 0:
-        return None, None
-    return m, slice(idx[0], idx[-1] + 1)
 
 
 # ─── Overview Plotter ─────────────────────────────────────────────────────

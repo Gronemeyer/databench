@@ -9,6 +9,10 @@ from databench.analysis.eta import (
     EtaAnalysis,
     EtaResult,
 )
+from databench.analysis.locomotion import (
+    locomotion_bout_events,
+    locomotion_events,
+)
 
 
 __all__ = [
@@ -16,4 +20,6 @@ __all__ = [
     "OscillationResult",
     "EtaAnalysis",
     "EtaResult",
+    "locomotion_bout_events",
+    "locomotion_events",
 ]
