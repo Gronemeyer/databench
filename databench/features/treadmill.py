@@ -210,7 +210,7 @@ class LocomotionBoutEventsExtractor:
 
         Replaces the 7-parameter constructor boilerplate::
 
-            bouts_feat = bench.get_feature("locomotion_bouts_n")
+            bouts_feat = LocomotionBoutsCount()
             extractor = LocomotionBoutEventsExtractor.from_feature(bouts_feat)
         """
         return cls(

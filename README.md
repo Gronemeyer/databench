@@ -205,7 +205,7 @@ entry in `TRACE_STYLES`.
 ```
 databench/
 ├── __init__.py              # Public exports
-├── bench.py                 # Internal coordinator (not part of the script-facing API)
+├── bench.py                 # Standalone utility functions (build_long, build_session_table, etc.)
 ├── project.py               # Project entry point, output directory management
 ├── session.py               # Session, SessionGroup, AlignedData, SaveableFigure
 ├── config.py                # OutputContext, resolve_dataset, condition colours

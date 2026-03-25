@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Callable, List, Optional, Sequence, Type, Union
 
 
-# Global class lists — consumed by Bench.__init__ to seed instance registries
+# Global class lists — used by default feature/analysis/plotter registration
 FEATURE_CLASSES: List[Type] = []
 ANALYSIS_CLASSES: List[Type] = []
 PLOTTER_CLASSES: List[Type] = []

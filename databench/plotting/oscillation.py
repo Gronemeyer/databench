@@ -347,7 +347,7 @@ class OscillationReportPagePlotter(Plotter):
 class OscillationEtaGroupPlotter(Plotter):
     """Group mean ± SEM ETA for each ROI at oscillation burst onset or offset.
 
-    Accepts an ``AnalysisResult`` (auto-supplied by ``bench.plot()``).
+    Accepts an ``AnalysisResult`` (auto-supplied by ``analysis.plot()``).
     Extracts ``eta_group`` from ``result.data["eta_group"]``, matching the
     ``EtaConditionPlotter`` contract.
     """

@@ -21,10 +21,12 @@ from __future__ import annotations
 from pathlib import Path
 from datetime import datetime
 
+import matplotlib.pyplot as plt
 import pandas as pd
 
 from databench._io.loader import load_dataset
-from databench.config import OutputContext, _detect_script_name, _resolve_dataset_alias_for_output
+from databench.config import FilterConfig, OutputContext, _detect_script_name, _resolve_dataset_alias_for_output
+from databench.utils import drop_rows
 
 
 # ── Exceptions ─────────────────────────────────────────────────────────────
@@ -72,6 +74,7 @@ class Project:
     ) -> None:
         self._dataset_path = Path(dataset)
         self._df: pd.DataFrame = load_dataset(self._dataset_path)
+        self.filter_config: FilterConfig | None = None
 
         # Build output directory structure
         # outputs/<dataset_alias>/<script_name>/<YYMMDD>/<tag>/{plots,reports,stats}
@@ -93,6 +96,46 @@ class Project:
             script_name=script_name,
         )
         self._context.ensure_dirs()
+
+    @property
+    def df(self) -> pd.DataFrame:
+        """The project dataset (potentially filtered)."""
+        return self._df
+
+    def set_filters(self, drop_rows: tuple = ()) -> "Project":
+        """Set dataset filters for later use with ``filter_data()``."""
+        self.filter_config = FilterConfig(drop_rows=drop_rows)
+        return self
+
+    def filter_data(self, df: pd.DataFrame, drop_rows_list: tuple | None = None) -> pd.DataFrame:
+        """Filter rows using stored or provided drop rules."""
+        if drop_rows_list is None and self.filter_config is not None:
+            drop_rows_list = self.filter_config.drop_rows
+        return drop_rows(df, drop_rows_list or ())
+
+    def filter(self, drop_rows: tuple | None = None, **kwargs) -> "Project":
+        """Apply filters to the project DataFrame in-place and return self.
+
+        Keyword arguments are matched against index levels::
+
+            project.filter(Task="task-spont")
+
+        Or use ``drop_rows`` for explicit multi-index tuple exclusion.
+        """
+        if drop_rows is not None:
+            self.set_filters(drop_rows)
+
+        df = self.df
+        if self.filter_config is not None:
+            df = self.filter_data(df)
+
+        for level, value in kwargs.items():
+            if level in df.index.names:
+                mask = df.index.get_level_values(level) == value
+                df = df.loc[mask]
+
+        self._df = df
+        return self
 
     # ── Selection ──────────────────────────────────────────────────────────
 
@@ -271,6 +314,52 @@ class Project:
             dataset_path=self._dataset_path,
             extra_metadata=extra_metadata,
         )
+
+    # ── Save helpers ───────────────────────────────────────────────────────
+
+    def save_table(
+        self,
+        df: pd.DataFrame,
+        name: str = "table.csv",
+    ) -> Path:
+        """Save a DataFrame to the stats output directory.
+
+        Returns the path to the saved file.
+        """
+        out_dir = self._context.stats_dir
+        path = out_dir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.suffix == ".parquet":
+            df.to_parquet(path)
+        else:
+            path = path.with_suffix(".csv") if path.suffix not in (".csv",) else path
+            df.to_csv(path)
+        return path
+
+    def save_figure(
+        self,
+        fig,
+        name: str,
+        dpi: int = 300,
+        bbox_inches: str = "tight",
+    ) -> Path:
+        """Save a matplotlib figure to the plots output directory."""
+        out_dir = self._context.plots_dir
+        path = out_dir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(path, dpi=dpi, bbox_inches=bbox_inches)
+        return path
+
+    def save_and_close(
+        self,
+        fig,
+        name: str,
+        dpi: int = 300,
+    ) -> Path:
+        """Save a figure and close it. Returns the output path."""
+        path = self.save_figure(fig, name, dpi=dpi)
+        plt.close(fig)
+        return path
 
     def __repr__(self) -> str:
         n = len(self._df)
