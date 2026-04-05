@@ -1,6 +1,8 @@
 /outputs
-*/*/__pycache__/
-/__pycache__
+*/*/*/__pycache__/
+*/__pycache__/*
+__pycache__/
+*.py[cod]
 /databench.egg-info
 /databench/__pycache__
 *.csv
