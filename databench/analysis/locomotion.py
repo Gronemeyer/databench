@@ -1,80 +1,85 @@
-"""Locomotion bout detection and event generation.
+"""Locomotion bout detection, event generation, and treadmill features.
 
-Provides:
+Key public API:
 
 * :func:`locomotion_bout_events` — detect locomotion bouts from speed traces
   (accepts raw arrays or grouped DataFrames).
 * :func:`locomotion_events` — detect locomotion-bout events across a
-  :class:`~databench.session.SessionGroup` and return an events table
-  compatible with :meth:`~databench.analysis.eta.EtaAnalysis.run`.
+  :class:`~databench.session.SessionGroup` for ETA.
+* :class:`MeanSpeedCMS`, :class:`StdSpeedCMS`, :class:`TotalDistanceM` —
+  simple per-session speed/distance features.
+* :class:`LocomotionBoutsCount`, :class:`LocomotionBoutSpeedMeanCMS`,
+  :class:`LocomotionBoutDistanceM`, :class:`LocomotionBoutDurationS` —
+  bout-based features.
+* :class:`LocomotionBoutEventsExtractor` — reusable extractor for
+  long-table pipelines.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Iterable, Mapping, Sequence, Tuple
+import warnings
+from dataclasses import dataclass
+from typing import Any, Mapping, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
-from databench._signal.segments import segments_from_mask
-from databench._signal.events import make_events, REQUIRED_COLUMNS
+from databench.analysis._signal.epoching import (
+    make_events,
+    REQUIRED_COLUMNS,
+    detect_epochs,
+    START_IDX,
+    END_IDX,
+)
+from databench.analysis.base import FeatureFn
+from databench._utils import as_1d, clean_xy, get_first
 
 if TYPE_CHECKING:
     from databench.session import Session, SessionGroup
 
+SOURCE_COLOR = "#2ca02c"
 
-# ── Low-level helpers ──────────────────────────────────────────────────────
-
-def _merge_gaps_by_time(
-    segments: Iterable[Tuple[int, int]],
-    t: np.ndarray,
-    min_gap_s: float,
-) -> list[Tuple[int, int]]:
-    merged: list[Tuple[int, int]] = []
-    for s, e in segments:
-        if not merged:
-            merged.append((s, e))
-            continue
-        _, prev_end = merged[-1]
-        gap = float(t[s] - t[prev_end])
-        if gap <= min_gap_s:
-            merged[-1] = (merged[-1][0], e)
-        else:
-            merged.append((s, e))
-    return merged
+__all__ = [
+    "locomotion_bout_events",
+    "locomotion_events",
+    "LocomotionBoutEventsExtractor",
+    "MeanSpeedCMS",
+    "StdSpeedCMS",
+    "TotalDistanceM",
+    "LocomotionBoutFeature",
+    "LocomotionBoutsCount",
+    "LocomotionBoutSpeedMeanCMS",
+    "LocomotionBoutDistanceM",
+    "LocomotionBoutDurationS",
+]
 
 
-def _apply_min_duration_by_time(
-    segments: Iterable[Tuple[int, int]],
-    t: np.ndarray,
-    min_duration_s: float,
-) -> list[Tuple[int, int]]:
-    sample_interval = float(np.nanmedian(np.diff(t))) if t.size > 1 else 0.0
-    return [
-        (s, e) for s, e in segments
-        if float(t[e] - t[s] + sample_interval) >= min_duration_s
-    ]
+# ── Private helpers ────────────────────────────────────────────────────────
 
-
-def _locomotion_bouts(
+def _bout_stats(
     t: np.ndarray,
     speed_cms: np.ndarray,
-    *,
-    min_speed_cms: float,
-    min_duration_s: float,
-    merge_gap_s: float,
-) -> list[Tuple[int, int]]:
-    mask = speed_cms >= min_speed_cms
-    segs = segments_from_mask(mask)
-    if not segs:
-        return []
-    if merge_gap_s > 0:
-        segs = _merge_gaps_by_time(segs, t, merge_gap_s)
-    if min_duration_s > 0:
-        segs = _apply_min_duration_by_time(segs, t, min_duration_s)
-    return segs
+    epochs: pd.DataFrame,
+) -> None:
+    """Add ``mean_speed_cms`` and ``distance_m`` columns to an EpochTable *in place*."""
+    mean_speeds: list[float] = []
+    distances_m: list[float] = []
+    for _, row in epochs.iterrows():
+        s, e = int(row[START_IDX]), int(row[END_IDX])
+        mean_speeds.append(float(np.nanmean(np.abs(speed_cms[s : e + 1]))))
+        time_steps = np.diff(t[s : e + 1])
+        dist_cm = float(np.nansum(speed_cms[s + 1 : e + 1] * time_steps))
+        distances_m.append(dist_cm / 100.0)
+    epochs["mean_speed_cms"] = mean_speeds
+    epochs["distance_m"] = distances_m
 
 
-# ── Public function ────────────────────────────────────────────────────────
+def _nanmean_no_warn(values) -> float:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        return float(np.nanmean(values))
+
+
+# ── Bout detection ─────────────────────────────────────────────────────────
 
 def locomotion_bout_events(
     t: np.ndarray | pd.DataFrame,
@@ -83,17 +88,17 @@ def locomotion_bout_events(
     min_speed_cms: float = 0.5,
     min_duration_s: float = 1.0,
     merge_gap_s: float = 0.5,
-    as_table: bool = False,
     context: Mapping[str, Any] | None = None,
     group_cols: tuple[str, ...] = ("Subject", "Session", "Task"),
     time_col: str = "time_elapsed_s",
     speed_col: str = "speed_mm",
     speed_scale_to_cms: float = 10.0,
-) -> pd.DataFrame | tuple:
-    """Detect locomotion bouts from speed traces.
+) -> pd.DataFrame:
+    """Detect locomotion bouts and return a standard EpochTable.
 
     Accepts either raw arrays ``(t, speed_cms)`` or a grouped DataFrame.
-    Returns a DataFrame if *as_table=True* or when *t* is a DataFrame.
+    Always returns a DataFrame with the standard epoch columns plus
+    ``mean_speed_cms`` and ``distance_m``.
     """
     if isinstance(t, pd.DataFrame):
         tables: list[pd.DataFrame] = []
@@ -118,54 +123,34 @@ def locomotion_bout_events(
                 min_speed_cms=min_speed_cms,
                 min_duration_s=min_duration_s,
                 merge_gap_s=merge_gap_s,
-                as_table=True,
                 context=local_context,
             )
             if bout_table.empty:
                 continue
             tables.append(bout_table)
 
-        base_cols = ["bout_id", "onset_idx", "offset_idx", "onset_t", "offset_t"]
-        extra_cols = list(group_cols)
-        if context:
-            extra_cols.extend([c for c in context.keys() if c not in extra_cols])
-        out_cols = base_cols + extra_cols
-        out = pd.concat(tables, ignore_index=True) if tables else pd.DataFrame(columns=out_cols)
-        for col in out_cols:
-            if col not in out.columns:
-                out[col] = np.nan
-        return out[out_cols]
+        if not tables:
+            return pd.DataFrame()
+        return pd.concat(tables, ignore_index=True)
 
-    bouts = _locomotion_bouts(
-        t,
-        speed_cms,
-        min_speed_cms=min_speed_cms,
+    # ── Array path ─────────────────────────────────────────────────────
+    mask = speed_cms >= min_speed_cms
+    epochs = detect_epochs(
+        mask, t,
+        event_type="locomotion_bout",
         min_duration_s=min_duration_s,
         merge_gap_s=merge_gap_s,
+        metadata=dict(context) if context else None,
     )
-    onset_idx = np.array([s for s, _ in bouts], dtype=int)
-    offset_idx = np.array([e for _, e in bouts], dtype=int)
-    onset_t = t[onset_idx].astype(float) if len(bouts) else np.array([], dtype=float)
-    offset_t = t[offset_idx].astype(float) if len(bouts) else np.array([], dtype=float)
-
-    if as_table:
-        table = pd.DataFrame(
-            {
-                "bout_id": np.arange(len(bouts), dtype=int),
-                "onset_idx": onset_idx,
-                "offset_idx": offset_idx,
-                "onset_t": onset_t,
-                "offset_t": offset_t,
-            }
-        )
-        if context:
-            for key, value in context.items():
-                table[key] = value
-        return table
-    return bouts, onset_idx, offset_idx, onset_t, offset_t
+    if not epochs.empty:
+        _bout_stats(t, speed_cms, epochs)
+    else:
+        epochs["mean_speed_cms"] = []
+        epochs["distance_m"] = []
+    return epochs
 
 
-# ── Locomotion-bout events ─────────────────────────────────────────────────
+# ── Session-level event generation ─────────────────────────────────────────
 
 def locomotion_events(
     sessions: "SessionGroup | list[Session]",
@@ -226,21 +211,23 @@ def locomotion_events(
             continue
         speed_cms = speed / speed_scale_to_cms
 
-        _, _, _, onset_t, offset_t = locomotion_bout_events(
+        epochs = locomotion_bout_events(
             t,
             speed_cms,
             min_speed_cms=min_speed_cms,
             min_duration_s=min_duration_s,
             merge_gap_s=merge_gap_s,
-            as_table=False,
         )
+
+        if epochs.empty:
+            continue
 
         times_by_type: dict[str, np.ndarray] = {}
         for etype in event_types:
             if etype == "onset":
-                times_by_type[etype] = onset_t
+                times_by_type[etype] = epochs["start_s"].to_numpy()
             elif etype == "offset":
-                times_by_type[etype] = offset_t
+                times_by_type[etype] = epochs["end_s"].to_numpy()
             else:
                 raise ValueError(
                     f"Unknown locomotion event type {etype!r}. "
@@ -274,3 +261,182 @@ def locomotion_events(
             cols.append("Condition")
         return pd.DataFrame(columns=cols)
     return pd.concat(non_empty, ignore_index=True)
+
+
+# ── Bout-events extractor (long-table pipelines) ──────────────────────────
+
+@dataclass(frozen=True)
+class LocomotionBoutEventsExtractor:
+    """Reusable, explicit bout-event extractor for long-table pipelines."""
+
+    min_speed_cms: float = 0.5
+    min_duration_s: float = 1.0
+    merge_gap_s: float = 0.5
+    group_cols: tuple[str, ...] = ("Subject", "Session", "Task")
+    time_col: str = "time_elapsed_s"
+    speed_col: str = "speed_mm"
+    speed_scale_to_cms: float = 10.0
+
+    @classmethod
+    def from_feature(
+        cls,
+        feat: "LocomotionBoutFeature",
+        *,
+        group_cols: tuple[str, ...] = ("Subject", "Session", "Task"),
+        time_col: str = "time_elapsed_s",
+        speed_col: str = "speed_mm",
+        speed_scale_to_cms: float = 10.0,
+    ) -> "LocomotionBoutEventsExtractor":
+        """Build an extractor from a LocomotionBoutFeature's thresholds."""
+        return cls(
+            min_speed_cms=feat.min_speed_cms,
+            min_duration_s=feat.min_duration_s,
+            merge_gap_s=feat.merge_gap_s,
+            group_cols=group_cols,
+            time_col=time_col,
+            speed_col=speed_col,
+            speed_scale_to_cms=speed_scale_to_cms,
+        )
+
+    def run(self, long: pd.DataFrame) -> pd.DataFrame:
+        return locomotion_bout_events(
+            long,
+            min_speed_cms=self.min_speed_cms,
+            min_duration_s=self.min_duration_s,
+            merge_gap_s=self.merge_gap_s,
+            group_cols=self.group_cols,
+            time_col=self.time_col,
+            speed_col=self.speed_col,
+            speed_scale_to_cms=self.speed_scale_to_cms,
+        )
+
+    def __call__(self, long: pd.DataFrame) -> pd.DataFrame:
+        return self.run(long)
+
+
+# ── Feature extractors ─────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class MeanSpeedCMS(FeatureFn):
+    """Mean treadmill speed per session in cm/s."""
+
+    name: str = "speed_mean_cms"
+    label: str = "Speed (cm/s)"
+    color: str = SOURCE_COLOR
+    source: str = "treadmill"
+    plotter: str = "boxplot"
+
+    def _run_impl(self, row) -> float:
+        t, spd_mm = clean_xy(
+            get_first(row, [("treadmill", "time_elapsed_s"), ("encoder", "time_elapsed_s")]),
+            get_first(row, [("treadmill", "speed_mm"), ("encoder", "speed")]),
+        )
+        return float(np.nanmean(spd_mm) / 10.0)
+
+
+@dataclass(frozen=True)
+class StdSpeedCMS(FeatureFn):
+    """Standard deviation of treadmill speed in cm/s."""
+
+    name: str = "speed_std_cms"
+    label: str = "Speed SD (cm/s)"
+    color: str = SOURCE_COLOR
+    source: str = "treadmill"
+
+    def _run_impl(self, row) -> float:
+        t, spd_mm = clean_xy(
+            get_first(row, [("treadmill", "time_elapsed_s"), ("encoder", "time_elapsed_s")]),
+            get_first(row, [("treadmill", "speed_mm"), ("encoder", "speed")]),
+        )
+        return float(np.nanstd(spd_mm) / 10.0)
+
+
+@dataclass(frozen=True)
+class TotalDistanceM(FeatureFn):
+    """Total distance traveled in meters during the session."""
+
+    name: str = "distance_m"
+    label: str = "Distance (m)"
+    color: str = SOURCE_COLOR
+    source: str = "treadmill"
+    plotter: str = "boxplot"
+
+    def _run_impl(self, row) -> float:
+        dist_mm = as_1d(get_first(row, [("treadmill", "distance_mm"), ("encoder", "distance")]))
+        dist_mm = dist_mm[np.isfinite(dist_mm)]
+        return float((dist_mm[-1] - dist_mm[0]) / 1000.0)
+
+
+@dataclass(frozen=True)
+class LocomotionBoutFeature(FeatureFn):
+    """Base class for locomotion-bout features with shared thresholds."""
+
+    color: str = SOURCE_COLOR
+    source: str = "treadmill"
+    plotter: str = "boxplot"
+    min_speed_cms: float = 5
+    min_duration_s: float = 1.5
+    merge_gap_s: float = 1.5
+
+    def _bout_params(self) -> dict[str, float]:
+        return {
+            "min_speed_cms": self.min_speed_cms,
+            "min_duration_s": self.min_duration_s,
+            "merge_gap_s": self.merge_gap_s,
+        }
+
+    def _get_bouts(self, row):
+        t, spd_mm = clean_xy(
+            get_first(row, [("treadmill", "time_elapsed_s"), ("encoder", "time_elapsed_s")]),
+            get_first(row, [("treadmill", "speed_mm"), ("encoder", "speed")]),
+        )
+        speed_cms = spd_mm / 10.0
+        return locomotion_bout_events(t, speed_cms, **self._bout_params())
+
+
+@dataclass(frozen=True)
+class LocomotionBoutsCount(LocomotionBoutFeature):
+    """Count of locomotion bouts per session."""
+
+    name: str = "locomotion_bouts_n"
+    label: str = "Locomotion bouts (n)"
+
+    def _run_impl(self, row) -> float:
+        epochs = self._get_bouts(row)
+        return float(len(epochs))
+
+
+@dataclass(frozen=True)
+class LocomotionBoutSpeedMeanCMS(LocomotionBoutFeature):
+    """Mean speed across locomotion bouts in cm/s."""
+
+    name: str = "locomotion_bout_speed_mean_cms"
+    label: str = "Bout speed (cm/s)"
+
+    def _run_impl(self, row) -> float:
+        epochs = self._get_bouts(row)
+        return _nanmean_no_warn(epochs["mean_speed_cms"]) if not epochs.empty else float("nan")
+
+
+@dataclass(frozen=True)
+class LocomotionBoutDistanceM(LocomotionBoutFeature):
+    """Mean distance across locomotion bouts in meters."""
+
+    name: str = "locomotion_bout_distance_m"
+    label: str = "Bout distance (m)"
+
+    def _run_impl(self, row) -> float:
+        epochs = self._get_bouts(row)
+        return _nanmean_no_warn(epochs["distance_m"]) if not epochs.empty else float("nan")
+
+
+@dataclass(frozen=True)
+class LocomotionBoutDurationS(LocomotionBoutFeature):
+    """Mean duration across locomotion bouts in seconds."""
+
+    name: str = "locomotion_bout_duration_s"
+    label: str = "Bout duration (s)"
+
+    def _run_impl(self, row) -> float:
+        epochs = self._get_bouts(row)
+        return _nanmean_no_warn(epochs["duration_s"]) if not epochs.empty else float("nan")

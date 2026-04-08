@@ -1,13 +1,27 @@
 """Simple centralized logging for databench with ANSI colors and aligned columns.
 
-Just import and use:
+Just import and use::
+
     from databench._utils._logger import get_logger
-    logger = get_logger("MyClass")
-    logger.info("Hello world")
+    _log = get_logger(__name__)
+    _log.info("Hello world")
+
+For analysis entry-points, decorate with ``@log_run``::
+
+    from databench._utils._logger import log_run
+
+    @log_run
+    def run(self, df):
+        ...
+
+``log_run`` logs at INFO on entry/exit with smart arg summaries and
+elapsed wall-clock time.  ``log_this_fr`` remains available for verbose
+DEBUG-level tracing of every call (e.g. per-row feature extractors).
 """
 
 import functools
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -83,6 +97,94 @@ def log_this_fr(func):
             logger.exception(f"Exception in {func.__qualname__}")
             raise
 
+    return wrapper
+
+
+# ── Helpers for log_run ────────────────────────────────────────────────────
+
+def _summarize_arg(obj: object) -> str:
+    """Return a compact, human-readable summary of *obj* for log messages."""
+    import numpy as np
+    import pandas as pd
+
+    if isinstance(obj, pd.DataFrame):
+        return f"DataFrame({obj.shape[0]}x{obj.shape[1]})"
+    if isinstance(obj, pd.Series):
+        return f"Series(len={len(obj)})"
+    if isinstance(obj, np.ndarray):
+        return f"ndarray(shape={obj.shape})"
+    # SessionGroup (has __len__ and 'label' is absent)
+    cls = type(obj).__name__
+    if cls == "SessionGroup":
+        return f"SessionGroup(n={len(obj)})"
+    if cls == "Session":
+        label = getattr(obj, "label", None)
+        return f"Session({label})" if label else "Session"
+    if cls == "AlignedData":
+        return "AlignedData"
+    return cls
+
+
+def _summarize_result(obj: object) -> str:
+    """Return a compact summary of an analysis result for log messages."""
+    cls = type(obj).__name__
+    if cls == "AnalysisResult":
+        name = getattr(obj, "name", "?")
+        data = getattr(obj, "data", None)
+        keys = list(data.keys()) if isinstance(data, dict) else None
+        extra = f", keys={keys}" if keys else ""
+        return f"AnalysisResult(name={name}{extra})"
+    import pandas as pd
+    if isinstance(obj, pd.DataFrame):
+        return f"DataFrame({obj.shape[0]}x{obj.shape[1]})"
+    return cls
+
+
+_LOG_RUN_ATTR = "__log_run_wrapped__"
+
+
+def log_run(func):
+    """INFO-level decorator for analysis entry points.
+
+    Logs method name, summarized arguments, wall-clock elapsed time,
+    and a compact summary of the return value.  On exception, logs at
+    ERROR with full traceback.
+
+    Safe to stack with ``@log_this_fr`` — this decorator sets a sentinel
+    attribute (``__log_run_wrapped__``) that ``Analysis.__init_subclass__``
+    checks to avoid double-wrapping.
+    """
+    if getattr(func, _LOG_RUN_ATTR, False):
+        return func  # already wrapped
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        # Resolve a readable name for the logger tag
+        self = args[0] if args else None
+        qualname = func.__qualname__
+        tag = qualname
+
+        logger = get_logger(tag)
+
+        # Summarize positional args (skip self)
+        parts = [_summarize_arg(a) for a in args[1:]]
+        for k, v in kwargs.items():
+            parts.append(f"{k}={_summarize_arg(v)}")
+        arg_str = ", ".join(parts) if parts else ""
+
+        logger.info(f"Starting | {arg_str}" if arg_str else "Starting")
+        t0 = time.perf_counter()
+        try:
+            result = func(*args, **kwargs)
+            elapsed = time.perf_counter() - t0
+            logger.info(f"Completed ({elapsed:.2f}s) | {_summarize_result(result)}")
+            return result
+        except Exception:
+            elapsed = time.perf_counter() - t0
+            logger.exception(f"Failed ({elapsed:.2f}s)")
+            raise
+
+    setattr(wrapper, _LOG_RUN_ATTR, True)
     return wrapper
 
 

@@ -18,6 +18,7 @@ Usage::
 from __future__ import annotations
 
 import json
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -27,11 +28,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from databench._signal.epochs import extract_epoch_interpolated
+from databench.analysis._signal.epoching import extract_epoch_interpolated
+from databench._utils._logger import get_logger, log_run
 from databench.config import OutputContext
 
+_log = get_logger(__name__)
 
-# ── ETA computation (moved from _signal.eta_core) ─────────────────────────
+
+# ── ETA computation ─────────────────────────
 
 def eta_baselined(
     df: pd.DataFrame,
@@ -111,11 +115,11 @@ def eta_baselined(
                 if clean_count < min_clean_baseline_points and fallback_to_full_baseline:
                     baseline_mask = baseline_mask_full
 
-            baseline_value = (
-                np.nanmean(roi_epoch[baseline_mask])
-                if baseline_mask.any()
-                else np.nan
-            )
+            bl_samples = roi_epoch[baseline_mask]
+            if baseline_mask.any() and np.any(np.isfinite(bl_samples)):
+                baseline_value = np.nanmean(bl_samples)
+            else:
+                baseline_value = np.nan
             roi_epoch = roi_epoch - baseline_value
 
             output_frames.append(
@@ -155,14 +159,15 @@ def plot_eta_by_condition(
     if conditions is None:
         conditions = sorted(d["Condition"].unique())
     if condition_colors is None:
-        default_palette = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
+        from databench.plotting import get_theme
+        default_palette = get_theme().colors
         condition_colors = {c: default_palette[i % len(default_palette)] for i, c in enumerate(conditions)}
 
     n = len(rois)
     nrows = max(1, int(np.ceil(n / ncols)))
     fig, axes = plt.subplots(
         nrows, ncols,
-        figsize=(7 * ncols / 2, 3 * nrows),
+        figsize=(4.0 * ncols, 3.2 * nrows + 1.0),
         sharex=True, sharey="row",
     )
     axes = np.atleast_1d(axes).ravel()
@@ -183,8 +188,9 @@ def plot_eta_by_condition(
             )
         ax.axvline(0, color="k", lw=1)
         ax.axhline(0, color="k", lw=0.5, alpha=0.5)
-        ax.set_title(roi, fontsize=10)
-        ax.tick_params(axis="both", labelsize=9)
+        ax.set_title(roi)
+        from databench.plotting import style_axes
+        style_axes(ax)
 
     for ax in axes[n:]:
         ax.axis("off")
@@ -193,8 +199,8 @@ def plot_eta_by_condition(
     if handles:
         fig.legend(
             handles, labels,
-            loc="upper center", bbox_to_anchor=(0.5, 0.92),
-            ncol=min(4, len(labels)), frameon=False,
+            loc="upper center", bbox_to_anchor=(0.5, 0.95),
+            ncol=min(6, len(labels)), frameon=False,
         )
 
     baseline_label = (
@@ -202,13 +208,15 @@ def plot_eta_by_condition(
         if baseline_s is None
         else f"baseline-subtracted [{baseline_s[0]:g}, {baseline_s[1]:g}] s"
     )
-    fig.supxlabel(f"Time relative to {event} (s)", y=0.02)
-    fig.supylabel("Group mean \u00b1 SEM (subject-averaged)", x=0.03)
+    fig.supxlabel(f"Time relative to {event} (s)", y=0.01)
+    fig.supylabel("Group mean \u00b1 SEM (subject-averaged)", x=0.02)
     fig.suptitle(
         f"ETA across ROIs \u2014 {event}\n{baseline_label}",
-        y=0.98,
     )
-    fig.subplots_adjust(left=0.14, right=0.98, bottom=0.09, top=0.84, hspace=0.28, wspace=0.35)
+    fig.tight_layout(rect=[0.04, 0.03, 1.0, 0.88])
+    handles, _ = axes[0].get_legend_handles_labels()
+    if handles:
+        fig.subplots_adjust(top=0.82)
     return fig
 
 
@@ -235,7 +243,7 @@ class EtaAnalysis:
     ``Task``, ``EventType``, ``event_time``) to :meth:`run`.
 
     Use helper functions like
-    :func:`~databench._signal.events.locomotion_events` to produce events
+    :func:`~databench.analysis._signal.events.locomotion_events` to produce events
     from specific detectors.
 
     Parameters
@@ -269,6 +277,7 @@ class EtaAnalysis:
     time_column: str = "time_elapsed_s"
     alignment_tolerance_s: float = 0.05
 
+    @log_run
     def run(
         self,
         sessions: "SessionGroup",
@@ -287,8 +296,8 @@ class EtaAnalysis:
             Events table with at least ``Subject``, ``Session``, ``Task``,
             ``EventType``, ``event_time``.  An optional ``Condition`` column
             overrides *condition_map*.  Produce this with
-            :func:`~databench._signal.events.locomotion_events`,
-            :func:`~databench._signal.events.make_events`, or any custom
+            :func:`~databench.analysis._signal.events.locomotion_events`,
+            :func:`~databench.analysis._signal.events.make_events`, or any custom
             function.
         aligned : list of AlignedData, optional
             Pre-computed aligned data for each session.  When ``None``,
@@ -326,6 +335,8 @@ class EtaAnalysis:
 
         all_events: list[pd.DataFrame] = []
         all_eta: list[pd.DataFrame] = []
+        n_sessions = len(sessions)
+        n_skipped = 0
 
         for i, sess in enumerate(sessions):
             # Filter events for this session
@@ -336,7 +347,13 @@ class EtaAnalysis:
             )
             sess_events = events.loc[sess_mask].copy()
             if sess_events.empty:
+                n_skipped += 1
                 continue
+
+            _log.debug(
+                f"Session {i + 1}/{n_sessions} {sess.label} | "
+                f"{len(sess_events)} events"
+            )
 
             # Fill Condition column if missing
             if not has_condition:
@@ -410,6 +427,11 @@ class EtaAnalysis:
 
         # Infer event types from what was actually found
         event_types = sorted(combined_events["EventType"].unique().tolist()) if not combined_events.empty else []
+        _log.info(
+            f"Processed {n_sessions - n_skipped}/{n_sessions} sessions | "
+            f"{len(eta_events)} epoch rows | "
+            f"event types: {event_types}"
+        )
 
         # Aggregate: subject-level means
         subject_means = self._aggregate_subject(eta_events)

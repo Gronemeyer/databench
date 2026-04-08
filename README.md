@@ -175,17 +175,17 @@ docstrings and script headers:
 - **EtaAnalysis / EtaResult** — see `databench/analysis/eta.py`
   and `Scripts/scriptings/event-based.py`
 - **Event generation** (`locomotion_events`, `make_events`) — see
-  `databench/_signal/events.py`
+  `databench/analysis/_signal/epoching.py`
 
 ---
 
 ## Trace Config System
 
 Trace rendering (how treadmill speed, pupil, etc. are processed and drawn) is
-defined centrally in `databench._plotting.trace_config`:
+defined centrally in `databench.plotting.trace_config`:
 
 ```python
-from databench._plotting.trace_config import get_style, TRACE_STYLES
+from databench.plotting.trace_config import get_style, TRACE_STYLES
 
 tread = get_style("treadmill")  # step_previous remap, steps-post drawstyle, #00CC96
 pupil = get_style("pupil", smooth_savgol_s=1.0)  # override smoothing window
@@ -205,29 +205,16 @@ entry in `TRACE_STYLES`.
 ```
 databench/
 ├── __init__.py              # Public exports
-├── bench.py                 # Standalone utility functions (build_long, build_session_table, etc.)
 ├── project.py               # Project entry point, output directory management
-├── session.py               # Session, SessionGroup, AlignedData, SaveableFigure
+├── session.py               # Session API + alignment helpers (build_long)
 ├── config.py                # OutputContext, resolve_dataset, condition colours
 ├── registry.py              # Internal registration decorators
-├── provenance.py            # Run metadata and provenance tracking
-├── utils.py                 # Shared array utilities (as_1d, clean_xy, get_first, etc.)
 ├── debug.py                 # Diagnostic helpers
 ├── _reporting.py            # Markdown report writer
-├── _io/
-│   ├── __init__.py
-│   └── loader.py            # Dataset loading (pickle / HDF5)
 ├── _utils/
 │   ├── __init__.py
-│   └── _logger.py           # Logging configuration
-├── _signal/
-│   ├── __init__.py
-│   ├── bandpass.py           # Butterworth bandpass filter + Hilbert envelope
-│   ├── bouts.py             # Locomotion bout detection from speed traces
-│   ├── epochs.py            # Peri-event epoch extraction and interpolation
-│   ├── eta_core.py          # Event-triggered average computation core
-│   ├── events.py            # Event detection (locomotion_events, etc.)
-│   └── segments.py          # Contiguous-segment detection, merging, filtering
+│   ├── _logger.py           # Logging configuration
+│   └── utils.py             # Shared utility helpers + condition labeling
 ├── analysis/
 │   ├── __init__.py
 │   ├── base.py              # Analysis base utilities
@@ -235,19 +222,8 @@ databench/
 │   ├── oscillation_detector.py  # Legacy oscillation detector with plotting/saving
 │   ├── eta.py               # EtaAnalysis, EtaResult (primary API)
 │   ├── longitudinal.py      # Longitudinal / multi-session analysis
-│   └── mesomap_hilbert.py   # Mesomap Hilbert envelope analysis (spectrograms)
-├── features/
-│   ├── __init__.py
-│   ├── base.py              # FeatureFn base class, @register_feature decorator
-│   ├── meso.py              # Mesoscale imaging features
-│   ├── pupil.py             # Pupil diameter features
-│   └── treadmill.py         # Treadmill / locomotion features and bout stats
-├── _plotting/
-│   ├── __init__.py
-│   ├── trace_config.py      # TraceStyle, TRACE_STYLES, get_style
-│   ├── traces.py            # Signal conditioning & trace plotting helpers
-│   ├── oscillation.py       # Oscillation-specific multi-panel plots (internal)
-│   └── eta.py               # ETA plotting helpers (internal)
+│   ├── mesomap_hilbert.py   # Mesomap Hilbert envelope analysis (spectrograms)
+│   └── _signal/             # Canonical signal/epoching primitives
 └── plotting/
     ├── __init__.py
     ├── base.py              # Shared plotting base utilities

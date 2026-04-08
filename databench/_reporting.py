@@ -1,7 +1,7 @@
 """Markdown report generation for the new public API.
 
 Produces a human-readable ``.md`` summary that mirrors the old
-``provenance.py`` summary style: metadata header, analysis parameters,
+summary style: metadata header, analysis parameters,
 embedded plot links, and free-form notes.
 """
 from __future__ import annotations
@@ -232,7 +232,9 @@ def write_report(
 
     # ── Write ──────────────────────────────────────────────────────────────
     context.reports_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{date_prefix}_{script}_summary.md" if script != "unknown" else f"{date_prefix}_summary.md"
+    base_name = f"{date_prefix}_{script}_summary" if script != "unknown" else f"{date_prefix}_summary"
+    run_suffix = str(context.run_name).strip()
+    filename = f"{base_name}_{run_suffix}.md" if run_suffix else f"{base_name}.md"
     path = context.reports_dir / filename
     path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
     return path

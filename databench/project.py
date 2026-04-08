@@ -20,13 +20,36 @@ from __future__ import annotations
 
 from pathlib import Path
 from datetime import datetime
+from typing import Any, cast
 
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from databench._io.loader import load_dataset
 from databench.config import FilterConfig, OutputContext, _detect_script_name, _resolve_dataset_alias_for_output
-from databench.utils import drop_rows
+from databench.tabler import DataTabler
+
+
+def load_dataset(path: Path) -> pd.DataFrame:
+    """Load a dataset from disk.
+
+    Supported formats: ``.pkl``, ``.h5``, ``.parquet``, ``.csv``.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Dataset file not found: {path}")
+
+    if path.suffix in {".pkl", ".pickle"}:
+        return pd.read_pickle(path)
+    if path.suffix in {".h5", ".hdf", ".hdf5"}:
+        return cast(pd.DataFrame, pd.read_hdf(path, key="HFSA"))
+    if path.suffix == ".parquet":
+        return pd.read_parquet(path)
+    if path.suffix == ".csv":
+        return pd.read_csv(path)
+    raise ValueError(
+        f"Unsupported file format: {path.suffix!r}. "
+        "Use .pkl, .h5, .parquet, or .csv."
+    )
 
 
 # ── Exceptions ─────────────────────────────────────────────────────────────
@@ -74,15 +97,19 @@ class Project:
     ) -> None:
         self._dataset_path = Path(dataset)
         self._df: pd.DataFrame = load_dataset(self._dataset_path)
+        self._tabler = DataTabler(self._df)
         self.filter_config: FilterConfig | None = None
 
         # Build output directory structure
-        # outputs/<dataset_alias>/<script_name>/<YYMMDD>/<tag>/{plots,reports,stats}
+        # outputs/<dataset_alias>/<YYMMDD>/<script_name>[_<tag>]/{plots,reports,stats}
         dataset_alias = _resolve_dataset_alias_for_output(self._dataset_path)
         script_name = _detect_script_name()
-        date_stamp = datetime.now().strftime("%y%m%d")
-        tag_folder = tag or "untagged"
-        run_dir = Path(output_root) / dataset_alias / script_name / date_stamp / tag_folder
+        run_dir = self._build_run_dir(
+            output_root=Path(output_root),
+            dataset_alias=dataset_alias,
+            script_name=script_name,
+            tag=tag,
+        )
 
         self._context = OutputContext(
             run_dir=run_dir,
@@ -97,44 +124,79 @@ class Project:
         )
         self._context.ensure_dirs()
 
+    @staticmethod
+    def _build_run_dir(
+        *,
+        output_root: Path,
+        dataset_alias: str,
+        script_name: str,
+        tag: str,
+    ) -> Path:
+        """Compose the run directory path from date and script/tag folder."""
+        date_folder = datetime.now().strftime("%y%m%d")
+        script_tag_folder = "_".join(
+            part for part in (script_name, str(tag).strip()) if part
+        )
+        return output_root / dataset_alias / date_folder / script_tag_folder
+
+    def _append_run_name(self, name: str) -> Path:
+        """Append run_name to a file stem while preserving parent and suffix."""
+        rel_path = Path(name)
+        run_name = str(self._context.run_name).strip()
+        if not run_name:
+            return rel_path
+        return rel_path.with_name(f"{rel_path.stem}_{run_name}{rel_path.suffix}")
+
     @property
     def df(self) -> pd.DataFrame:
         """The project dataset (potentially filtered)."""
-        return self._df
+        return self._tabler.df
 
-    def set_filters(self, drop_rows: tuple = ()) -> "Project":
+    @property
+    def tabler(self) -> DataTabler:
+        """Index-aware dataframe helper owned by this project."""
+        return self._tabler
+
+    def set_filters(self, drop_rows: Any = ()) -> "Project":
         """Set dataset filters for later use with ``filter_data()``."""
-        self.filter_config = FilterConfig(drop_rows=drop_rows)
+        self._tabler.set_filters(drop_rows)
+        self.filter_config = self._tabler.filter_config
         return self
 
-    def filter_data(self, df: pd.DataFrame, drop_rows_list: tuple | None = None) -> pd.DataFrame:
+    def filter_data(self, df: pd.DataFrame, drop_rows_list: Any = None) -> pd.DataFrame:
         """Filter rows using stored or provided drop rules."""
-        if drop_rows_list is None and self.filter_config is not None:
-            drop_rows_list = self.filter_config.drop_rows
-        return drop_rows(df, drop_rows_list or ())
+        return self._tabler.filter_data(df, drop_rows_list)
 
-    def filter(self, drop_rows: tuple | None = None, **kwargs) -> "Project":
+    def filter(
+        self,
+        drop_rows: Any = None,
+        *,
+        include: dict[str, Any] | None = None,
+        exclude: Any = None,
+        **kwargs,
+    ) -> "Project":
         """Apply filters to the project DataFrame in-place and return self.
 
-        Keyword arguments are matched against index levels::
+        Prefer explicit include/exclude index-level filters::
+
+            project.filter(exclude={"session": ["ses-00", "ses-11"]})
+
+            project.filter(include={"task": "task-spont"})
+
+        Keyword arguments are also supported as include-style filters::
 
             project.filter(Task="task-spont")
 
         Or use ``drop_rows`` for explicit multi-index tuple exclusion.
         """
-        if drop_rows is not None:
-            self.set_filters(drop_rows)
-
-        df = self.df
-        if self.filter_config is not None:
-            df = self.filter_data(df)
-
-        for level, value in kwargs.items():
-            if level in df.index.names:
-                mask = df.index.get_level_values(level) == value
-                df = df.loc[mask]
-
-        self._df = df
+        self._tabler.filter(
+            drop_rows=drop_rows,
+            include=include,
+            exclude=exclude,
+            **kwargs,
+        )
+        self.filter_config = self._tabler.filter_config
+        self._df = self._tabler.df
         return self
 
     # ── Selection ──────────────────────────────────────────────────────────
@@ -157,7 +219,7 @@ class Project:
         """
         from databench.session import Session
 
-        df = self._df
+        df = self.df
         idx = df.index
 
         # Filter by each level
@@ -209,7 +271,7 @@ class Project:
         """
         from databench.session import Session, SessionGroup
 
-        df = self._df
+        df = self.df
         idx = df.index
         mask = pd.Series(True, index=df.index)
 
@@ -256,19 +318,34 @@ class Project:
         return self._context.run_dir
 
     @property
+    def plots_dir(self) -> Path:
+        """Plots output directory."""
+        return self._context.plots_dir
+
+    @property
+    def stats_dir(self) -> Path:
+        """Stats/tables output directory."""
+        return self._context.stats_dir
+
+    @property
+    def reports_dir(self) -> Path:
+        """Reports output directory."""
+        return self._context.reports_dir
+
+    @property
     def subjects(self) -> list[str]:
         """All unique subject identifiers in the dataset."""
-        return sorted(self._df.index.get_level_values("Subject").unique())
+        return sorted(self.df.index.get_level_values("Subject").unique())
 
     @property
     def all_sessions(self) -> list[str]:
         """All unique session labels in the dataset."""
-        return sorted(self._df.index.get_level_values("Session").unique())
+        return sorted(self.df.index.get_level_values("Session").unique())
 
     @property
     def tasks(self) -> list[str]:
         """All unique task labels in the dataset."""
-        return sorted(self._df.index.get_level_values("Task").unique())
+        return sorted(self.df.index.get_level_values("Task").unique())
 
     # ── Reporting ──────────────────────────────────────────────────────────
 
@@ -327,7 +404,7 @@ class Project:
         Returns the path to the saved file.
         """
         out_dir = self._context.stats_dir
-        path = out_dir / name
+        path = out_dir / self._append_run_name(name)
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.suffix == ".parquet":
             df.to_parquet(path)
@@ -345,7 +422,7 @@ class Project:
     ) -> Path:
         """Save a matplotlib figure to the plots output directory."""
         out_dir = self._context.plots_dir
-        path = out_dir / name
+        path = out_dir / self._append_run_name(name)
         path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(path, dpi=dpi, bbox_inches=bbox_inches)
         return path
@@ -362,7 +439,7 @@ class Project:
         return path
 
     def __repr__(self) -> str:
-        n = len(self._df)
+        n = len(self.df)
         return (
             f"Project(dataset={self._dataset_path.name!r}, "
             f"rows={n}, run_name={self._context.run_name!r})"

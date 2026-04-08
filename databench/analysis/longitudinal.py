@@ -1,12 +1,29 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Tuple, Optional
+from typing import Any, Iterable, Optional, Tuple
 
 import pandas as pd
 
-from databench.analysis.base import StatFn, Analysis, AnalysisResult
-from databench.registry import register_analysis
+from databench.analysis.base import Analysis, AnalysisResult, FeatureFn, StatFn
+from databench._utils import session_to_int
+
+
+def build_session_table(
+    df: pd.DataFrame,
+    features: Iterable[FeatureFn],
+) -> pd.DataFrame:
+    """Compute a wide per-session feature table from a raw dataset."""
+    use_features = list(features)
+    rows: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        out: dict[str, Any] = {}
+        for feat in use_features:
+            out[feat.name] = feat.run(row)
+        rows.append(out)
+    table = pd.DataFrame(rows, index=df.index)
+    table["session_n"] = df.index.get_level_values("Session").map(session_to_int)
+    return table.sort_values(["Subject", "session_n"])
 
 
 @dataclass(frozen=True)
@@ -49,7 +66,6 @@ def longitudinal_summary(
     return out, stats
 
 
-@register_analysis
 @dataclass(frozen=True)
 class LongitudinalAnalysis(Analysis):
     name: str = "longitudinal_summary"

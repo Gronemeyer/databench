@@ -20,7 +20,8 @@ import numpy as np
 import pandas as pd
 
 from databench.analysis.base import AnalysisResult
-from databench.config import CONDITION_COLORS, CONDITION_ORDER
+from databench.plotting import style_axes, get_theme
+from databench.plotting.style import CONDITION_COLORS, CONDITION_ORDER
 from databench.plotting.base import Plotter
 
 
@@ -50,7 +51,7 @@ class EtaConditionPlotter(Plotter):
         nrows = int(np.ceil(n / self.ncols))
         fig, axes = plt.subplots(
             nrows, self.ncols,
-            figsize=(7 * self.ncols / 2, 3 * nrows),
+            figsize=(4.0 * self.ncols, 3.2 * nrows + 1.0),
             sharex=True, sharey="row",
         )
         axes = np.atleast_1d(axes).ravel()
@@ -69,10 +70,10 @@ class EtaConditionPlotter(Plotter):
                     g["mean"] + g["sem"],
                     alpha=0.2, color=color,
                 )
-            ax.axvline(0, color="k", lw=1)
-            ax.axhline(0, color="k", lw=0.5, alpha=0.5)
-            ax.set_title(roi, fontsize=10)
-            ax.tick_params(axis="both", labelsize=9)
+            ax.axvline(0, color=get_theme().fg, lw=0.6, alpha=0.6)
+            ax.axhline(0, color=get_theme().fg, lw=0.4, alpha=0.4)
+            ax.set_title(roi)
+            style_axes(ax)
 
         for ax in axes[n:]:
             ax.axis("off")
@@ -81,8 +82,8 @@ class EtaConditionPlotter(Plotter):
         if handles:
             fig.legend(
                 handles, labels,
-                loc="upper center", bbox_to_anchor=(0.5, 0.92),
-                ncol=min(4, len(labels)), frameon=False,
+                loc="upper center", bbox_to_anchor=(0.5, 0.95),
+                ncol=min(6, len(labels)), frameon=False,
             )
 
         baseline_label = (
@@ -90,13 +91,14 @@ class EtaConditionPlotter(Plotter):
             if self.baseline is None
             else f"baseline-subtracted [{self.baseline[0]:g}, {self.baseline[1]:g}] s"
         )
-        fig.supxlabel(f"Time relative to run {self.event_type} (s)", y=0.02)
-        fig.supylabel("Group mean ± SEM (subject-averaged)", x=0.03)
+        fig.supxlabel(f"Time relative to run {self.event_type} (s)", y=0.01)
+        fig.supylabel("Group mean ± SEM (subject-averaged)", x=0.02)
         fig.suptitle(
             f"ETA across ROIs — {self.task} — run {self.event_type}\n{baseline_label}",
-            y=0.98,
         )
-        fig.subplots_adjust(left=0.14, right=0.98, bottom=0.09, top=0.84, hspace=0.28, wspace=0.35)
+        fig.tight_layout(rect=[0.04, 0.03, 1.0, 0.88])
+        if handles:
+            fig.subplots_adjust(top=0.82)
         return fig, axes
 
 
@@ -127,7 +129,7 @@ class EtaSubjectPlotter(Plotter):
         nrows = int(np.ceil(n / self.ncols))
         fig, axes = plt.subplots(
             nrows, self.ncols,
-            figsize=(7 * self.ncols / 2, 3 * nrows),
+            figsize=(4.0 * self.ncols, 3.2 * nrows + 1.0),
             sharex=True, sharey="row",
         )
         axes = np.atleast_1d(axes).ravel()
@@ -141,10 +143,10 @@ class EtaSubjectPlotter(Plotter):
                     continue
                 color = self.condition_colors.get(cond)
                 ax.plot(g["rel_time"], g["value"], label=cond, color=color)
-            ax.axvline(0, color="k", lw=1)
-            ax.axhline(0, color="k", lw=0.5, alpha=0.5)
-            ax.set_title(f"{subj} | {roi}", fontsize=10)
-            ax.tick_params(axis="both", labelsize=9)
+            ax.axvline(0, color=get_theme().fg, lw=0.6, alpha=0.6)
+            ax.axhline(0, color=get_theme().fg, lw=0.4, alpha=0.4)
+            ax.set_title(f"{subj} | {roi}")
+            style_axes(ax)
 
         for ax in axes[n:]:
             ax.axis("off")
@@ -153,8 +155,8 @@ class EtaSubjectPlotter(Plotter):
         if handles:
             fig.legend(
                 handles, labels,
-                loc="upper center", bbox_to_anchor=(0.5, 0.92),
-                ncol=min(4, len(labels)), frameon=False,
+                loc="upper center", bbox_to_anchor=(0.5, 0.95),
+                ncol=min(6, len(labels)), frameon=False,
             )
 
         baseline_label = (
@@ -162,13 +164,14 @@ class EtaSubjectPlotter(Plotter):
             if self.baseline is None
             else f"baseline-subtracted [{self.baseline[0]:g}, {self.baseline[1]:g}] s"
         )
-        fig.supxlabel(f"Time relative to run {self.event_type} (s)", y=0.02)
-        fig.supylabel("Subject mean (event-averaged)", x=0.03)
+        fig.supxlabel(f"Time relative to run {self.event_type} (s)", y=0.01)
+        fig.supylabel("Subject mean (event-averaged)", x=0.02)
         fig.suptitle(
             f"ETA by subject — {self.task} — run {self.event_type}\n{baseline_label}",
-            y=0.98,
         )
-        fig.subplots_adjust(left=0.14, right=0.98, bottom=0.09, top=0.84, hspace=0.28, wspace=0.35)
+        fig.tight_layout(rect=[0.04, 0.03, 1.0, 0.88])
+        if handles:
+            fig.subplots_adjust(top=0.82)
         return fig, axes
 
 
@@ -196,12 +199,12 @@ class EtaAllDaysAveragePlotter(Plotter):
         nrows = int(np.ceil(n / self.ncols))
         fig, axes = plt.subplots(
             nrows, self.ncols,
-            figsize=(7 * self.ncols / 2, 3 * nrows),
+            figsize=(4.0 * self.ncols, 3.2 * nrows + 1.0),
             sharex=True, sharey="row",
         )
         axes = np.atleast_1d(axes).ravel()
 
-        line_color = "#1f77b4"
+        line_color = get_theme().colors[0]
         for ax, roi in zip(axes, rois):
             g = d[d["ROI"] == roi].sort_values("rel_time")
             if not g.empty:
@@ -212,10 +215,10 @@ class EtaAllDaysAveragePlotter(Plotter):
                     g["mean"] + g["sem"],
                     alpha=0.2, color=line_color,
                 )
-            ax.axvline(0, color="k", lw=1)
-            ax.axhline(0, color="k", lw=0.5, alpha=0.5)
-            ax.set_title(roi, fontsize=10)
-            ax.tick_params(axis="both", labelsize=9)
+            ax.axvline(0, color=get_theme().fg, lw=0.6, alpha=0.6)
+            ax.axhline(0, color=get_theme().fg, lw=0.4, alpha=0.4)
+            ax.set_title(roi)
+            style_axes(ax)
 
         for ax in axes[n:]:
             ax.axis("off")
@@ -225,13 +228,12 @@ class EtaAllDaysAveragePlotter(Plotter):
             if self.baseline is None
             else f"baseline-subtracted [{self.baseline[0]:g}, {self.baseline[1]:g}] s"
         )
-        fig.supxlabel(f"Time relative to run {self.event_type} (s)", y=0.02)
-        fig.supylabel("Group mean ± SEM (pooled across days)", x=0.03)
+        fig.supxlabel(f"Time relative to run {self.event_type} (s)", y=0.01)
+        fig.supylabel("Group mean \u00b1 SEM (pooled across days)", x=0.02)
         fig.suptitle(
-            f"ETA across ROIs — {self.task} — run {self.event_type}\n{baseline_label}",
-            y=0.98,
+            f"ETA across ROIs \u2014 {self.task} \u2014 run {self.event_type}\n{baseline_label}",
         )
-        fig.subplots_adjust(left=0.14, right=0.98, bottom=0.09, top=0.87, hspace=0.28, wspace=0.35)
+        fig.tight_layout(rect=[0.04, 0.03, 1.0, 0.90])
         return fig, axes
 
 
@@ -292,10 +294,10 @@ class EtaLongitudinalHeatmapPlotter(Plotter):
                 vmin=self.vmin,
                 vmax=self.vmax,
             )
-            ax.axvline(0, color="k", lw=1)
+            ax.axvline(0, color=get_theme().fg, lw=0.6, alpha=0.6)
             ax.set_yticks(days)
-            ax.set_title(roi, fontsize=10)
-            ax.tick_params(axis="both", labelsize=9)
+            ax.set_title(roi)
+            style_axes(ax)
             used_axes.append(ax)
 
         for ax in axes[n:]:
@@ -339,7 +341,7 @@ class EtaLongitudinalMetricPlotter(Plotter):
         )
         axes = np.atleast_1d(axes).ravel()
 
-        line_color = "#2ca02c"
+        line_color = get_theme().colors[2]
         for ax, roi in zip(axes, rois):
             g = d[d["ROI"] == roi].sort_values("day_n")
             if not g.empty:
@@ -350,9 +352,9 @@ class EtaLongitudinalMetricPlotter(Plotter):
                     g["mean"] + g["sem"],
                     alpha=0.2, color=line_color,
                 )
-            ax.axhline(0, color="k", lw=0.5, alpha=0.5)
-            ax.set_title(roi, fontsize=10)
-            ax.tick_params(axis="both", labelsize=9)
+            ax.axhline(0, color=get_theme().fg, lw=0.4, alpha=0.4)
+            ax.set_title(roi)
+            style_axes(ax)
 
         for ax in axes[n:]:
             ax.axis("off")
@@ -418,14 +420,14 @@ class EtaPrePostDiffBoxplot(Plotter):
                     widths=0.62,
                     patch_artist=True,
                     showfliers=False,
-                    medianprops={"color": "black", "linewidth": 1.2},
-                    whiskerprops={"color": "#444444", "linewidth": 1.0},
-                    capprops={"color": "#444444", "linewidth": 1.0},
-                    boxprops={"linewidth": 1.0, "edgecolor": "#444444"},
+                    medianprops={"color": get_theme().fg, "linewidth": 1.2},
+                    whiskerprops={"color": get_theme().fg, "linewidth": 1.0},
+                    capprops={"color": get_theme().fg, "linewidth": 1.0},
+                    boxprops={"linewidth": 1.0, "edgecolor": get_theme().fg},
                 )
 
                 for patch, cond in zip(bp["boxes"], conds):
-                    patch.set_facecolor(self.condition_colors.get(cond, "#999999"))
+                    patch.set_facecolor(self.condition_colors.get(cond, get_theme().p["tick"]))
                     patch.set_alpha(0.45)
 
                 for k, cond in enumerate(conds):
@@ -437,23 +439,23 @@ class EtaPrePostDiffBoxplot(Plotter):
                         np.full(y.size, x[k], dtype=float) + jitter,
                         y,
                         s=20,
-                        color=self.condition_colors.get(cond, "#999999"),
-                        edgecolors="white",
+                        color=self.condition_colors.get(cond, get_theme().p["tick"]),
+                        edgecolors=get_theme().surface,
                         linewidths=0.4,
                         alpha=0.9,
                         zorder=3,
                     )
 
-                ax.axhline(0, color="k", lw=0.7, alpha=0.5)
+                ax.axhline(0, color=get_theme().fg, lw=0.4, alpha=0.4)
                 ax.set_xticks(x)
                 ax.set_xticklabels(conds, rotation=25, ha="right")
-                ax.tick_params(axis="both", labelsize=8)
+                style_axes(ax)
                 ax.grid(axis="y", alpha=0.25)
 
                 if i == 0:
-                    ax.set_title(roi, fontsize=10)
+                    ax.set_title(roi)
                 if j == 0:
-                    ax.set_ylabel(event_type, fontsize=9)
+                    ax.set_ylabel(event_type)
 
         fig.suptitle(
             "ETA pre/post difference by condition\n"

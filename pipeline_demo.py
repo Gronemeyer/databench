@@ -5,14 +5,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from databench import Project
-from databench.bench import build_session_table
-from databench.analysis.longitudinal import LongitudinalAnalysis
+from databench.project import Project
+from databench.analysis.longitudinal import LongitudinalAnalysis, build_session_table
 from databench.analysis.mesomap_hilbert import MesomapHilbertAnalysis, export_hilbert_envelopes
 from databench.config import resolve_dataset
-from databench.features.treadmill import MeanSpeedCMS
-from databench.features.pupil import MeanPupilMM
-from databench.plotting import plot_spectrogram_panel
+from databench.analysis.locomotion import MeanSpeedCMS
+from databench.analysis.features import MeanPupilMM
+from databench.plotting.mesomap import plot_spectrogram_panel
 
 
 DATASET = resolve_dataset()

@@ -1,70 +1,37 @@
 """Overview plots for DataKit pickled datasets.
 
-Usage:
-  python scripts/plot/overview.py --dataset path/to/dataset.pkl --output plots
+Public API
+----------
+plot_subject_overviews   Generate per-subject multi-variable overview figures.
 """
 
 from __future__ import annotations
 
-import argparse
 import re
-from pathlib import Path
 from typing import Iterable, Optional, Any, cast
 
-import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-
-# -----------------------------------------------------------------------------
-# Global configuration (defaults used by CLI and plot styling)
-# -----------------------------------------------------------------------------
-DATASET = r"/Volumes/ake.bin/Projects/HFSA/260129_HFSA-full.pkl"
-DEFAULT_GAP_SECONDS = 2.0
-DEFAULT_FIGSIZE = (16, 10)
-DEFAULT_DPI = 150
-DEFAULT_COLORMAP = "tab10"
-DEFAULT_LINE_WIDTH = 0.5
-DEFAULT_LINE_ALPHA = 0.7
-DEFAULT_SPAN_ALPHA = 0.2
-DEFAULT_LABEL_Y = 1.15
-DEFAULT_TRIM_START_S = 0.5
-DEFAULT_TRIM_END_S = 15.0
-DEFAULT_USE_MASTER_TIME = True
-DEFAULT_OUTPUT_FORMAT = "png"
-
-# Outlier removal + smoothing (compact replica of explorer.py behavior)
-OUTLIER_PUPIL_IQR_K = 1.5
-OUTLIER_SPEED_IQR_K = 2.0
-SMOOTH_PUPIL_METHOD = "savgol"
-SMOOTH_PUPIL_WINDOW = 15
-SMOOTH_PUPIL_POLYORDER = 3
-SMOOTH_SPEED_METHOD = "savgol"
-SMOOTH_SPEED_WINDOW = 7
-SMOOTH_SPEED_POLYORDER = 2
-
-# Treadmill-style speed smoothing (mirrors TreadmillSourceV2)
-TMILL_GAP_THRESHOLD_S = 0.5
-TMILL_INTERPOLATE_HZ = 20
-TMILL_SMOOTH_WINDOW = 5
-TMILL_SMOOTH_POLYORDER = 2
-TMILL_MEDIAN_SIZE = 3
-TMILL_MIN_POINTS = 10
-TMILL_ZERO_PAD_OFFSET_S = 0.05
-# Optional exclusion list for known-corrupt traces to avoid scaling skew.
-# Example:
-EXCLUDE_TRACES = (
-    {"subject": "STREHAB14", "session": "ses-01", "source": "meso_mean", "feature": "dF_F"},
-    {"subject": "STREHAB07", "session": "ses-11", "source": "meso_mean", "feature": "dF_F"},
-    {"subject": "STREHAB07", "session": "ses-11", "source": "pupil", "feature": "diameter_mm"},
-    {"subject": "STREHAB07", "session": "ses-11", "source": "treadmill", "feature": "speed_mm"},
-    {"subject": "STREHAB07", "session": "ses-11", "source": "treadmill", "feature": "distance_mm"},
-
-)
-#EXCLUDE_TRACES: tuple[dict[str, str], ...] = ()
+from databench._utils import as_1d
+from databench.analysis._signal.preproc import remove_outliers_iqr, smooth_dense
+from databench.analysis._signal.remap import remap_to_timebase
 
 
+# ── Layout defaults ────────────────────────────────────────────────────────
+DEFAULT_GAP_SECONDS: float = 2.0
+DEFAULT_FIGSIZE: tuple[int, int] = (16, 10)
+DEFAULT_LINE_WIDTH: float = 0.5
+DEFAULT_LINE_ALPHA: float = 0.7
+DEFAULT_SPAN_ALPHA: float = 0.2
+DEFAULT_LABEL_Y: float = 1.15
+DEFAULT_TRIM_START_S: float = 0.5
+DEFAULT_TRIM_END_S: float = 15.0
+DEFAULT_USE_MASTER_TIME: bool = True
+
+
+# ── Data discovery ─────────────────────────────────────────────────────────
 TIME_FEATURE_PRIORITY = (
     "time_elapsed_s",
     "master_elapsed_s",
@@ -74,7 +41,6 @@ TIME_FEATURE_PRIORITY = (
     "time",
 )
 
-MASTER_TIME_SOURCES = ("time", "meso_mean", "treadmill", "pupil")
 MASTER_TIME_FEATURES = ("master_elapsed_s", "queue_elapsed", "time_elapsed_s", "time")
 
 PREFERRED_VARIABLES = (
@@ -101,131 +67,11 @@ PREFERRED_VARIABLES = (
 )
 
 
-def _ensure_multiindex_columns(frame: pd.DataFrame) -> pd.DataFrame:
-    return frame
-
-
-def _as_numeric_array(value: object) -> Any:
-    if isinstance(value, pd.Series):
-        value = value.to_numpy()
-    arr = np.asarray(value)
-    return arr.ravel()
-
+# ── Internal helpers ───────────────────────────────────────────────────────
 
 def _normalize_time(arr: np.ndarray) -> np.ndarray:
     arr = np.asarray(arr, dtype=np.float64)
     return arr - float(arr[0])
-
-
-def _remove_outliers_iqr(data: np.ndarray, k: float) -> tuple[np.ndarray, np.ndarray]:
-    if data.ndim > 1:
-        data = data[:, 0]
-    valid_mask = ~np.isnan(data)
-    valid = data[valid_mask]
-    q1, q3 = np.percentile(valid, [25, 75])
-    iqr = q3 - q1
-    lower = q1 - k * iqr
-    upper = q3 + k * iqr
-    inlier_mask = (data >= lower) & (data <= upper)
-    return data, valid_mask & inlier_mask
-
-
-def _smooth_data(
-    data: np.ndarray, *, method: str, window_length: int, polyorder: int
-) -> Any:
-    win = min(window_length, len(data))
-    if win % 2 == 0:
-        win -= 1
-    if method == "median":
-        from scipy.ndimage import median_filter
-
-        return median_filter(data, size=win)
-    if method == "rolling_mean":
-        return pd.Series(data).rolling(window=win, center=True, min_periods=1).mean().to_numpy()
-    if method == "savgol":
-        if win >= polyorder + 2:
-            from scipy import signal
-
-            return signal.savgol_filter(data, win, polyorder)
-    return data
-
-
-def _smooth_speed_trace(ts_s: np.ndarray, speed: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    from scipy.signal import savgol_filter
-    from scipy.ndimage import median_filter
-
-    ts_s = np.asarray(ts_s, dtype=np.float64)
-    speed = np.asarray(speed, dtype=np.float64)
-    order = np.argsort(ts_s)
-    ts_s = ts_s[order]
-    speed = speed[order]
-
-    speed_filtered = speed.copy()
-    if len(speed_filtered) > TMILL_SMOOTH_WINDOW:
-        win = TMILL_SMOOTH_WINDOW
-        if win % 2 == 0:
-            win = max(3, win - 1)
-        win = min(win, len(speed_filtered) if len(speed_filtered) % 2 == 1 else len(speed_filtered) - 1)
-        if win >= 3:
-            speed_filtered = median_filter(speed_filtered, size=TMILL_MEDIAN_SIZE)
-            if win >= TMILL_SMOOTH_POLYORDER + 1:
-                speed_filtered = savgol_filter(speed_filtered, win, TMILL_SMOOTH_POLYORDER)
-
-    session_duration = ts_s[-1] - ts_s[0]
-    n_points = int(session_duration * TMILL_INTERPOLATE_HZ)
-    if n_points < TMILL_MIN_POINTS:
-        n_points = len(ts_s)
-    time_grid = np.linspace(ts_s[0], ts_s[-1], n_points)
-    speed_interp = np.interp(time_grid, ts_s, speed_filtered)  # type: ignore[arg-type]
-
-    for i, t in enumerate(time_grid):
-        distances = np.abs(ts_s - t)
-        if distances.size and np.min(distances) > TMILL_GAP_THRESHOLD_S:
-            speed_interp[i] = 0.0
-
-    final_times = []
-    final_speeds = []
-    for i in range(len(time_grid)):
-        final_times.append(time_grid[i])
-        final_speeds.append(speed_interp[i])
-        if i < len(time_grid) - 1:
-            gap = time_grid[i + 1] - time_grid[i]
-            if gap > 2 / TMILL_INTERPOLATE_HZ:
-                final_times.append(time_grid[i] + TMILL_ZERO_PAD_OFFSET_S)
-                final_speeds.append(0.0)
-                final_times.append(time_grid[i + 1] - TMILL_ZERO_PAD_OFFSET_S)
-                final_speeds.append(0.0)
-
-    return np.asarray(final_times), np.asarray(final_speeds)
-
-
-def _process_signal(data: np.ndarray, var_name: str) -> tuple[np.ndarray, np.ndarray]:
-    if data.ndim > 1:
-        data = data[:, 0]
-    processed = data.copy()
-    valid_mask = ~np.isnan(processed)
-    name = var_name.lower()
-    if "speed" in name:
-        processed, out_mask = _remove_outliers_iqr(processed, OUTLIER_SPEED_IQR_K)
-        valid_mask &= out_mask
-        smoothed = _smooth_data(
-            processed[valid_mask],
-            method=SMOOTH_SPEED_METHOD,
-            window_length=SMOOTH_SPEED_WINDOW,
-            polyorder=SMOOTH_SPEED_POLYORDER,
-        )
-        processed[valid_mask] = smoothed
-    if "pupil" in name or "diameter" in name:
-        processed, out_mask = _remove_outliers_iqr(processed, OUTLIER_PUPIL_IQR_K)
-        valid_mask &= out_mask
-        smoothed = _smooth_data(
-            processed[valid_mask],
-            method=SMOOTH_PUPIL_METHOD,
-            window_length=SMOOTH_PUPIL_WINDOW,
-            polyorder=SMOOTH_PUPIL_POLYORDER,
-        )
-        processed[valid_mask] = smoothed
-    return processed, valid_mask
 
 
 def _feature_map(frame: pd.DataFrame) -> dict[str, set[str]]:
@@ -249,17 +95,7 @@ def _pick_feature(features: Iterable[str], candidates: Iterable[str]) -> Optiona
 
 
 def _pick_time_feature(features: Iterable[str]) -> Optional[str]:
-    selected = _pick_feature(features, TIME_FEATURE_PRIORITY)
-    if selected:
-        return selected
-    return None
-
-
-def _first_numeric_array(series: pd.Series, max_scan: int = 10) -> Any:
-    for value in series.iloc[:max_scan]:
-        arr = _as_numeric_array(value)
-        return arr
-    return _as_numeric_array(series.iloc[0])
+    return _pick_feature(features, TIME_FEATURE_PRIORITY)
 
 
 def _discover_variables(frame: pd.DataFrame) -> list[dict[str, str]]:
@@ -284,36 +120,36 @@ def _build_time_feature_map(frame: pd.DataFrame) -> dict[str, str]:
 
 
 def _estimate_duration(row: pd.Series, fallback: Any) -> float:
-    max_val = np.nanmax(fallback)
-    return float(max_val)
+    return float(np.nanmax(fallback))
 
 
 def _get_master_time(row: pd.Series, time_feature_map: dict[str, str]) -> Any:
     time_feature = time_feature_map["time"]
     time_value = row.get(("time", time_feature))
-    master = _as_numeric_array(time_value)
+    master = as_1d(time_value)
     return _normalize_time(master)
 
 
-def _sync_values_to_time(
-    *,
-    values: Any,
-    source_time: Any,
-    master_time: Any,
-    use_master_time: bool,
-    pad_zero_edges: bool,
-) -> tuple[Any, Any]:
-    time_arr = np.asarray(source_time, dtype=np.float64)
-    value_arr = np.asarray(values, dtype=np.float64)
-    order = np.argsort(time_arr)
-    time_arr = time_arr[order]
-    value_arr = value_arr[order]
-
-    synced = np.interp(master_time, time_arr, value_arr)
-    left = master_time < time_arr[0]
-    right = master_time > time_arr[-1]
-    synced[left | right] = 0.0
-    return master_time, synced
+def _process_signal(data: np.ndarray, var_name: str) -> tuple[np.ndarray, np.ndarray]:
+    """Outlier-remove and smooth a trace based on its variable name."""
+    if data.ndim > 1:
+        data = data[:, 0]
+    processed = data.copy()
+    valid_mask = ~np.isnan(processed)
+    name = var_name.lower()
+    if "speed" in name:
+        processed, out_mask = remove_outliers_iqr(processed, k=2.0)
+        valid_mask &= out_mask
+        processed[valid_mask] = smooth_dense(
+            processed[valid_mask], median_size=1, window=7, polyorder=2,
+        )
+    if "pupil" in name or "diameter" in name:
+        processed, out_mask = remove_outliers_iqr(processed, k=1.5)
+        valid_mask &= out_mask
+        processed[valid_mask] = smooth_dense(
+            processed[valid_mask], median_size=1, window=15, polyorder=3,
+        )
+    return processed, valid_mask
 
 
 def _index_value(idx: object, names: Iterable[str], key: str) -> Any:
@@ -329,10 +165,6 @@ def _session_day_label(idx: object, names: Iterable[str]) -> str:
     return f"Day {int(match.group(1))}"  # type: ignore[union-attr]
 
 
-def _is_excluded_trace(subject: str, idx: object, names: Iterable[str], var: dict[str, str]) -> bool:
-    return False
-
-
 def _is_speed_trace(var: dict[str, str]) -> bool:
     label = var.get("label", "").lower()
     feature = var.get("feature", "").lower()
@@ -340,9 +172,10 @@ def _is_speed_trace(var: dict[str, str]) -> bool:
 
 
 def _subject_level(frame: pd.DataFrame) -> int:
-    names = list(frame.index.names)
-    return names.index("Subject")
+    return list(frame.index.names).index("Subject")
 
+
+# ── Core plotting ──────────────────────────────────────────────────────────
 
 def _plot_overview_for_frame(
     frame: pd.DataFrame,
@@ -353,7 +186,6 @@ def _plot_overview_for_frame(
     subject_value: str,
     gap_seconds: float,
     figsize: tuple[int, int],
-    colormap: str,
     line_width: float,
     line_alpha: float,
     span_alpha: float,
@@ -362,6 +194,7 @@ def _plot_overview_for_frame(
     trim_end_s: float,
     use_master_time: bool,
 ) -> Any:
+    from databench.plotting import get_theme
     index_names = frame.index.names
 
     sessions = []
@@ -385,7 +218,9 @@ def _plot_overview_for_frame(
     if n_vars == 1:
         axes = [axes]
 
-    colors = cm.get_cmap(colormap)(np.linspace(0, 1, 10))
+    # Use theme colors cycled over sessions
+    theme_colors = get_theme().colors
+    n_colors = len(theme_colors)
 
     session_boundaries = []
     total_duration = 0.0
@@ -398,7 +233,7 @@ def _plot_overview_for_frame(
                 "label": session["label"],
                 "start": start_time,
                 "end": end_time,
-                "color": colors[idx % 10],
+                "color": theme_colors[idx % n_colors],
             }
         )
         cumulative += session["duration"] + gap_seconds
@@ -411,25 +246,17 @@ def _plot_overview_for_frame(
         y_max = None
         for sess_index, session in enumerate(sessions):
             row = session["row"]
-            data = _as_numeric_array(row.get((var["source"], var["feature"])))
+            data = as_1d(row.get((var["source"], var["feature"])))
 
             time_feature = time_feature_map.get(var["source"])
             time_value = row.get((var["source"], time_feature)) if time_feature else None
-            time_data = _as_numeric_array(time_value)
-            time_data = _normalize_time(time_data)
+            time_data = _normalize_time(as_1d(time_value))
 
-            if var["source"] == "treadmill" and _is_speed_trace(var):
-                smooth_times, smooth_values = _smooth_speed_trace(time_data, data)
-                time_data = smooth_times
-                data = smooth_values
-
-            times, values = _sync_values_to_time(
-                values=data,
-                source_time=time_data,
-                master_time=session["master_time"],
-                use_master_time=use_master_time,
-                pad_zero_edges=_is_speed_trace(var),
+            # Align source values onto master timebase
+            values = remap_to_timebase(
+                session["master_time"], time_data, data, method="linear",
             )
+            times = session["master_time"]
 
             if trim_start_s > 0:
                 keep = times >= trim_start_s
@@ -451,7 +278,7 @@ def _plot_overview_for_frame(
             times = times + cumulative
             valid_mask = valid_mask & np.isfinite(values)
 
-            color = colors[sess_index % 10]
+            color = theme_colors[sess_index % n_colors]
             ax.plot(
                 times[valid_mask],
                 values[valid_mask],
@@ -460,10 +287,11 @@ def _plot_overview_for_frame(
                 color=color,
             )
             finite_vals = values[valid_mask]
-            vmin = float(np.nanmin(finite_vals))
-            vmax = float(np.nanmax(finite_vals))
-            y_min = vmin if y_min is None else min(y_min, vmin)
-            y_max = vmax if y_max is None else max(y_max, vmax)
+            if len(finite_vals) > 0:
+                vmin = float(np.nanmin(finite_vals))
+                vmax = float(np.nanmax(finite_vals))
+                y_min = vmin if y_min is None else min(y_min, vmin)
+                y_max = vmax if y_max is None else max(y_max, vmax)
             ax.axvspan(
                 cumulative,
                 cumulative + session["duration"],
@@ -476,10 +304,9 @@ def _plot_overview_for_frame(
         ax.set_ylabel(var["label"])
         ax.set_title(var["label"])
         ax.grid(True, alpha=0.3)
-        y_min_val = cast(float, y_min)
-        y_max_val = cast(float, y_max)
-        padding = 0.05 * (y_max_val - y_min_val)
-        ax.set_ylim(y_min_val - padding, y_max_val + padding)
+        if y_min is not None and y_max is not None:
+            padding = 0.05 * (y_max - y_min)
+            ax.set_ylim(y_min - padding, y_max + padding)
 
     ax_top = axes[0]
     y_position = label_y
@@ -506,12 +333,13 @@ def _plot_overview_for_frame(
     return fig
 
 
+# ── Public API ─────────────────────────────────────────────────────────────
+
 def plot_subject_overviews(
     dataset: pd.DataFrame,
     *,
     gap_seconds: float = DEFAULT_GAP_SECONDS,
     figsize: tuple[int, int] = DEFAULT_FIGSIZE,
-    colormap: str = DEFAULT_COLORMAP,
     line_width: float = DEFAULT_LINE_WIDTH,
     line_alpha: float = DEFAULT_LINE_ALPHA,
     span_alpha: float = DEFAULT_SPAN_ALPHA,
@@ -520,8 +348,34 @@ def plot_subject_overviews(
     trim_end_s: float = DEFAULT_TRIM_END_S,
     use_master_time: bool = DEFAULT_USE_MASTER_TIME,
 ) -> dict[str, Any]:
-    frame = _ensure_multiindex_columns(dataset)
-    frame = frame.sort_index()
+    """Generate per-subject multi-variable overview figures.
+
+    Parameters
+    ----------
+    dataset : pd.DataFrame
+        Multi-index DataFrame with (Subject, Session, ...) index and
+        (source, feature) column tuples.
+    gap_seconds : float
+        Visual gap between concatenated sessions.
+    figsize : (int, int)
+        Figure size.
+    line_width, line_alpha : float
+        Trace rendering parameters.
+    span_alpha : float
+        Background session span alpha.
+    label_y : float
+        Y-position for session labels.
+    trim_start_s, trim_end_s : float
+        Trim first/last N seconds of each session.
+    use_master_time : bool
+        Align traces to master time.
+
+    Returns
+    -------
+    dict[str, Figure]
+        Mapping from subject name to matplotlib Figure.
+    """
+    frame = dataset.sort_index()
 
     variables = _discover_variables(frame)
     time_feature_map = _build_time_feature_map(frame)
@@ -540,7 +394,6 @@ def plot_subject_overviews(
             subject_value=str(subject),
             gap_seconds=gap_seconds,
             figsize=figsize,
-            colormap=colormap,
             line_width=line_width,
             line_alpha=line_alpha,
             span_alpha=span_alpha,
@@ -553,133 +406,3 @@ def plot_subject_overviews(
             figures[str(subject)] = fig
 
     return figures
-
-
-def _parse_figsize(value: str) -> tuple[int, int]:
-    parts = [p.strip() for p in value.split(",")]
-    if len(parts) != 2:
-        raise argparse.ArgumentTypeError("figsize must be in the form 'width,height'")
-    return int(parts[0]), int(parts[1])
-
-
-def _load_dataset(path: Path) -> pd.DataFrame:
-    if path.suffix.lower() in {".h5", ".hdf5"}:
-        return cast(pd.DataFrame, pd.read_hdf(path))
-    return pd.read_pickle(path)
-
-
-def _resolve_output_path(base: Path, subject: str, fmt: str) -> Path:
-    if base.suffix:
-        if "{subject}" in base.name:
-            filename = base.name.format(subject=subject)
-            return base.with_name(filename)
-        stem = base.stem
-        return base.with_name(f"{stem}_{subject}{base.suffix}")
-    base.mkdir(parents=True, exist_ok=True)
-    return base / f"overview_{subject}.{fmt}"
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Plot per-subject overviews from a pickled dataset.")
-    parser.add_argument("--dataset", type=Path, default=DATASET, help="Path to the pickled dataset (.pkl)")
-    parser.add_argument(
-        "--output",
-        type=Path,
-        help="Optional output path (directory or file template, e.g. overview_{subject}.png)",
-    )
-    parser.add_argument("--no-show", action="store_true", help="Do not open the plot window")
-    parser.add_argument(
-        "--gap",
-        type=float,
-        default=DEFAULT_GAP_SECONDS,
-        help=f"Gap between sessions in seconds (default: {DEFAULT_GAP_SECONDS})",
-    )
-    parser.add_argument(
-        "--figsize",
-        type=_parse_figsize,
-        default=f"{DEFAULT_FIGSIZE[0]},{DEFAULT_FIGSIZE[1]}",
-        help="Figure size 'width,height'",
-    )
-    parser.add_argument("--dpi", type=int, default=DEFAULT_DPI, help=f"Output DPI (default: {DEFAULT_DPI})")
-    parser.add_argument(
-        "--colormap",
-        type=str,
-        default=DEFAULT_COLORMAP,
-        help=f"Matplotlib colormap name (default: {DEFAULT_COLORMAP})",
-    )
-    parser.add_argument(
-        "--line-width",
-        type=float,
-        default=DEFAULT_LINE_WIDTH,
-        help=f"Line width (default: {DEFAULT_LINE_WIDTH})",
-    )
-    parser.add_argument(
-        "--line-alpha",
-        type=float,
-        default=DEFAULT_LINE_ALPHA,
-        help=f"Line alpha (default: {DEFAULT_LINE_ALPHA})",
-    )
-    parser.add_argument(
-        "--span-alpha",
-        type=float,
-        default=DEFAULT_SPAN_ALPHA,
-        help=f"Session span alpha (default: {DEFAULT_SPAN_ALPHA})",
-    )
-    parser.add_argument(
-        "--label-y",
-        type=float,
-        default=DEFAULT_LABEL_Y,
-        help=f"Session label y-position (default: {DEFAULT_LABEL_Y})",
-    )
-    parser.add_argument(
-        "--trim-start",
-        type=float,
-        default=DEFAULT_TRIM_START_S,
-        help=f"Trim first N seconds of each session (default: {DEFAULT_TRIM_START_S})",
-    )
-    parser.add_argument(
-        "--trim-end",
-        type=float,
-        default=DEFAULT_TRIM_END_S,
-        help=f"Trim last N seconds of each session (default: {DEFAULT_TRIM_END_S})",
-    )
-    parser.add_argument(
-        "--format",
-        choices=("png", "svg", "pdf"),
-        default=DEFAULT_OUTPUT_FORMAT,
-        help=f"Output format when --output is a directory (default: {DEFAULT_OUTPUT_FORMAT})",
-    )
-    parser.add_argument(
-        "--use-master-time",
-        default=DEFAULT_USE_MASTER_TIME,
-        action=argparse.BooleanOptionalAction,
-        help="Align traces to dataqueue master time when available",
-    )
-    args = parser.parse_args()
-
-    dataset = _load_dataset(args.dataset)
-    figures = plot_subject_overviews(
-        dataset,
-        gap_seconds=args.gap,
-        figsize=args.figsize,
-        colormap=args.colormap,
-        line_width=args.line_width,
-        line_alpha=args.line_alpha,
-        span_alpha=args.span_alpha,
-        label_y=args.label_y,
-        trim_start_s=args.trim_start,
-        trim_end_s=args.trim_end,
-        use_master_time=args.use_master_time,
-    )
-
-    if args.output:
-        for subject, fig in figures.items():
-            path = _resolve_output_path(args.output, subject, args.format)
-            fig.savefig(path, dpi=args.dpi, bbox_inches="tight")
-
-    if not args.no_show:
-        plt.show()
-
-
-if __name__ == "__main__":
-    main()

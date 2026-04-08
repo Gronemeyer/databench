@@ -7,13 +7,20 @@ import numpy as np
 import pandas as pd
 
 from databench.analysis.longitudinal import longitudinal_summary
-from databench.features.base import FeatureFn
+from databench.analysis.base import FeatureFn
 from databench.plotting.base import Plotter
-from databench.registry import register_plotter
 from databench._utils._logger import get_logger
 
-_COLORS = {"primary": "#1f77b4", "secondary": "#9467bd", "accent": "#2ca02c"}
-_LOGGER = get_logger("databench.plotting")
+from databench.plotting import get_theme
+
+
+def _theme_color(role: str) -> str:
+    """Resolve a semantic color role to the active theme's palette."""
+    c = get_theme().colors
+    return {"primary": c[0], "secondary": c[2], "accent": c[1]}[role]
+
+
+_log = get_logger(__name__)
 
 
 def plot_mean_sem(stats, x: str, y_label: str, title: str, color: str, ax=None):
@@ -45,16 +52,16 @@ def plot_boxplot_mean_sem(
     subject_alpha: float = 0.25,
     ax=None,
 ):
-    _LOGGER.debug(
+    _log.debug(
         f"Boxplot: wide_shape={wide.shape} columns={list(wide.columns)[:12]} index_names={list(wide.index.names)}"
     )
-    _LOGGER.debug(f"Boxplot: x={x} y={y}")
+    _log.debug(f"Boxplot: x={x} y={y}")
     data = wide[[x, y]].dropna()
     data = data.copy()
     data["Subject"] = data.index.get_level_values("Subject")
     fig, ax = plt.subplots(figsize=(8, 4))
 
-    color = color or _COLORS["primary"]
+    color = color or _theme_color("primary")
     title = title or f"{y} across sessions"
 
     grouped = data.groupby(x)[y]
@@ -120,7 +127,7 @@ def plot_feature_longitudinal(
     x_label: Optional[str] = None,
 ):
     _, stats = longitudinal_summary(wide, y=y, x=x)
-    color = color or _COLORS["primary"]
+    color = color or _theme_color("primary")
     title = title or f"{y} across sessions"
     fig, ax = plot_mean_sem(stats, x=x, y_label=y_label or y, title=title, color=color)
     ax.set_xlabel(x_label or x)
@@ -160,8 +167,8 @@ def plot_two_panel_longitudinal(
     fig, axes = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
     t1 = titles[0] or f"{y1} across sessions"
     t2 = titles[1] or f"{y2} across sessions"
-    c1 = colors[0] or _COLORS["accent"]
-    c2 = colors[1] or _COLORS["secondary"]
+    c1 = colors[0] or _theme_color("accent")
+    c2 = colors[1] or _theme_color("secondary")
     _, stats1 = longitudinal_summary(wide, y=y1, x=x)
     _, stats2 = longitudinal_summary(wide, y=y2, x=x)
     plot_mean_sem(stats1, x, y_labels[0] or y1, t1, c1, ax=axes[0])
@@ -206,7 +213,6 @@ def plot_feature(
     )
 
 
-@register_plotter
 @dataclass(frozen=True)
 class FeaturePlotter(Plotter):
     """Plot a feature from a wide table (session_table).
@@ -252,7 +258,6 @@ def _coerce_plot_spec(feature: Union[FeatureFn, DerivedColumnSpec, Mapping[str, 
     return feature
 
 
-@register_plotter
 @dataclass(frozen=True)
 class LongitudinalPlotter(Plotter):
     """Plot a longitudinal summary (mean ± SEM over sessions).

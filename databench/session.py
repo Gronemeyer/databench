@@ -7,19 +7,188 @@ directly (though direct import works fine).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterable, Iterator, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from databench.analysis.base import FeatureFn
 from databench.config import OutputContext
+from databench._utils import session_to_int
 
 
 # ── Exceptions ─────────────────────────────────────────────────────────────
 
 class SignalNotFoundError(KeyError):
     """Raised when a requested source/signal is not in the session data."""
+
+
+def _extract_trace(
+    row: pd.Series,
+    source: str,
+    feature: str,
+    index: Optional[int],
+) -> Optional[np.ndarray]:
+    """Pull a single trace from a multi-index row."""
+    x = row.get((source, feature))
+    if x is None:
+        return None
+    arr = np.asarray(x)
+    if arr.ndim > 1 and index is not None:
+        arr = arr[index]
+    return arr
+
+
+def _source_timeseries(
+    row: pd.Series,
+    source: str,
+    features: Iterable[str],
+    time_column: str,
+    index: Optional[int] = None,
+) -> Optional[pd.DataFrame]:
+    """Build a DataFrame of aligned time + feature columns for one source."""
+    t = _extract_trace(row, source, time_column, index)
+    if t is None:
+        return None
+    t_arr = np.atleast_1d(t).astype(float, copy=False)
+    data: dict[str, Any] = {time_column: t_arr}
+    for feature_name in features:
+        x = _extract_trace(row, source, feature_name, index)
+        if x is None:
+            data[feature_name] = np.full(t_arr.shape, np.nan)
+        else:
+            data[feature_name] = np.atleast_1d(x)
+    return pd.DataFrame(data)
+
+
+def build_long(
+    df: pd.DataFrame,
+    source_features: Optional[Iterable[tuple]] = None,
+    sources: Optional[Iterable[tuple]] = None,
+    tol: float = 0.25,
+    time_column: str = "time_elapsed_s",
+    reference_source: Optional[str] = None,
+) -> pd.DataFrame:
+    """Build a long table by aligning multiple source timeseries.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Wide-format dataset with a (Subject, Session, Task) MultiIndex.
+    source_features / sources : iterable
+        Ordered list of ``(source, features)`` or
+        ``(source, features, indices)`` tuples. ``sources`` is an alias for
+        ``source_features``.
+    tol : float
+        Tolerance in seconds for ``pd.merge_asof``.
+    time_column : str
+        Name of the time column within each source.
+    reference_source : str | None
+        Source whose time base becomes the output index.
+
+    Returns
+    -------
+    pd.DataFrame
+        Long-format table with Subject, Session, Task columns prepended.
+    """
+    sf = source_features or sources
+    if sf is None:
+        raise ValueError("Provide source_features (or sources=) argument.")
+
+    source_features_list = []
+    for entry in sf:
+        source = entry[0]
+        features = entry[1]
+        indices = entry[2] if len(entry) > 2 else None
+        source_features_list.append((source, list(features), indices))
+
+    ref_idx = 0
+    if reference_source is not None:
+        for i, (source, _, _) in enumerate(source_features_list):
+            if source == reference_source:
+                ref_idx = i
+                break
+
+    ref_source, ref_features, ref_indices = source_features_list[ref_idx]
+    merge_sources = [
+        entry for i, entry in enumerate(source_features_list) if i != ref_idx
+    ]
+
+    frames: list[pd.DataFrame] = []
+    if ref_indices is None:
+        ref_index_list: list = []
+    elif isinstance(ref_indices, (list, tuple, np.ndarray)):
+        ref_index_list = list(ref_indices)
+    else:
+        ref_index_list = [ref_indices]
+
+    for idx, row in df.iterrows():
+        if ref_indices is None:
+            out = _source_timeseries(
+                row, ref_source, ref_features, time_column, index=None,
+            )
+            if out is None:
+                continue
+        else:
+            roi_frames: list[pd.DataFrame] = []
+            base_time = None
+            for ref_index in ref_index_list:
+                roi_df = _source_timeseries(
+                    row, ref_source, ref_features, time_column, index=ref_index,
+                )
+                if roi_df is None:
+                    continue
+
+                if base_time is None:
+                    base_time = roi_df[time_column].to_numpy()
+                elif not np.array_equal(roi_df[time_column].to_numpy(), base_time):
+                    raise ValueError(
+                        f"Source {ref_source!r} ROI timebases differ; cannot align per-ROI columns."
+                    )
+
+                rename = {
+                    feature_name: f"{feature_name}_roi{ref_index}"
+                    for feature_name in ref_features
+                }
+                roi_frames.append(roi_df.rename(columns=rename))
+
+            if base_time is None:
+                continue
+
+            out = pd.concat(
+                [roi_frames[0][[time_column]]]
+                + [frame.drop(columns=[time_column]) for frame in roi_frames],
+                axis=1,
+            )
+
+        out = out.sort_values(time_column)
+
+        for source, features, _ in merge_sources:
+            ts = _source_timeseries(
+                row, source, features, time_column, index=None,
+            )
+            if ts is not None:
+                ts = ts.dropna(subset=[time_column])
+                out = pd.merge_asof(
+                    out,
+                    ts.sort_values(time_column),
+                    on=time_column,
+                    direction="nearest",
+                    tolerance=tol,
+                )
+            else:
+                for feature_name in features:
+                    out[feature_name] = np.nan
+
+        subj, ses, task = idx  # type: ignore[misc]
+        out.insert(0, "Task", task)
+        out.insert(0, "Session", ses)
+        out.insert(0, "Subject", subj)
+
+        frames.append(out)
+
+    return pd.concat(frames, ignore_index=True)
 
 
 # ── AlignedData ────────────────────────────────────────────────────────────
@@ -232,6 +401,60 @@ class Session:
         arr = np.asarray(value, dtype=float).ravel()
         return arr
 
+    def _time_for_align(self, source: str, column: str = "time_elapsed_s") -> np.ndarray:
+        """Return a time vector for alignment, with dataset-level fallbacks.
+
+        Fallback order when ``(source, column)`` is missing:
+        1. ``(source, "time_elapse_s")``   — typo variant in some datasets
+        2. ``("dataqueue", "time_elapse_s")``
+        3. ``("dataqueue", "time_elapsed_s")``
+        4. ``("time", "master_elapsed_s")`` — frame-locked acquisition clock
+        5. ``("time", "queue_elapsed")``    — general event queue
+
+        A candidate is skipped when its length is more than double the
+        source's longest signal (likely a different-rate time vector).
+        """
+        # Determine the expected signal length for this source so we can
+        # reject wildly mismatched time vectors.
+        max_sig_len = 0
+        if isinstance(self._row.index, pd.MultiIndex):
+            for src, name in self._row.index:
+                if src == source and name != column:
+                    val = self._row.get((src, name))
+                    if val is not None:
+                        arr = np.asarray(val)
+                        if arr.ndim >= 1:
+                            max_sig_len = max(max_sig_len, arr.size)
+
+        candidates = [
+            (source, column),
+            (source, "time_elapse_s"),
+            ("dataqueue", "time_elapse_s"),
+            ("dataqueue", "time_elapsed_s"),
+            ("time", "master_elapsed_s"),
+            ("time", "queue_elapsed"),
+        ]
+        for src, col in candidates:
+            value = self._row.get((src, col))
+            if value is not None:
+                arr = np.asarray(value, dtype=float).ravel()
+                # Skip candidates whose length is wildly incompatible with
+                # the source's signals (> 2× longer suggests a different-rate
+                # time vector).
+                if max_sig_len > 0 and src != source and arr.size > 2 * max_sig_len:
+                    continue
+                # master_elapsed_s carries an acquisition-start offset;
+                # zero it so the timeline begins at 0 like source-local
+                # time columns.
+                if col == "master_elapsed_s" and arr.size > 0:
+                    arr = arr - arr[0]
+                return arr
+
+        raise SignalNotFoundError(
+            f"Time column {column!r} not found in source {source!r}, and no "
+            "alignment fallback was available (dataqueue/time sources missing)."
+        )
+
     def _available_signals(self, source: str, time_column: str = "time_elapsed_s") -> list[str]:
         """List signal names available for a given source.
 
@@ -314,7 +537,7 @@ class Session:
 
         # Build reference DataFrame
         ref_signals = sources[reference]
-        ref_t = self.time(reference, time_column)
+        ref_t = self._time_for_align(reference, time_column)
         ref_arrays: dict[str, np.ndarray] = {}
         for sig_name in ref_signals:
             sig = self.signal(reference, sig_name)
@@ -332,7 +555,7 @@ class Session:
         for src_name, sig_names in sources.items():
             if src_name == reference:
                 continue
-            src_t = self.time(src_name, time_column)
+            src_t = self._time_for_align(src_name, time_column)
             src_arrays: dict[str, np.ndarray] = {}
             for sig_name in sig_names:
                 sig = self.signal(src_name, sig_name)

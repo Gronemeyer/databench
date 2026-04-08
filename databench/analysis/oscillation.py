@@ -2,7 +2,7 @@
 
 Usage::
 
-    from databench.analysis import OscillationDetector
+    from databench.analysis.oscillation import OscillationDetector
 
     detector = OscillationDetector(
         source="mesomap",
@@ -22,222 +22,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from databench._signal.bandpass import bandpass_envelope, robust_threshold
-from databench._signal.segments import (
-    apply_min_duration,
-    burst_table,
-    merge_gaps,
-    segments_from_mask,
-)
-from databench._plotting.trace_config import get_style
-from databench._plotting.traces import (
-    prepare_trace_styled,
-    plot_trace_styled,
-    time_mask,
-)
+from databench._utils._logger import get_logger, log_run
+from databench.analysis._signal.bandpass import bandpass_envelope, robust_threshold
+from databench.analysis._signal.epoching import detect_epochs, START_IDX, END_IDX
+
+_log = get_logger(__name__)
+
 from databench.config import OutputContext
-
-
-# ── Oscillation-specific plotting (moved from _plotting.oscillation) ───────
-
-def shade_bursts(
-    ax: plt.Axes,
-    t: np.ndarray,
-    bursts: list[Tuple[int, int]],
-    t_lo: float | None = None,
-    t_hi: float | None = None,
-) -> None:
-    """Add translucent orange spans for each detected burst."""
-    for s, e in bursts:
-        ts, te = t[s], t[e]
-        if t_lo is not None and te < t_lo:
-            continue
-        if t_hi is not None and ts > t_hi:
-            continue
-        ax.axvspan(ts, te, color="#ff7f0e", alpha=0.12)
-
-
-def plot_oscillation_overview(
-    *,
-    time: np.ndarray,
-    raw_signal: np.ndarray,
-    filtered_signal: np.ndarray,
-    envelope: np.ndarray,
-    threshold_value: float,
-    bursts: list[Tuple[int, int]],
-    signal_name: str,
-    band_hz: Tuple[float, float],
-    subject: str,
-    session: str,
-    task: str,
-    aligned_time: np.ndarray | None = None,
-    pupil: np.ndarray | None = None,
-    speed: np.ndarray | None = None,
-    speed_time: np.ndarray | None = None,
-    speed_values: np.ndarray | None = None,
-    smooth_pupil_s: float = 0.5,
-    window: Tuple[float, float] | None = None,
-) -> plt.Figure:
-    """Create a multi-panel oscillation overview figure.
-
-    Panels: raw signal, bandpassed+envelope, optional pupil, optional speed.
-    All with burst shading.
-    """
-    est_fs = band_hz[0] * 12.5  # rough estimate for smoothing
-
-    # Prepare pupil via TraceStyle
-    if pupil is not None and len(pupil) > 0:
-        pupil_style = get_style("pupil", smooth_savgol_s=smooth_pupil_s)
-        pupil = prepare_trace_styled(
-            aligned_time if aligned_time is not None else time,
-            None,
-            pupil,
-            pupil_style,
-            est_fs=est_fs,
-        )
-
-    # Prepare speed via TraceStyle
-    if speed_time is not None and speed_values is not None and len(speed_values) > 0:
-        tread_style = get_style("treadmill")
-        speed = prepare_trace_styled(
-            aligned_time if aligned_time is not None else time,
-            speed_time,
-            speed_values,
-            tread_style,
-        )
-
-    has_pupil = pupil is not None and len(pupil) > 0
-    has_speed = speed is not None and len(speed) > 0
-    n_panels = 2 + int(has_pupil) + int(has_speed)
-
-    fig, axes = plt.subplots(
-        n_panels, 1,
-        figsize=(12.8, 2.8 * n_panels),
-        sharex=True,
-    )
-    axes = np.atleast_1d(axes)
-
-    t = time
-    _, sl = time_mask(t, window)
-    if sl is None:
-        return fig
-    ts = t[sl]
-    xlim = (ts[0], ts[-1])
-
-    band_label = f"{band_hz[0]}\u2013{band_hz[1]} Hz"
-    label = f"Subject={subject} | Session={session} | Task={task}"
-
-    # Panel 1: raw ROI trace + burst shading
-    ax = axes[0]
-    ax.plot(ts, raw_signal[sl], color="#1f77b4", lw=1.4, alpha=0.9)
-    shade_bursts(ax, t, bursts, *xlim)
-    ax.set_ylabel("\u0394F/F", fontsize=10)
-    ax.set_title(
-        f"{label} | {signal_name} | {band_label}\n"
-        f"{len(bursts)} bursts detected",
-        fontsize=10,
-    )
-    ax.tick_params(labelsize=8)
-
-    # Panel 2: bandpassed + envelope + threshold
-    ax = axes[1]
-    ax.plot(ts, filtered_signal[sl], color="#2ca02c", lw=0.8, alpha=0.8, label="bandpassed")
-    ax.plot(ts, envelope[sl], color="#d62728", lw=1.2, alpha=0.9, label="envelope")
-    ax.axhline(
-        threshold_value, color="#d62728", ls="--", lw=0.9, alpha=0.6,
-        label=f"threshold ({threshold_value:.4f})",
-    )
-    shade_bursts(ax, t, bursts, *xlim)
-    ax.set_ylabel("Amplitude", fontsize=9)
-    ax.legend(fontsize=8, loc="upper left", frameon=False)
-    ax.tick_params(labelsize=9)
-
-    panel_idx = 2
-
-    # Panel 3: pupil
-    if has_pupil and aligned_time is not None:
-        ax = axes[panel_idx]
-        pupil_style = get_style("pupil")
-        plot_trace_styled(ax, aligned_time, pupil, pupil_style, window=xlim)
-        shade_bursts(ax, t, bursts, *xlim)
-        panel_idx += 1
-
-    # Panel 4: speed
-    if has_speed and aligned_time is not None:
-        ax = axes[panel_idx]
-        tread_style = get_style("treadmill")
-        plot_trace_styled(ax, aligned_time, speed, tread_style, window=xlim)
-        shade_bursts(ax, t, bursts, *xlim)
-
-    for a in axes:
-        a.set_xlim(xlim)
-    axes[-1].set_xlabel("Time (s)", fontsize=9)
-    fig.tight_layout()
-    return fig
-
-
-def plot_oscillation_burst(
-    *,
-    time: np.ndarray,
-    raw_signal: np.ndarray,
-    filtered_signal: np.ndarray,
-    envelope: np.ndarray,
-    threshold_value: float,
-    bursts: list[Tuple[int, int]],
-    signal_name: str,
-    band_hz: Tuple[float, float],
-    subject: str,
-    session: str,
-    task: str,
-    burst_idx: int,
-    fs: float,
-    pad_s: float = 5.0,
-    aligned_time: np.ndarray | None = None,
-    pupil: np.ndarray | None = None,
-    speed: np.ndarray | None = None,
-    speed_time: np.ndarray | None = None,
-    speed_values: np.ndarray | None = None,
-    smooth_pupil_s: float = 0.5,
-) -> plt.Figure:
-    """Plot a zoomed window around a single burst."""
-    s, e = bursts[burst_idx]
-    t_start = time[s] - pad_s
-    t_end = time[e] + pad_s
-    window = (t_start, t_end)
-
-    fig = plot_oscillation_overview(
-        time=time,
-        raw_signal=raw_signal,
-        filtered_signal=filtered_signal,
-        envelope=envelope,
-        threshold_value=threshold_value,
-        bursts=bursts,
-        signal_name=signal_name,
-        band_hz=band_hz,
-        subject=subject,
-        session=session,
-        task=task,
-        aligned_time=aligned_time,
-        pupil=pupil,
-        speed=speed,
-        speed_time=speed_time,
-        speed_values=speed_values,
-        smooth_pupil_s=smooth_pupil_s,
-        window=window,
-    )
-    burst_dur = (e - s + 1) / fs
-    peak_env = float(envelope[s : e + 1].max())
-    fig.suptitle(
-        f"Burst #{burst_idx + 1}\n"
-        f"{time[s]:.1f}\u2013{time[e]:.1f} s  (dur={burst_dur:.1f}s, peak_env={peak_env:.4f})",
-        fontsize=10,
-        y=1.03,
-    )
-    return fig
 
 
 # ── OscillationDetector ────────────────────────────────────────────────────
@@ -282,6 +76,7 @@ class OscillationDetector:
     merge_gap_s: float = 0.25
     time_column: str = "time_elapsed_s"
 
+    @log_run
     def run(self, session: "Session") -> "OscillationResult":
         """Run oscillation detection on a single session.
 
@@ -304,16 +99,41 @@ class OscillationDetector:
         """
         self._validate()
 
-        # Extract signal and time arrays
+        # Extract signal and time arrays.
+        # Use align-time fallback so scripts do not need local time synthesis.
         x = session.signal(self.source, self.signal)
-        t_raw = session.time(self.source, self.time_column)
+        t_raw = session._time_for_align(self.source, self.time_column)
 
         # Align lengths
         n = min(len(t_raw), len(x))
         x = x[:n]
         t = t_raw[:n].astype(float)
 
-        # Bandpass + Hilbert envelope
+        # Bandpass + Hilbert envelope — require signal longer than sosfiltfilt padlen
+        min_len = 3 * (2 * self.filter_order + 1) + 1
+        if n < min_len:
+            _log.warning(
+                "Signal too short for bandpass filter "
+                f"({n} < {min_len} samples): "
+                f"{session.subject}/{session.session}/{session.task} — skipping"
+            )
+            return OscillationResult(
+                events=pd.DataFrame(),
+                time=t, raw_signal=x,
+                filtered_signal=np.full_like(x, np.nan),
+                envelope=np.full_like(x, np.nan),
+                threshold_value=np.nan,
+                bursts=[],
+                subject=session.subject,
+                session=session.session,
+                task=session.task,
+                source=self.source,
+                signal_name=self.signal,
+                band_hz=self.band_hz,
+                fs=self.fs,
+                _context=session._context,
+                _session=session,
+            )
         filtered, env = bandpass_envelope(x, self.fs, self.band_hz, self.filter_order)
 
         # Threshold
@@ -322,17 +142,24 @@ class OscillationDetector:
         else:
             thr, _, _ = robust_threshold(env, self.threshold_k)
 
-        # Detect segments above threshold
+        # Detect bursts via unified epoch pipeline
         mask = env > thr
-        segments = segments_from_mask(mask)
-        if segments:
-            min_gap_samples = int(round(self.merge_gap_s * self.fs))
-            segments = merge_gaps(segments, min_gap_samples)
-            min_len_samples = int(round(self.min_duration_s * self.fs))
-            segments = apply_min_duration(segments, min_len_samples)
+        events = detect_epochs(
+            mask, t,
+            event_type="oscillation_burst",
+            min_duration_s=self.min_duration_s,
+            merge_gap_s=self.merge_gap_s,
+        )
+        # Oscillation-specific: peak envelope within each burst
+        events["peak_env"] = [
+            float(env[int(s):int(e) + 1].max())
+            for s, e in zip(events[START_IDX], events[END_IDX])
+        ] if not events.empty else []
 
-        # Build event table
-        events = burst_table(t, env, segments, self.fs)
+        # Derive sample-index pairs for plotting compatibility
+        bursts = list(zip(
+            events[START_IDX].astype(int), events[END_IDX].astype(int)
+        )) if not events.empty else []
 
         return OscillationResult(
             events=events,
@@ -341,7 +168,7 @@ class OscillationDetector:
             filtered_signal=filtered,
             envelope=env,
             threshold_value=thr,
-            bursts=segments,
+            bursts=bursts,
             subject=session.subject,
             session=session.session,
             task=session.task,
@@ -435,17 +262,6 @@ class OscillationResult:
 
     # ── Plotting ───────────────────────────────────────────────────────────
 
-    def _treadmill_arrays(self) -> Tuple[np.ndarray | None, np.ndarray | None]:
-        """Extract raw treadmill time/values from the internal session ref."""
-        try:
-            t = self._session.time("treadmill", "time_elapsed_s")
-            v = self._session.signal("treadmill", "speed_mm")
-            if t is not None and v is not None and len(t) > 0 and len(v) > 0:
-                return t, v
-        except Exception:
-            pass
-        return None, None
-
     def plot_overview(
         self,
         *,
@@ -477,6 +293,7 @@ class OscillationResult:
             Wraps the matplotlib Figure with a ``.save()`` method.
         """
         from databench.session import SaveableFigure
+        from databench.plotting.oscillation import plot_oscillation_overview
 
         pupil_arr = None
         speed_arr = None
@@ -487,9 +304,6 @@ class OscillationResult:
                 pupil_arr = aligned.df[pupil].to_numpy()
             if speed and speed in aligned.df.columns:
                 speed_arr = aligned.df[speed].to_numpy()
-
-        # Internally extract raw treadmill arrays from the session
-        speed_time, speed_values = self._treadmill_arrays()
 
         fig = plot_oscillation_overview(
             time=self.time,
@@ -506,8 +320,6 @@ class OscillationResult:
             aligned_time=aligned_t,
             pupil=pupil_arr,
             speed=speed_arr,
-            speed_time=speed_time,
-            speed_values=speed_values,
             smooth_pupil_s=smooth_pupil_s,
             smooth_speed_s=smooth_speed_s,
             window=window,
@@ -546,6 +358,7 @@ class OscillationResult:
         list of SaveableFigure
         """
         from databench.session import SaveableFigure
+        from databench.plotting.oscillation import plot_oscillation_burst
 
         if not self.bursts:
             return []
@@ -561,9 +374,6 @@ class OscillationResult:
                 pupil_arr = aligned.df[pupil].to_numpy()
             if speed and speed in aligned.df.columns:
                 speed_arr = aligned.df[speed].to_numpy()
-
-        # Internally extract raw treadmill arrays from the session
-        speed_time, speed_values = self._treadmill_arrays()
 
         # Sort by duration (longest first)
         burst_order = sorted(
@@ -593,8 +403,6 @@ class OscillationResult:
                 aligned_time=aligned_t,
                 pupil=pupil_arr,
                 speed=speed_arr,
-                speed_time=speed_time,
-                speed_values=speed_values,
                 smooth_pupil_s=smooth_pupil_s,
                 smooth_speed_s=smooth_speed_s,
             )

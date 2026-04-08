@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import warnings
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Optional, Sequence
 
 import pandas as pd
 
-from databench._utils._logger import log_this_fr
+from databench._utils._logger import get_logger, log_run, log_this_fr
+
+_log = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -52,10 +55,10 @@ def _warn_missing_columns(
 
 
 @dataclass(frozen=True)
-class Analysis:
+class Analysis(ABC):
     """Base class for analyses.
 
-    Subclasses override ``run(df) -> AnalysisResult``.
+    Subclasses **must** override ``run(df) -> AnalysisResult``.
     All parameters live on the frozen dataclass — no **kwargs.
     Declare ``required_columns`` for auto-validation.
     """
@@ -63,16 +66,21 @@ class Analysis:
     name: str
     required_columns: tuple[str, ...] = ()
 
-    @log_this_fr
-    def run(self, df: pd.DataFrame) -> AnalysisResult:  # pragma: no cover - interface
-        raise NotImplementedError
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if "run" in cls.__dict__:
+            original = cls.__dict__["run"]
+            if not getattr(original, "__log_run_wrapped__", False):
+                cls.run = log_run(original)
 
-    @log_this_fr
-    def plot(self, result: AnalysisResult):  # pragma: no cover - optional
+    @abstractmethod
+    def run(self, df: pd.DataFrame) -> AnalysisResult:
+        ...
+
+    def plot(self, result: AnalysisResult):
         return None
 
-    @log_this_fr
-    def save(self, result: AnalysisResult) -> list:  # pragma: no cover - optional
+    def save(self, result: AnalysisResult) -> list:
         return []
 
     def validate(self, df: pd.DataFrame) -> list[str]:
@@ -81,17 +89,53 @@ class Analysis:
 
 
 @dataclass(frozen=True)
-class StatFn:
+class StatFn(ABC):
     name: str
     label: str
     plotter: str = "longitudinal"
     color: Optional[str] = None
 
-    def __call__(self, *args, **kwargs):  # pragma: no cover - interface
-        raise NotImplementedError
+    @abstractmethod
+    def __call__(self, *args, **kwargs):
+        ...
 
 
 @dataclass(frozen=True)
-class AxisFn:
+class FeatureFn(ABC):
+    """Base class for per-row feature extractors.
+
+    Subclasses **must** override ``_run_impl(row) -> float``.
+    """
+
     name: str
     label: str
+    unit: Optional[str] = None
+    plotter: str = "longitudinal"
+    color: Optional[str] = None
+    source: Optional[str] = None
+    required_columns: tuple[str, ...] = ()
+
+    @log_this_fr
+    def run(self, row, debug: bool = False, context: str | None = None):
+        if debug:
+            _log.debug(f"[{self.name}] start | {context}")
+        # Warn on missing source columns when row has a MultiIndex
+        if self.required_columns and isinstance(row.index, pd.MultiIndex):
+            present = set(row.index)
+            for col in self.required_columns:
+                if col not in present:
+                    warnings.warn(
+                        f"[{self.name}] Row missing expected column: {col}",
+                        stacklevel=2,
+                    )
+        val = self._run_impl(row)
+        if debug:
+            _log.debug(f"[{self.name}] value={val} | {context}")
+        return val
+
+    @abstractmethod
+    def _run_impl(self, row) -> float:
+        ...
+
+    def __call__(self, row) -> float:
+        return self._run_impl(row)

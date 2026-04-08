@@ -11,6 +11,8 @@ Public API
 TraceStyle      Frozen dataclass — one rendering recipe.
 TRACE_STYLES    Dict mapping canonical names → TraceStyle instances.
 get_style       Lookup helper (returns a copy so callers can override).
+CONDITION_COLORS  Condition → hex colour mapping.
+CONDITION_ORDER   Display ordering for conditions.
 """
 from __future__ import annotations
 
@@ -167,3 +169,21 @@ def get_style(name: str, **overrides) -> TraceStyle:
         return style
     # Build a new instance with overridden fields
     return TraceStyle(**{**{f.name: getattr(style, f.name) for f in style.__dataclass_fields__.values()}, **overrides})
+
+
+# ── Condition colour / ordering defaults ───────────────────────────────────
+# Override in scripts:  CONDITION_COLORS["my_cond"] = "#abcdef"
+
+CONDITION_COLORS: dict[str, str] = {
+    "baseline": "#bbabab",
+    "saline": "#4289e6",
+    "ethanol_low": "#ffa251",
+    "ethanol_high": "#ce1818",
+}
+
+CONDITION_ORDER: list[str] = [
+    "baseline",
+    "saline",
+    "ethanol_low",
+    "ethanol_high",
+]

@@ -4,6 +4,8 @@ from typing import Dict, Iterable
 import matplotlib.pyplot as plt
 import numpy as np
 
+from databench.plotting import style_axes
+
 
 def plot_stacked_envelopes(t: np.ndarray, envs: Dict[str, np.ndarray], keys: Iterable[str],
                            band_lo: float, band_hi: float, ds: int = 10):
@@ -17,6 +19,7 @@ def plot_stacked_envelopes(t: np.ndarray, envs: Dict[str, np.ndarray], keys: Ite
             ax.set_xticklabels([])
         else:
             ax.set_xlabel("Time (s)")
+        style_axes(ax)
     plt.suptitle(
         f"2–5 Hz envelope (Hilbert amplitude), bandpass {band_lo:.0f}–{band_hi:.0f} Hz",
         y=0.98,
@@ -37,6 +40,7 @@ def plot_spectrogram_panel(specs: Dict[str, tuple], keys: Iterable[str], fmax: f
         ax.set_title(k)
         ax.set_xlabel("Time (s)")
         ax.set_ylabel("Hz")
+        style_axes(ax)
     plt.suptitle(
         f"Spectrograms after 2–5 Hz bandpass (win={win_s:.1f}s, overlap={overlap_frac:.3f})",
         y=0.98,

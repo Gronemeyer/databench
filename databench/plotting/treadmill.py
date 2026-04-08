@@ -12,7 +12,7 @@ def plot_locomotion_bouts(
     bouts: Iterable[Tuple[int, int]],
     *,
     title: Optional[str] = None,
-    color: str = "#2ca02c",
+    color: Optional[str] = None,
     ax=None,
 ):
     if ax is None:
@@ -20,6 +20,9 @@ def plot_locomotion_bouts(
     else:
         fig = None
 
+    if color is None:
+        from databench.plotting import get_theme
+        color = get_theme().colors[2]  # viridian
     ax.plot(t, speed_cms, color=color, lw=1.2, label="Speed (cm/s)")
     for s, e in bouts:
         ax.axvspan(t[s], t[e], color=color, alpha=0.2)

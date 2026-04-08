@@ -6,7 +6,7 @@ import tomllib
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 def _detect_script_name() -> str:
@@ -31,7 +31,7 @@ class IOConfig:
 
 @dataclass(frozen=True)
 class FilterConfig:
-    drop_rows: tuple = ()  # e.g., (("GS29","ses-04","task-movies"),)
+    drop_rows: Any = ()
 
 
 @dataclass(frozen=True)
@@ -41,26 +41,6 @@ class OutputPaths:
     reports: Path
     stats: Path
     config: Path
-
-
-# -- Default condition color / order maps ------------------------------------
-# Import and override in scripts when needed:
-#   from databench.config import CONDITION_COLORS, CONDITION_ORDER
-#   CONDITION_COLORS["my_cond"] = "#abcdef"
-
-CONDITION_COLORS: Dict[str, str] = {
-    "baseline": "#bbabab",
-    "saline": "#4289e6",
-    "ethanol_low": "#ffa251",
-    "ethanol_high": "#ce1818",
-}
-
-CONDITION_ORDER: List[str] = [
-    "baseline",
-    "saline",
-    "ethanol_low",
-    "ethanol_high",
-]
 
 
 # -- Dataset resolver --------------------------------------------------------

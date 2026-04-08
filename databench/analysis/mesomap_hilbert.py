@@ -8,10 +8,10 @@ import numpy as np
 import pandas as pd
 from databench.analysis.base import Analysis, AnalysisResult
 from databench.debug import log_context
-from databench.utils import strip_prefix
-from databench.plotting import plot_stacked_envelopes, plot_spectrogram_panel
+from databench._utils import strip_prefix
+from databench.plotting.mesomap import plot_stacked_envelopes, plot_spectrogram_panel
+from databench.analysis._signal.preproc import detrend_zscore_1d
 from scipy import signal
-
 
 # Default mesomap Hilbert parameters
 _DEFAULT_FS = 50.0
@@ -27,18 +27,10 @@ _DEFAULT_TARGETS: Dict[str, str] = {
 }
 
 
-def detrend_zscore_1d(x: np.ndarray) -> np.ndarray:
-    detrended = signal.detrend(x, type="linear")
-    std_dev = detrended.std(ddof=1)
-    if std_dev == 0:
-        std_dev = 1.0
-    return (detrended - detrended.mean()) / std_dev
-
-
 def bandpass_1d(x: np.ndarray, fs: float, lo: float, hi: float, order: int = 4) -> np.ndarray:
-    nyq = fs / 2.0
-    sos = signal.butter(order, [lo / nyq, hi / nyq], btype="bandpass", output="sos")
-    return signal.sosfiltfilt(sos, x)
+    from databench.analysis._signal.bandpass import bandpass_envelope
+    filtered, _ = bandpass_envelope(x, fs, (lo, hi), order)
+    return filtered
 
 
 def spectrogram_db(x: np.ndarray, fs: float, win_s: float, overlap_frac: float):
