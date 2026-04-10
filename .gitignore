@@ -1,4 +1,4 @@
-/outputs
+**/outputs
 */*/*/__pycache__/
 */__pycache__/*
 __pycache__/
@@ -8,6 +8,4 @@ __pycache__/
 *.csv
 /.DS_Store
 *.log
-/Scripts
-/scriptings
 datasets.toml
