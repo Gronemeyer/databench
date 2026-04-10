@@ -66,13 +66,20 @@ class DataTabler:
         if not spec:
             return df
 
-        mask = pd.Series(True, index=df.index)
+        if mode == "exclude":
+            mask = pd.Series(False, index=df.index)
+        else:
+            mask = pd.Series(True, index=df.index)
         for raw_level, raw_val in spec.items():
             level = self._resolve_index_level(df, str(raw_level))
             if level is None:
                 continue
             values = self._coerce_values(raw_val)
-            mask &= df.index.get_level_values(level).isin(values)
+            level_match = df.index.get_level_values(level).isin(values)
+            if mode == "exclude":
+                mask |= level_match
+            else:
+                mask &= level_match
 
         if mode == "include":
             return df.loc[mask]
