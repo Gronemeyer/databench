@@ -95,16 +95,12 @@ def _resolve_dataset_alias_for_output(input_path: Path | None = None) -> str:
     """Best-effort dataset alias for output folder naming.
 
     Resolution order:
-      1. ``DATABENCH_DATASET`` env var
-      2. ``DATASET`` env var
-      3. Alias matching ``input_path`` in ``datasets.toml`` (if provided)
+      1. Alias matching ``input_path`` in ``datasets.toml`` (authoritative)
+      2. ``DATABENCH_DATASET`` env var (short alias name only)
+      3. ``DATASET`` env var (short alias name only)
       4. ``default`` in ``datasets.toml``
       5. ``"dataset"`` fallback
     """
-    alias = os.environ.get("DATABENCH_DATASET") or os.environ.get("DATASET")
-    if alias:
-        return alias
-
     try:
         toml_path = _find_datasets_toml()
     except FileNotFoundError:
@@ -115,6 +111,7 @@ def _resolve_dataset_alias_for_output(input_path: Path | None = None) -> str:
 
     datasets: dict[str, str] = cfg.get("datasets", {})
 
+    # If the actual dataset path is registered in the toml, use that alias.
     if input_path is not None:
         try:
             target = Path(input_path).resolve()
@@ -122,8 +119,13 @@ def _resolve_dataset_alias_for_output(input_path: Path | None = None) -> str:
                 if Path(raw_path).resolve() == target:
                     return name
         except Exception:
-            # Fall through to default alias resolution.
             pass
+
+    # Env vars are a fallback — only accept short alias names, not file paths.
+    for env_var in ("DATABENCH_DATASET", "DATASET"):
+        env_val = os.environ.get(env_var)
+        if env_val and not Path(env_val).is_absolute():
+            return env_val
 
     default_alias = cfg.get("default")
     if isinstance(default_alias, str) and default_alias:

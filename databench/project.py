@@ -75,8 +75,18 @@ class Project:
     ----------
     dataset : Path
         Path to the dataset file (.pkl, .h5, .parquet, .csv).
-    output_root : Path
-        Root directory for all outputs.
+    output_root : Path or ``"dataset"``
+        Root directory for all outputs.  Defaults to ``Path("outputs")``,
+        which writes to ``./outputs/`` relative to the working directory.
+
+        Pass the string ``"dataset"`` to write outputs next to the
+        dataset file::
+
+            Project(dataset=path, output_root="dataset")
+            # → /path/to/dataset_dir/event-detection/260404/hfsa/...
+
+        This is never used as a fallback — it must be requested
+        explicitly.
     analyst, lab : str
         Metadata recorded in output provenance.
     run_name : str
@@ -89,7 +99,7 @@ class Project:
         self,
         dataset: Path,
         *,
-        output_root: Path = Path("outputs"),
+        output_root: Path | str = Path("outputs"),
         analyst: str = "",
         lab: str = "",
         run_name: str = "databench",
@@ -100,12 +110,18 @@ class Project:
         self._tabler = DataTabler(self._df)
         self.filter_config: FilterConfig | None = None
 
+        # Resolve output_root: "dataset" → write next to the dataset file
+        if isinstance(output_root, str) and output_root == "dataset":
+            resolved_root = self._dataset_path.parent
+        else:
+            resolved_root = Path(output_root)
+
         # Build output directory structure
         # outputs/<dataset_alias>/<YYMMDD>/<script_name>[_<tag>]/{plots,reports,stats}
         dataset_alias = _resolve_dataset_alias_for_output(self._dataset_path)
         script_name = _detect_script_name()
         run_dir = self._build_run_dir(
-            output_root=Path(output_root),
+            output_root=resolved_root,
             dataset_alias=dataset_alias,
             script_name=script_name,
             tag=tag,
@@ -134,10 +150,7 @@ class Project:
     ) -> Path:
         """Compose the run directory path from date and script/tag folder."""
         date_folder = datetime.now().strftime("%y%m%d")
-        script_tag_folder = "_".join(
-            part for part in (script_name, str(tag).strip()) if part
-        )
-        return output_root / dataset_alias / date_folder / script_tag_folder
+        return output_root / dataset_alias / script_name / date_folder
 
     def _append_run_name(self, name: str) -> Path:
         """Append run_name to a file stem while preserving parent and suffix."""
