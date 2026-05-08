@@ -44,11 +44,14 @@ from statsmodels.genmod.generalized_estimating_equations import GEE
 from statsmodels.genmod.families import Gaussian
 from statsmodels.genmod.cov_struct import Exchangeable
 
-from databench import Project, OscillationDetector
-from databench.analysis._signal.bouts import _locomotion_bouts
+from databench import (
+    Project,
+    OscillationDetector,
+    locomotion_bouts,
+    quiescent_bouts,
+    set_theme,
+)
 from databench.config import resolve_dataset
-from databench.session import SaveableFigure
-from databench.plotting import set_theme
 
 set_theme()
 
@@ -83,36 +86,6 @@ PUPIL_WINDOW_S = 5.0                 # seconds for early/late quiescence pupil
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────
-
-def quiescent_bouts(
-    t: np.ndarray,
-    loco_bouts: list[Tuple[int, int]],
-    min_duration_s: float = 0.0,
-) -> list[Tuple[int, int]]:
-    """Return index pairs for non-locomotion periods between locomotion bouts."""
-    n = len(t)
-    if not loco_bouts:
-        return [(0, n - 1)]
-
-    quiet: list[Tuple[int, int]] = []
-    first_start = loco_bouts[0][0]
-    if first_start > 0:
-        quiet.append((0, first_start - 1))
-    for i in range(len(loco_bouts) - 1):
-        gap_start = loco_bouts[i][1] + 1
-        gap_end = loco_bouts[i + 1][0] - 1
-        if gap_end >= gap_start:
-            quiet.append((gap_start, gap_end))
-    last_end = loco_bouts[-1][1]
-    if last_end < n - 1:
-        quiet.append((last_end + 1, n - 1))
-
-    dt = float(np.nanmedian(np.diff(t))) if len(t) > 1 else 0.02
-    return [
-        (s, e) for s, e in quiet
-        if float(t[e] - t[s] + dt) >= min_duration_s
-    ]
-
 
 def oscillation_features_in_bout(
     q_start_s: float,
@@ -375,29 +348,12 @@ def violin_two_groups(ax, vals_a, vals_b, label_a, label_b,
     ax.set_xticklabels([label_a, label_b])
 
 
-def save_fig(fig, ctx, name, suptitle=""):
-    """Suptitle + tight_layout + save via SaveableFigure."""
-    if suptitle:
-        fig.suptitle(suptitle, y=1.03)
-    fig.tight_layout()
-    SaveableFigure(fig, ctx).save(name)
-
-
-def save_dict_csv(results, path):
-    """Save ``{key: dict}`` mapping as CSV (keys → ``feature`` column)."""
-    if not results:
-        return
-    pd.DataFrame(results).T.reset_index().rename(
-        columns={"index": "feature"}
-    ).to_csv(path, index=False)
 
 
 # ─── Project setup ────────────────────────────────────────────────────────
 
 proj = Project(
     dataset=DATASET,
-    analyst="Jacob Gronemeyer",
-    lab="Sipe Lab",
     run_name="oscillation-locomotion-prediction",
     tag=f"{ROI_NAME}-{TASK}",
 )
@@ -433,7 +389,7 @@ for sess in group:
 
     speed_cms = speed_v / 10.0
 
-    loco = _locomotion_bouts(
+    loco = locomotion_bouts(
         speed_t, speed_cms,
         min_speed_cms=MIN_SPEED_CMS,
         min_duration_s=MIN_LOCO_DURATION_S,
@@ -852,8 +808,8 @@ for ax, (feat, info) in zip(axes1, LOCO_FEATURES.items()):
     ax.set_ylabel(info["label"])
     ax.grid(axis="y", alpha=0.3)
 
-save_fig(fig1, proj._context, "locomotion_by_prior_oscillation.svg",
-         f"Locomotion features by prior oscillatory state\n"
+proj.io.figure(fig1, "locomotion_by_prior_oscillation.svg", tight=True,
+         suptitle=f"Locomotion features by prior oscillatory state\n"
          f"{ROI_NAME} | {BAND[0]}–{BAND[1]} Hz | {TASK} | N = {n_subjects} animals")
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -874,8 +830,8 @@ for ax, (feat, info) in zip(axes2, LOCO_FEATURES.items()):
     ax.grid(alpha=0.3)
 
 axes2[0].legend(frameon=False, markerscale=1.5)
-save_fig(fig2, proj._context, "osc_duration_vs_locomotion.svg",
-         f"Oscillation duration → locomotion features (osc bouts only)\n"
+proj.io.figure(fig2, "osc_duration_vs_locomotion.svg", tight=True,
+         suptitle=f"Oscillation duration → locomotion features (osc bouts only)\n"
          f"{ROI_NAME} | {BAND[0]}–{BAND[1]} Hz | N = {n_subjects} animals")
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -921,7 +877,7 @@ if gee_results:
     )
     ax3.legend(frameon=False)
     ax3.grid(axis="x", alpha=0.3)
-    save_fig(fig3, proj._context, "gee_forest_plot.svg")
+    proj.io.figure(fig3, "gee_forest_plot.svg", tight=True)
 
 # ═════════════════════════════════════════════════════════════════════════
 # FIGURE 4: Per-animal effect direction (consistency check)
@@ -966,8 +922,8 @@ for ax, (feat, info) in zip(axes4, LOCO_FEATURES.items()):
     else:
         ax.set_title(info["label"])
 
-save_fig(fig4, proj._context, "per_animal_effect_direction.svg",
-         f"Per-animal median difference (osc − no-osc)\n"
+proj.io.figure(fig4, "per_animal_effect_direction.svg", tight=True,
+         suptitle=f"Per-animal median difference (osc − no-osc)\n"
          f"N = {n_subjects} animals")
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -1036,8 +992,8 @@ ax.set_title(f"Pupil trajectory: first vs last {PUPIL_WINDOW_S:.0f}s of quiescen
 ax.legend(frameon=False)
 ax.grid(axis="y", alpha=0.3)
 
-save_fig(fig5, proj._context, "pupil_arousal_measures.svg",
-         f"Pupil arousal measures\n"
+proj.io.figure(fig5, "pupil_arousal_measures.svg", tight=True,
+         suptitle=f"Pupil arousal measures\n"
          f"{ROI_NAME} | {BAND[0]}–{BAND[1]} Hz | {TASK} | N = {n_subjects} animals")
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -1077,7 +1033,7 @@ if mediation_results:
     )
     ax6.legend(frameon=False)
     ax6.grid(axis="x", alpha=0.3)
-    save_fig(fig6, proj._context, "mediation_pupil_check.svg")
+    proj.io.figure(fig6, "mediation_pupil_check.svg", tight=True)
 
 # ═════════════════════════════════════════════════════════════════════════
 # FIGURE 7: Interaction — osc latency effect split by pupil tertile
@@ -1128,23 +1084,20 @@ if len(osc_with_pup_z) > 30:
         ax.legend(frameon=False)
         ax.grid(alpha=0.3)
 
-    save_fig(fig7, proj._context, "interaction_pupil_tercile.svg",
-             f"Osc latency → locomotion, split by pupil arousal tercile\n"
+    proj.io.figure(fig7, "interaction_pupil_tercile.svg", tight=True,
+             suptitle=f"Osc latency → locomotion, split by pupil arousal tercile\n"
              f"{ROI_NAME} | N = {n_subjects} animals")
 
 # ═════════════════════════════════════════════════════════════════════════
 # Save tables
 # ═════════════════════════════════════════════════════════════════════════
 
-stats_dir = proj._context.stats_dir
-stats_dir.mkdir(parents=True, exist_ok=True)
-
-df.to_csv(stats_dir / "quiescent_to_locomotion_transitions.csv", index=False)
-desc_df.to_csv(stats_dir / "descriptive_comparisons.csv", index=False)
-save_dict_csv(gee_results, stats_dir / "gee_binary_results.csv")
-save_dict_csv(continuous_gee, stats_dir / "gee_continuous_results.csv")
-save_dict_csv(mediation_results, stats_dir / "mediation_results.csv")
-save_dict_csv(interaction_results, stats_dir / "interaction_results.csv")
+proj.io.table(df, "quiescent_to_locomotion_transitions.csv")
+proj.io.table(desc_df, "descriptive_comparisons.csv")
+proj.io.dict_table(gee_results, "gee_binary_results.csv")
+proj.io.dict_table(continuous_gee, "gee_continuous_results.csv")
+proj.io.dict_table(mediation_results, "mediation_results.csv")
+proj.io.dict_table(interaction_results, "interaction_results.csv")
 
 # ═════════════════════════════════════════════════════════════════════════
 # Markdown report
@@ -1181,7 +1134,7 @@ for _, row in desc_df.iterrows():
     )
 desc_table = "\n".join(desc_table_lines)
 
-report_path = proj.save_report(
+report_path = proj.io.report(
     notes=(
         f"## Oscillation → locomotion prediction\n\n"
         f"**Question:** Does prior oscillatory state during quiescence predict "
@@ -1263,4 +1216,4 @@ report_path = proj.save_report(
     ),
 )
 print(f"\nReport: {report_path}")
-print(f"Outputs saved to: {proj._context.run_dir}")
+print(f"Outputs saved to: {proj.io.run_dir}")

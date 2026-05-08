@@ -1,13 +1,30 @@
-"""Internal signal-processing primitives."""
+"""Signal-processing primitives shared by analysis and plotting."""
 
-from databench.analysis._signal.remap import (  # noqa: F401 — public re-exports
+from databench.signal.bandpass import (  # noqa: F401
+    bandpass_envelope,
+    robust_threshold,
+)
+
+from databench.signal.preproc import (  # noqa: F401
+    MEDIAN_FILTER_SIZE,
+    SAVGOL_WINDOW,
+    SAVGOL_POLYORDER,
+    OUTLIER_IQR_K,
+    smooth_savgol,
+    smooth_dense,
+    smooth_median,
+    remove_outliers_iqr,
+    detrend_zscore_1d,
+)
+
+from databench.signal.remap import (  # noqa: F401 — public re-exports
     GAP_THRESHOLD_S,
     remap_previous_sample,
     remap_to_timebase,
     prepare_sparse_trace,
 )
 
-from databench.analysis._signal.epoching import (  # noqa: F401 — public re-exports
+from databench.signal.epoching import (  # noqa: F401 — public re-exports
     # Column-name constants
     EPOCH_ID,
     START_S,

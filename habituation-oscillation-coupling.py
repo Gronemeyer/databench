@@ -39,11 +39,15 @@ from statsmodels.genmod.generalized_estimating_equations import GEE
 from statsmodels.genmod.families import Gaussian, Binomial
 from statsmodels.genmod.cov_struct import Exchangeable
 
-from databench import Project, OscillationDetector
-from databench.analysis._signal.bouts import _locomotion_bouts
+from databench import (
+    Project,
+    OscillationDetector,
+    locomotion_bouts,
+    quiescent_bouts,
+    parse_session_day,
+    set_theme,
+)
 from databench.config import resolve_dataset
-from databench.session import SaveableFigure
-from databench.plotting import set_theme
 
 set_theme()
 
@@ -85,39 +89,6 @@ PHASE_ORDER = ["early", "middle", "late"]
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────
-
-def day_from_session(session_label: str) -> int:
-    """Extract day number from session label, e.g. 'ses-04' → 4."""
-    return int(session_label.split("-")[1])
-
-
-def quiescent_bouts(
-    t: np.ndarray,
-    loco_bouts: list[Tuple[int, int]],
-    min_duration_s: float = 0.0,
-) -> list[Tuple[int, int]]:
-    """Return index pairs for non-locomotion periods between locomotion bouts."""
-    n = len(t)
-    if not loco_bouts:
-        return [(0, n - 1)]
-    quiet: list[Tuple[int, int]] = []
-    first_start = loco_bouts[0][0]
-    if first_start > 0:
-        quiet.append((0, first_start - 1))
-    for i in range(len(loco_bouts) - 1):
-        gap_start = loco_bouts[i][1] + 1
-        gap_end = loco_bouts[i + 1][0] - 1
-        if gap_end >= gap_start:
-            quiet.append((gap_start, gap_end))
-    last_end = loco_bouts[-1][1]
-    if last_end < n - 1:
-        quiet.append((last_end + 1, n - 1))
-    dt = float(np.nanmedian(np.diff(t))) if len(t) > 1 else 0.02
-    return [
-        (s, e) for s, e in quiet
-        if float(t[e] - t[s] + dt) >= min_duration_s
-    ]
-
 
 def oscillation_features_in_bout(
     q_start_s: float,
@@ -318,20 +289,11 @@ def fit_gee(
     return result
 
 
-def save_fig(fig, ctx, name, suptitle=""):
-    """Suptitle + tight_layout + save via SaveableFigure."""
-    if suptitle:
-        fig.suptitle(suptitle, y=1.03)
-    fig.tight_layout()
-    SaveableFigure(fig, ctx).save(name)
-
 
 # ─── Project setup ────────────────────────────────────────────────────────
 
 proj = Project(
     dataset=DATASET,
-    analyst="Jacob Gronemeyer",
-    lab="Sipe Lab",
     run_name="habituation-oscillation-coupling",
     tag=f"{ROI_NAME}-{TASK}",
 )
@@ -361,7 +323,7 @@ session_rows: list[dict] = []
 transition_rows: list[dict] = []
 
 for sess in group:
-    day = day_from_session(sess.session)
+    day = parse_session_day(sess.session)
     phase = PHASE_MAP.get(day, "unknown")
 
     # ── Treadmill / locomotion ───────────────────────────────────────────
@@ -375,7 +337,7 @@ for sess in group:
     total_time_s = float(speed_t[-1] - speed_t[0])
     dt = float(np.nanmedian(np.diff(speed_t))) if len(speed_t) > 1 else 0.02
 
-    loco = _locomotion_bouts(
+    loco = locomotion_bouts(
         speed_t, speed_cms,
         min_speed_cms=MIN_SPEED_CMS,
         min_duration_s=MIN_LOCO_DURATION_S,
@@ -845,8 +807,8 @@ ax.set_title("F. State occupancy (quiescence)")
 ax.set_xticks(range(1, 11))
 ax.grid(alpha=0.3)
 
-save_fig(fig1, proj._context, "fig1_oscillation_properties_across_days.svg",
-         f"Oscillation properties across 10-day HFSA\n"
+proj.io.figure(fig1, "fig1_oscillation_properties_across_days.svg", tight=True,
+         suptitle=f"Oscillation properties across 10-day HFSA\n"
          f"{ROI_NAME} | {BAND[0]}–{BAND[1]} Hz | {TASK} | N = {n_subjects}")
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -888,8 +850,8 @@ for ax, (feat, label) in zip(axes2, VIGOR_FEATURES.items()):
     ax.set_title(label)
     ax.grid(axis="y", alpha=0.3)
 
-save_fig(fig2, proj._context, "fig2_latency_vigor_coupling_by_phase.svg",
-         f"Timing-vigor coupling across habituation phases\n"
+proj.io.figure(fig2, "fig2_latency_vigor_coupling_by_phase.svg", tight=True,
+         suptitle=f"Timing-vigor coupling across habituation phases\n"
          f"β(osc_latency → vigor) | {ROI_NAME} | N = {n_subjects}")
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -924,8 +886,8 @@ for ax, (feat, label) in zip(axes3, VIGOR_FEATURES.items()):
     ax.set_title(label)
     ax.grid(axis="y", alpha=0.3)
 
-save_fig(fig3, proj._context, "fig3_arousal_interaction_across_phases.svg",
-         f"Arousal modulation of oscillation-vigor coupling\n"
+proj.io.figure(fig3, "fig3_arousal_interaction_across_phases.svg", tight=True,
+         suptitle=f"Arousal modulation of oscillation-vigor coupling\n"
          f"β(latency × pupil_z) | {ROI_NAME} | N = {n_subjects}")
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -988,33 +950,27 @@ ax.set_title("C. Quiescent bout duration")
 ax.legend(frameon=False)
 ax.grid(axis="y", alpha=0.3)
 
-save_fig(fig4, proj._context, "fig4_state_occupancy_by_phase.svg",
-         f"State occupancy across habituation phases\n"
+proj.io.figure(fig4, "fig4_state_occupancy_by_phase.svg", tight=True,
+         suptitle=f"State occupancy across habituation phases\n"
          f"{TASK} | N = {n_subjects}")
 
 # ═════════════════════════════════════════════════════════════════════════
 # Save tables
 # ═════════════════════════════════════════════════════════════════════════
 
-stats_dir = proj._context.stats_dir
-stats_dir.mkdir(parents=True, exist_ok=True)
-
-sess_df.to_csv(stats_dir / "session_summary.csv", index=False)
-trans_df.to_csv(stats_dir / "transitions.csv", index=False)
-pd.DataFrame(model_comparison).T.reset_index().rename(
-    columns={"index": "feature"}
-).to_csv(stats_dir / "model_comparison.csv", index=False)
+proj.io.table(sess_df, "session_summary.csv")
+proj.io.table(trans_df, "transitions.csv")
+proj.io.table(
+    pd.DataFrame(model_comparison).T.reset_index().rename(columns={"index": "feature"}),
+    "model_comparison.csv",
+)
 
 # Phase beta tables
 for feat, label in VIGOR_FEATURES.items():
     betas = phase_betas[feat]
-    pd.DataFrame(betas).to_csv(
-        stats_dir / f"phase_betas_{feat}.csv", index=False
-    )
+    proj.io.table(pd.DataFrame(betas), f"phase_betas_{feat}.csv")
     arousal_res = arousal_phase_results[feat]
-    pd.DataFrame(arousal_res).to_csv(
-        stats_dir / f"arousal_interaction_{feat}.csv", index=False
-    )
+    proj.io.table(pd.DataFrame(arousal_res), f"arousal_interaction_{feat}.csv")
 
 # ═════════════════════════════════════════════════════════════════════════
 # Markdown report
@@ -1086,7 +1042,7 @@ patterns_table = (
     "| Frequency drifts | Possibly argues against fixed thalamocortical generator, or for state-dependent tuning |"
 )
 
-report_path = proj.save_report(
+report_path = proj.io.report(
     notes=(
         f"## Habituation-dependent oscillation-behavior coupling\n\n"
         f"**Core question:** Does the oscillation-locomotion relationship drift "
@@ -1137,4 +1093,4 @@ report_path = proj.save_report(
 )
 
 print(f"\nReport: {report_path}")
-print(f"Outputs saved to: {proj._context.run_dir}")
+print(f"Outputs saved to: {proj.io.run_dir}")

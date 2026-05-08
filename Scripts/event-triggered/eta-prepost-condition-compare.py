@@ -17,8 +17,8 @@ from databench.project import Project
 from databench.analysis.eta import EtaAnalysis
 from databench.analysis.locomotion import locomotion_events
 from databench.config import resolve_dataset
-from databench.session import SaveableFigure
-from databench._utils._logger import get_logger
+from databench.types import EventsTable
+from databench.utils.logger import get_logger
 from databench.plotting import set_theme
 
 set_theme()
@@ -35,35 +35,24 @@ POST_WINDOW = (0.0, 1.0)
 FULL_WINDOW = (-2.0, 3.0)
 BASELINE = (-2.0, -1.0)
 
-SESSION_TO_CONDITION = {
-    "ses-01": "baseline",
-    "ses-02": "saline",
-    "ses-03": "ethanol_low",
-    "ses-04": "ethanol_high",
-}
-CONDITION_ORDER = ("baseline", "saline", "ethanol_low", "ethanol_high")
-CONDITION_COLORS = {
-    "baseline": "#bbabab",
-    "saline": "#4289e6",
-    "ethanol_low": "#ffa251",
-    "ethanol_high": "#ce1818",
-}
-
 # ─── Project setup ────────────────────────────────────────────────────────
 
 proj = Project(
     dataset=DATASET,
-    analyst="Jacob Gronemeyer",
-    lab="Sipe Lab",
     run_name="eta-prepost",
     tag="vis-primary-secondary",
 )
+
+# Per-dataset metadata pulled from datasets.toml [datasets.etoh]
+SESSION_TO_CONDITION = proj.params["session_map"]
+CONDITION_ORDER = tuple(proj.params["condition_order"])
+CONDITION_COLORS = proj.params["condition_colors"]
 
 group = proj.sessions(task=TASK)
 
 # ─── Detect events & add conditions ──────────────────────────────────────
 
-events = locomotion_events(group, min_speed_cms=0.5, min_duration_s=1.0, merge_gap_s=0.5)
+events: EventsTable = locomotion_events(group, min_speed_cms=0.5, min_duration_s=1.0, merge_gap_s=0.5)
 events["Condition"] = events["Session"].map(SESSION_TO_CONDITION)
 _log.info(f"Detected {len(events)} events across {events['Subject'].nunique()} subjects")
 
@@ -154,20 +143,20 @@ for etype in result.event_types:
 
     fig.suptitle(f"ETA Pre/Post Diff — {etype}")
     fig.tight_layout()
-    SaveableFigure(fig, proj._context).save(f"eta_prepost_diff_{etype}.svg")
+    proj.io.figure(fig, f"eta_prepost_diff_{etype}.svg")
 
 # ─── Save ─────────────────────────────────────────────────────────────────
 
-stats_dir = proj._context.stats_dir
-stats_dir.mkdir(parents=True, exist_ok=True)
-diff_df.to_csv(stats_dir / "eta_prepost_diff.csv", index=False)
-result.save_tables(prefix="eta_prepost")
+proj.io.table(diff_df, "eta_prepost_diff.csv")
+for key, df in result.tables.items():
+    proj.io.table(df, f"eta_prepost_{key}.csv")
 
 # Standard ETA plots
 for etype in result.event_types:
-    result.plot(event=etype, rois=list(ROI_COLUMNS)).save(f"eta_{etype}_traces.svg")
+    fig = result.plot(event=etype, rois=list(ROI_COLUMNS))
+    proj.io.figure(fig, f"eta_{etype}_traces.svg")
 
-proj.save_report(
+proj.io.report(
     result,
     notes=(
         f"ETA pre/post difference comparison across conditions for locomotion events. "

@@ -12,25 +12,27 @@ Usage::
         baseline=(-2.0, -1.0),
     )
     result = eta.run(group, events)
-    result.plot(event="onset").save("eta_onset.svg")
-    result.save_tables(prefix="eta")
+    fig = result.plot(event="onset")
+    project.io.figure(fig, "eta_onset.svg")
+    project.io.table(result.tables["events"], "events.csv")
 """
 from __future__ import annotations
 
-import json
 import warnings
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from databench.analysis._signal.epoching import extract_epoch_interpolated
-from databench._utils._logger import get_logger, log_run
+from databench.signal.epoching import extract_epoch_interpolated
+from databench.utils.logger import get_logger, log_run
 from databench.config import OutputContext
+
+if TYPE_CHECKING:
+    from databench.types import EventsTable
 
 _log = get_logger(__name__)
 
@@ -243,7 +245,7 @@ class EtaAnalysis:
     ``Task``, ``EventType``, ``event_time``) to :meth:`run`.
 
     Use helper functions like
-    :func:`~databench.analysis._signal.events.locomotion_events` to produce events
+    :func:`~databench.signal.epoching.locomotion_events` to produce events
     from specific detectors.
 
     Parameters
@@ -281,7 +283,7 @@ class EtaAnalysis:
     def run(
         self,
         sessions: "SessionGroup",
-        events: "pd.DataFrame",
+        events: EventsTable,
         *,
         aligned: list["AlignedData"] | None = None,
         condition_map: Mapping[str, str] | None = None,
@@ -296,8 +298,8 @@ class EtaAnalysis:
             Events table with at least ``Subject``, ``Session``, ``Task``,
             ``EventType``, ``event_time``.  An optional ``Condition`` column
             overrides *condition_map*.  Produce this with
-            :func:`~databench.analysis._signal.events.locomotion_events`,
-            :func:`~databench.analysis._signal.events.make_events`, or any custom
+            :func:`~databench.signal.epoching.locomotion_events`,
+            :func:`~databench.signal.epoching.make_events`, or any custom
             function.
         aligned : list of AlignedData, optional
             Pre-computed aligned data for each session.  When ``None``,
@@ -527,30 +529,11 @@ class EtaResult:
         condition_colors: Dict[str, str] | None = None,
         ncols: int = 2,
         task: str | None = None,
-    ) -> "SaveableFigure":
-        """Plot group-mean ± SEM ETA traces.
+    ):
+        """Plot group-mean ± SEM ETA traces.  Returns a matplotlib ``Figure``.
 
-        Parameters
-        ----------
-        event : str
-            Event type to display (e.g. ``"onset"``).
-        rois : list of str, optional
-            ROIs to include. Defaults to all ``roi_columns``.
-        conditions : list of str, optional
-            Condition ordering.
-        condition_colors : dict, optional
-            Mapping from condition → color string.
-        ncols : int
-            Number of subplot columns.
-        task : str, optional
-            Filter group_means to a specific task.
-
-        Returns
-        -------
-        SaveableFigure
+        Persist via ``project.io.figure(...)``.
         """
-        from databench.session import SaveableFigure
-
         rois_to_plot = rois if rois is not None else self.roi_columns
 
         fig = plot_eta_by_condition(
@@ -563,64 +546,23 @@ class EtaResult:
             ncols=ncols,
             task=task,
         )
-        return SaveableFigure(fig, self._context)
+        return fig
 
-    # ── Saving ─────────────────────────────────────────────────────────────
-
-    def save_tables(self, prefix: str = "eta") -> dict[str, Path]:
-        """Save the main DataFrames to CSV.
-
-        Returns
-        -------
-        dict
-            Mapping from table name to saved file path.
-        """
-        if self._context is None:
-            raise RuntimeError("Cannot save — no output context available.")
-        out_dir = self._context.stats_dir
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        paths: dict[str, Path] = {}
-        for name, df in [
-            ("events", self.events),
-            ("eta_events", self.eta_events),
-            ("subject_means", self.subject_means),
-            ("group_means", self.group_means),
-        ]:
-            p = out_dir / f"{prefix}_{name}.csv"
-            df.to_csv(p, index=False)
-            paths[name] = p
-        return paths
-
-    def save_summary(self, name: str = "eta_summary.json") -> Path:
-        """Save a JSON summary of the analysis."""
-        if self._context is None:
-            raise RuntimeError("Cannot save — no output context available.")
-        out_dir = self._context.run_dir
-        out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / name
-
-        n_subj = int(self.events["Subject"].nunique()) if not self.events.empty else 0
-        conds = sorted(self.events["Condition"].unique().tolist()) if not self.events.empty else []
-
-        summary = {
-            "analysis": "event_triggered_average",
-            "created_at": datetime.now().isoformat(),
-            "analyst": self._context.analyst,
-            "lab": self._context.lab,
-            "run_name": self._context.run_name,
-            "tag": self._context.tag,
-            "roi_columns": self.roi_columns,
-            "event_types": self.event_types,
-            "window": list(self.window),
-            "baseline": list(self.baseline),
-            "n_events": int(len(self.events)),
-            "n_subjects": n_subj,
-            "conditions": conds,
+    @property
+    def tables(self) -> dict[str, pd.DataFrame]:
+        """All result DataFrames keyed by name."""
+        return {
+            "events": self.events,
+            "eta_events": self.eta_events,
+            "subject_means": self.subject_means,
+            "group_means": self.group_means,
         }
-        with open(path, "w") as f:
-            json.dump(summary, f, indent=2)
-        return path
+
+    # ── Plotter factory ────────────────────────────────────────────────────
+
+    def condition_plotter(self, **kwargs):
+        """Return an :class:`EtaConditionPlotter` configured for this result."""
+        return EtaConditionPlotter(**kwargs)
 
     # ── Reporting ──────────────────────────────────────────────────────────
 
@@ -654,4 +596,31 @@ class EtaResult:
             notes=notes,
             figures=figures,
             tables=tables,
+        )
+
+
+# --- Plotter ---
+
+from dataclasses import dataclass as _dataclass
+from databench.plotting.base import Plotter as _Plotter
+
+
+@_dataclass(frozen=True)
+class EtaConditionPlotter(_Plotter):
+    name: str = "eta_by_condition"
+    event: str = "onset"
+    rois: tuple = ()
+    conditions: Optional[tuple] = None
+    ncols: int = 2
+    task: Optional[str] = None
+
+    def plot(self, result):
+        rois = list(self.rois) if self.rois else None
+        conditions = list(self.conditions) if self.conditions else None
+        return result.plot(
+            event=self.event,
+            rois=rois,
+            conditions=conditions,
+            ncols=self.ncols,
+            task=self.task,
         )

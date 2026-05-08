@@ -19,8 +19,8 @@ from databench.project import Project
 from databench.analysis.eta import EtaAnalysis
 from databench.analysis.locomotion import locomotion_events
 from databench.config import resolve_dataset
-from databench.session import SaveableFigure
-from databench._utils._logger import get_logger
+from databench.types import EventsTable
+from databench.utils.logger import get_logger
 from databench.plotting import set_theme
 
 set_theme()
@@ -40,8 +40,6 @@ METRIC_WINDOW = (0.0, 2.0)
 
 proj = Project(
     dataset=DATASET,
-    analyst="Jacob Gronemeyer",
-    lab="Sipe Lab",
     run_name="widefield-10day",
     tag="ROI-speed_eta-2s",
 )
@@ -51,7 +49,7 @@ _log.info(f"Selected {len(group)} sessions for task={TASK}")
 
 # ─── Detect events ───────────────────────────────────────────────────────
 
-events = locomotion_events(
+events: EventsTable = locomotion_events(
     group,
     speed_source="treadmill",
     speed_column="speed_mm",
@@ -140,7 +138,7 @@ for etype in result.event_types:
 
     fig.suptitle(f"Longitudinal ETA heatmap — {etype}")
     fig.tight_layout()
-    SaveableFigure(fig, proj._context).save(f"eta_{etype}_longitudinal_heatmap.svg")
+    proj.io.figure(fig, f"eta_{etype}_longitudinal_heatmap.svg")
 
 # ─── 3. Longitudinal metric plot ─────────────────────────────────────────
 
@@ -196,17 +194,16 @@ for etype in result.event_types:
 
     fig.suptitle(f"Longitudinal metric — {etype}")
     fig.tight_layout()
-    SaveableFigure(fig, proj._context).save(f"eta_{etype}_longitudinal_metric.svg")
+    proj.io.figure(fig, f"eta_{etype}_longitudinal_metric.svg")
 
 # ─── Save ─────────────────────────────────────────────────────────────────
 
-result.save_tables(prefix="eta_widefield_10day")
+for key, df in result.tables.items():
+    proj.io.table(df, f"eta_widefield_10day_{key}.csv")
 
-stats_dir = proj._context.stats_dir
-stats_dir.mkdir(parents=True, exist_ok=True)
-metric_df.to_csv(stats_dir / "eta_longitudinal_metric.csv", index=False)
+proj.io.table(metric_df, "eta_longitudinal_metric.csv")
 
-report_path = proj.save_report(
+report_path = proj.io.report(
     result,
     notes=(
         "Widefield event-based ETA workflow for a longitudinal 10-day dataset. "

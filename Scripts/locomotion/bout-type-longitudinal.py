@@ -22,7 +22,8 @@ import pandas as pd
 from databench.project import Project
 from databench.config import resolve_dataset
 from databench.analysis.locomotion import locomotion_bout_events
-from databench._utils import clean_xy, get_first, session_to_int
+from databench.types import BoutEventsTable
+from databench.utils import clean_xy, get_first, session_to_int
 
 # ── Parameters ──────────────────────────────────────────────────────────────
 
@@ -135,7 +136,7 @@ def extract_bout_proportions(df: pd.DataFrame) -> pd.DataFrame:
             continue
 
         # Detect bouts
-        epochs = locomotion_bout_events(
+        epochs: BoutEventsTable = locomotion_bout_events(
             t, speed_cms,
             min_speed_cms=MIN_SPEED_CMS,
             min_duration_s=MIN_DURATION_S,
@@ -287,8 +288,12 @@ def plot_bout_proportions(
     fig.tight_layout(w_pad=3)
 
     if project is not None:
-        png_path = project.save_figure(fig, f"{OUTPUT_PREFIX}_proportions.png", dpi=300)
-        project.save_figure(fig, f"{OUTPUT_PREFIX}_proportions.svg", dpi=300)
+        png_path = project.io.figure(
+            fig,
+            f"{OUTPUT_PREFIX}_proportions.png",
+            dpi=300,
+            formats=("svg",),
+        )
         print(f"Saved to {png_path}")
 
     return fig, (ax_c, ax_h)
@@ -301,8 +306,6 @@ if __name__ == "__main__":
     proj = Project(
         dataset=DATASET,
         output_root=OUTPUT_ROOT,
-        analyst="Jacob Gronemeyer",
-        lab="Sipe Lab",
         run_name=RUN_NAME,
         tag=TAG,
     ).filter(drop_rows=(("STREHAB07", "ses-11"),))

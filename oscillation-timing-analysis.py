@@ -28,11 +28,14 @@ import numpy as np
 import pandas as pd
 from scipy import stats as sp_stats
 
-from databench import Project, OscillationDetector
-from databench.analysis._signal.bouts import _locomotion_bouts
+from databench import (
+    Project,
+    OscillationDetector,
+    locomotion_bouts,
+    quiescent_bouts,
+    set_theme,
+)
 from databench.config import resolve_dataset
-from databench.session import SaveableFigure
-from databench.plotting import set_theme
 
 set_theme()
 
@@ -67,36 +70,6 @@ CONTINUATION_THRESHOLD_S = 30.0  # bout must reach 30s to count as "continued"
 
 # ─── Helpers ──────────────────────────────────────────────────────────────
 
-def quiescent_bouts(
-    t: np.ndarray,
-    loco_bouts: list[Tuple[int, int]],
-    min_duration_s: float = 0.0,
-) -> list[Tuple[int, int]]:
-    """Return index pairs for non-locomotion periods between locomotion bouts."""
-    n = len(t)
-    if not loco_bouts:
-        return [(0, n - 1)]
-
-    quiet: list[Tuple[int, int]] = []
-    first_start = loco_bouts[0][0]
-    if first_start > 0:
-        quiet.append((0, first_start - 1))
-    for i in range(len(loco_bouts) - 1):
-        gap_start = loco_bouts[i][1] + 1
-        gap_end = loco_bouts[i + 1][0] - 1
-        if gap_end >= gap_start:
-            quiet.append((gap_start, gap_end))
-    last_end = loco_bouts[-1][1]
-    if last_end < n - 1:
-        quiet.append((last_end + 1, n - 1))
-
-    dt = float(np.nanmedian(np.diff(t))) if len(t) > 1 else 0.02
-    return [
-        (s, e) for s, e in quiet
-        if float(t[e] - t[s] + dt) >= min_duration_s
-    ]
-
-
 def first_oscillation_onset(
     q_start_s: float,
     q_end_s: float,
@@ -123,8 +96,6 @@ def first_oscillation_onset(
 
 proj = Project(
     dataset=DATASET,
-    analyst="Jacob Gronemeyer",
-    lab="Sipe Lab",
     run_name="oscillation-timing-analysis",
     tag=f"{ROI_NAME}-{TASK}",
 )
@@ -158,7 +129,7 @@ for sess in group:
         continue
 
     speed_cms = speed_v / 10.0
-    loco = _locomotion_bouts(
+    loco = locomotion_bouts(
         speed_t, speed_cms,
         min_speed_cms=MIN_SPEED_CMS,
         min_duration_s=MIN_LOCO_DURATION_S,
@@ -360,16 +331,13 @@ fig.suptitle(
     y=1.02,
 )
 fig.tight_layout()
-SaveableFigure(fig, proj._context).save("oscillation_timing_analysis.svg")
+proj.io.figure(fig, "oscillation_timing_analysis.svg")
 
 # ═════════════════════════════════════════════════════════════════════════
 # Save tables
 # ═════════════════════════════════════════════════════════════════════════
 
-stats_dir = proj._context.stats_dir
-stats_dir.mkdir(parents=True, exist_ok=True)
-
-df.to_csv(stats_dir / "quiescent_bouts_timing.csv", index=False)
+proj.io.table(df, "quiescent_bouts_timing.csv")
 
 # ═════════════════════════════════════════════════════════════════════════
 # Markdown report
@@ -388,7 +356,7 @@ for label in tercile_labels:
     tercile_stats_lines.append(f"| {label} | {med:.1f} | [{q1:.1f}, {q3:.1f}] | {len(subset)} |")
 tercile_table = "\n".join(tercile_stats_lines)
 
-report_path = proj.save_report(
+report_path = proj.io.report(
     notes=(
         f"## Oscillation timing analysis\n\n"
         f"**Dataset:** ETOH-HFSA | **Task:** {TASK}\n\n"
@@ -423,4 +391,4 @@ report_path = proj.save_report(
     ),
 )
 print(f"\nReport: {report_path}")
-print(f"Outputs saved to: {proj._context.run_dir}")
+print(f"Outputs saved to: {proj.io.run_dir}")

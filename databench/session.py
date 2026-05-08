@@ -1,4 +1,4 @@
-"""Session, SessionGroup, AlignedData, and SaveableFigure.
+﻿"""Session, SessionGroup, and AlignedData.
 
 These are the data-selection and data-alignment objects in the public API.
 Users get them from :class:`~databench.project.Project`, not by importing
@@ -13,9 +13,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from databench.analysis.base import FeatureFn
 from databench.config import OutputContext
-from databench._utils import session_to_int
+from databench.utils import session_to_int
 
 
 # ── Exceptions ─────────────────────────────────────────────────────────────
@@ -23,175 +22,6 @@ from databench._utils import session_to_int
 class SignalNotFoundError(KeyError):
     """Raised when a requested source/signal is not in the session data."""
 
-
-def _extract_trace(
-    row: pd.Series,
-    source: str,
-    feature: str,
-    index: Optional[int],
-) -> Optional[np.ndarray]:
-    """Pull a single trace from a multi-index row."""
-    x = row.get((source, feature))
-    if x is None:
-        return None
-    arr = np.asarray(x)
-    if arr.ndim > 1 and index is not None:
-        arr = arr[index]
-    return arr
-
-
-def _source_timeseries(
-    row: pd.Series,
-    source: str,
-    features: Iterable[str],
-    time_column: str,
-    index: Optional[int] = None,
-) -> Optional[pd.DataFrame]:
-    """Build a DataFrame of aligned time + feature columns for one source."""
-    t = _extract_trace(row, source, time_column, index)
-    if t is None:
-        return None
-    t_arr = np.atleast_1d(t).astype(float, copy=False)
-    data: dict[str, Any] = {time_column: t_arr}
-    for feature_name in features:
-        x = _extract_trace(row, source, feature_name, index)
-        if x is None:
-            data[feature_name] = np.full(t_arr.shape, np.nan)
-        else:
-            data[feature_name] = np.atleast_1d(x)
-    return pd.DataFrame(data)
-
-
-def build_long(
-    df: pd.DataFrame,
-    source_features: Optional[Iterable[tuple]] = None,
-    sources: Optional[Iterable[tuple]] = None,
-    tol: float = 0.25,
-    time_column: str = "time_elapsed_s",
-    reference_source: Optional[str] = None,
-) -> pd.DataFrame:
-    """Build a long table by aligning multiple source timeseries.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Wide-format dataset with a (Subject, Session, Task) MultiIndex.
-    source_features / sources : iterable
-        Ordered list of ``(source, features)`` or
-        ``(source, features, indices)`` tuples. ``sources`` is an alias for
-        ``source_features``.
-    tol : float
-        Tolerance in seconds for ``pd.merge_asof``.
-    time_column : str
-        Name of the time column within each source.
-    reference_source : str | None
-        Source whose time base becomes the output index.
-
-    Returns
-    -------
-    pd.DataFrame
-        Long-format table with Subject, Session, Task columns prepended.
-    """
-    sf = source_features or sources
-    if sf is None:
-        raise ValueError("Provide source_features (or sources=) argument.")
-
-    source_features_list = []
-    for entry in sf:
-        source = entry[0]
-        features = entry[1]
-        indices = entry[2] if len(entry) > 2 else None
-        source_features_list.append((source, list(features), indices))
-
-    ref_idx = 0
-    if reference_source is not None:
-        for i, (source, _, _) in enumerate(source_features_list):
-            if source == reference_source:
-                ref_idx = i
-                break
-
-    ref_source, ref_features, ref_indices = source_features_list[ref_idx]
-    merge_sources = [
-        entry for i, entry in enumerate(source_features_list) if i != ref_idx
-    ]
-
-    frames: list[pd.DataFrame] = []
-    if ref_indices is None:
-        ref_index_list: list = []
-    elif isinstance(ref_indices, (list, tuple, np.ndarray)):
-        ref_index_list = list(ref_indices)
-    else:
-        ref_index_list = [ref_indices]
-
-    for idx, row in df.iterrows():
-        if ref_indices is None:
-            out = _source_timeseries(
-                row, ref_source, ref_features, time_column, index=None,
-            )
-            if out is None:
-                continue
-        else:
-            roi_frames: list[pd.DataFrame] = []
-            base_time = None
-            for ref_index in ref_index_list:
-                roi_df = _source_timeseries(
-                    row, ref_source, ref_features, time_column, index=ref_index,
-                )
-                if roi_df is None:
-                    continue
-
-                if base_time is None:
-                    base_time = roi_df[time_column].to_numpy()
-                elif not np.array_equal(roi_df[time_column].to_numpy(), base_time):
-                    raise ValueError(
-                        f"Source {ref_source!r} ROI timebases differ; cannot align per-ROI columns."
-                    )
-
-                rename = {
-                    feature_name: f"{feature_name}_roi{ref_index}"
-                    for feature_name in ref_features
-                }
-                roi_frames.append(roi_df.rename(columns=rename))
-
-            if base_time is None:
-                continue
-
-            out = pd.concat(
-                [roi_frames[0][[time_column]]]
-                + [frame.drop(columns=[time_column]) for frame in roi_frames],
-                axis=1,
-            )
-
-        out = out.sort_values(time_column)
-
-        for source, features, _ in merge_sources:
-            ts = _source_timeseries(
-                row, source, features, time_column, index=None,
-            )
-            if ts is not None:
-                ts = ts.dropna(subset=[time_column])
-                out = pd.merge_asof(
-                    out,
-                    ts.sort_values(time_column),
-                    on=time_column,
-                    direction="nearest",
-                    tolerance=tol,
-                )
-            else:
-                for feature_name in features:
-                    out[feature_name] = np.nan
-
-        subj, ses, task = idx  # type: ignore[misc]
-        out.insert(0, "Task", task)
-        out.insert(0, "Session", ses)
-        out.insert(0, "Subject", subj)
-
-        frames.append(out)
-
-    return pd.concat(frames, ignore_index=True)
-
-
-# ── AlignedData ────────────────────────────────────────────────────────────
 
 class AlignedData:
     """Lightweight wrapper around a time-aligned DataFrame.
@@ -245,69 +75,6 @@ class AlignedData:
     def __repr__(self) -> str:
         rows, cols = self._df.shape
         return f"AlignedData(rows={rows}, columns={cols}, reference={self._reference!r})"
-
-
-# ── SaveableFigure ─────────────────────────────────────────────────────────
-
-class SaveableFigure:
-    """Thin wrapper around a matplotlib Figure with a convenient ``.save()`` method.
-
-    Usage::
-
-        result.plot_overview(...).save("overview.svg")
-        result.plot_overview(...).fig   # raw matplotlib Figure
-    """
-
-    def __init__(self, fig: plt.Figure, context: OutputContext) -> None:
-        self._fig = fig
-        self._context = context
-
-    @property
-    def fig(self) -> plt.Figure:
-        """The underlying matplotlib Figure."""
-        return self._fig
-
-    def save(
-        self,
-        name: str,
-        *,
-        dpi: int = 300,
-        folder: str = "plots",
-        bbox_inches: str = "tight",
-    ) -> Path:
-        """Save the figure to the project's output directory.
-
-        Parameters
-        ----------
-        name : str
-            Filename (e.g. ``"overview.svg"``).
-        dpi : int
-            Resolution for raster formats.
-        folder : str
-            Subdirectory under the run directory (``"plots"`` by default).
-
-        Returns
-        -------
-        Path
-            Absolute path to the saved file.
-        """
-        out_dir = self._context.run_dir / folder
-        out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / name
-        self._fig.savefig(path, dpi=dpi, bbox_inches=bbox_inches)
-        plt.close(self._fig)
-        return path
-
-    def show(self) -> None:
-        """Display the figure (interactive backends only)."""
-        self._fig.show()
-
-    def close(self) -> None:
-        """Close the figure to free memory."""
-        plt.close(self._fig)
-
-    def __repr__(self) -> str:
-        return f"SaveableFigure({self._fig.number})"
 
 
 # ── Session ────────────────────────────────────────────────────────────────
@@ -377,7 +144,7 @@ class Session:
             raise SignalNotFoundError(msg)
         arr = np.asarray(value)
         if arr.ndim == 0:
-            # Scalar stored in the dataset — promote to 1-element array
+            # Scalar stored in the dataset â€” promote to 1-element array
             arr = arr.reshape(1)
         elif arr.ndim > 1:
             arr = arr.ravel()
@@ -402,18 +169,20 @@ class Session:
         return arr
 
     def _time_for_align(self, source: str, column: str = "time_elapsed_s") -> np.ndarray:
-        """Return a time vector for alignment, with dataset-level fallbacks.
+        """Return a time vector for alignment with registry fallbacks.
 
-        Fallback order when ``(source, column)`` is missing:
-        1. ``(source, "time_elapse_s")``   — typo variant in some datasets
-        2. ``("dataqueue", "time_elapse_s")``
-        3. ``("dataqueue", "time_elapsed_s")``
-        4. ``("time", "master_elapsed_s")`` — frame-locked acquisition clock
-        5. ``("time", "queue_elapsed")``    — general event queue
+        Resolution order:
+        1. ``(source, column)`` — the requested column.
+        2. ``(source, "time_elapse_s")`` — common typo variant.
+        3. Each ``(src, col)`` in :data:`databench.config.TIME_COLUMNS`.
 
         A candidate is skipped when its length is more than double the
-        source's longest signal (likely a different-rate time vector).
+        source's longest signal.  ``master_elapsed_s`` is auto-zeroed so
+        the timeline starts at 0.  Raises :class:`SignalNotFoundError`
+        when no candidate satisfies the constraints.
         """
+        from databench.config import TIME_COLUMNS
+
         # Determine the expected signal length for this source so we can
         # reject wildly mismatched time vectors.
         max_sig_len = 0
@@ -426,33 +195,25 @@ class Session:
                         if arr.ndim >= 1:
                             max_sig_len = max(max_sig_len, arr.size)
 
-        candidates = [
+        candidates: list[tuple[str, str]] = [
             (source, column),
             (source, "time_elapse_s"),
-            ("dataqueue", "time_elapse_s"),
-            ("dataqueue", "time_elapsed_s"),
-            ("time", "master_elapsed_s"),
-            ("time", "queue_elapsed"),
+            *TIME_COLUMNS,
         ]
         for src, col in candidates:
             value = self._row.get((src, col))
-            if value is not None:
-                arr = np.asarray(value, dtype=float).ravel()
-                # Skip candidates whose length is wildly incompatible with
-                # the source's signals (> 2× longer suggests a different-rate
-                # time vector).
-                if max_sig_len > 0 and src != source and arr.size > 2 * max_sig_len:
-                    continue
-                # master_elapsed_s carries an acquisition-start offset;
-                # zero it so the timeline begins at 0 like source-local
-                # time columns.
-                if col == "master_elapsed_s" and arr.size > 0:
-                    arr = arr - arr[0]
-                return arr
+            if value is None:
+                continue
+            arr = np.asarray(value, dtype=float).ravel()
+            if max_sig_len > 0 and src != source and arr.size > 2 * max_sig_len:
+                continue
+            if col == "master_elapsed_s" and arr.size > 0:
+                arr = arr - arr[0]
+            return arr
 
         raise SignalNotFoundError(
-            f"Time column {column!r} not found in source {source!r}, and no "
-            "alignment fallback was available (dataqueue/time sources missing)."
+            f"Time column {column!r} not found in source {source!r}; no "
+            "fallback in databench.config.TIME_COLUMNS matched either."
         )
 
     def _available_signals(self, source: str, time_column: str = "time_elapsed_s") -> list[str]:
@@ -482,6 +243,33 @@ class Session:
         if not isinstance(self._row.index, pd.MultiIndex):
             return []
         return sorted({src for src, _name in self._row.index})
+
+    # ── Discovery ──────────────────────────────────────────────────────────
+
+    def describe(self, *, time_column: str = "time_elapsed_s") -> str:
+        """Print a human-readable summary of sources, signals, and durations.
+
+        Useful from the REPL or a notebook cell when authoring a new
+        analysis::
+
+            sess = proj.session(subject="GS28", session="ses-01", task="task-spont")
+            sess.describe()
+
+        Returns the same text it prints, so it composes with logging.
+        """
+        lines = [self.label, "Sources:"]
+        for src in self._available_sources():
+            sigs = self._available_signals(src, time_column)
+            try:
+                t = self.time(src, time_column)
+                span = f"{t[0]:.1f}–{t[-1]:.1f}s, n={t.size}" if t.size else "empty"
+            except SignalNotFoundError:
+                span = "no time column"
+            preview = sigs[:6] + (["…"] if len(sigs) > 6 else [])
+            lines.append(f"  {src:<10} {preview}  ({span})")
+        text = "\n".join(lines)
+        print(text)
+        return text
 
     # ── Alignment ──────────────────────────────────────────────────────────
 
@@ -525,7 +313,7 @@ class Session:
         ValueError
             If the reference source is not in *sources*.
         """
-        # Normalise list[str] → dict[str, list[str]]
+        # Normalise list[str] â†’ dict[str, list[str]]
         if isinstance(sources, list):
             sources = {src: self._available_signals(src, time_column) for src in sources}
 
@@ -673,3 +461,22 @@ class SessionGroup:
         n = len(self._sessions)
         subjects = self.subjects
         return f"SessionGroup(n={n}, subjects={subjects})"
+
+    def describe(self) -> str:
+        """Print a human-readable summary of subjects × sessions × tasks."""
+        from collections import Counter
+        n = len(self._sessions)
+        subjects = self.subjects
+        sessions = self.session_labels
+        tasks = sorted({s.task for s in self._sessions})
+        per_subj = Counter(s.subject for s in self._sessions)
+        lines = [
+            f"SessionGroup: {n} sessions",
+            f"  Subjects ({len(subjects)}): {subjects}",
+            f"  Sessions ({len(sessions)}): {sessions}",
+            f"  Tasks    ({len(tasks)}): {tasks}",
+            f"  Per-subject session counts: {dict(per_subj)}",
+        ]
+        text = "\n".join(lines)
+        print(text)
+        return text

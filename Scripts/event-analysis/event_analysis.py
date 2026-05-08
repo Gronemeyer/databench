@@ -24,12 +24,11 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.backends.backend_pdf import PdfPages
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import savgol_filter
 
 from databench.project import Project
-from databench.analysis._signal.epoching import make_events
+from databench.signal.epoching import make_events
 from databench.config import resolve_dataset
 from databench.plotting import set_theme
 set_theme()
@@ -418,17 +417,13 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
         if durs:
             print(f"    Durations (s): min={min(durs):.2f}, max={max(durs):.2f}, mean={np.mean(durs):.2f}")
 
-    stats_dir = proj._context.stats_dir
-    plots_dir = proj._context.plots_dir
-
     fig_test = plot_single_session_comparison(
         t_a, det_a, f"Session 1 — {sess_a.label}",
         t_b, det_b, f"Session {min(10, len(all_sessions))} — {sess_b.label}",
         spec=spec,
         suptitle=f"{source}/{signal} — first {SAMPLE_DURATION_S}s comparison",
     )
-    fig_test.savefig(plots_dir / f"{tag}_single_session_test.png", dpi=200, bbox_inches="tight")
-    plt.close(fig_test)
+    proj.io.figure(fig_test, f"{tag}_single_session_test.png", dpi=200, tight=True)
 
     # ── Stage 2: All sessions ──
     print(f"\n── Group analysis ({tag}, {len(all_sessions)} sessions) ──")
@@ -436,10 +431,7 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
     summary_rows: list[dict] = []
     all_events: list[pd.DataFrame] = []
 
-    report_pdf = proj._context.reports_dir / f"{tag}_event_detection.pdf"
-    report_pdf.parent.mkdir(parents=True, exist_ok=True)
-
-    with PdfPages(report_pdf) as pdf:
+    with proj.io.pdf(f"{tag}_event_detection.pdf") as pdf:
         for sess in all_sessions:
             try:
                 t_s = sess.time(source, column=TIME_COLUMN)[1:]
@@ -490,18 +482,18 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
             pdf.savefig(fig, bbox_inches="tight")
             plt.close(fig)
 
-    print(f"  PDF report: {report_pdf}")
+    print("  PDF report saved.")
 
     # ── Save tables ──
     summary_df = pd.DataFrame(summary_rows)
-    summary_df.to_csv(stats_dir / f"{tag}_event_summary.csv", index=False)
+    proj.io.table(summary_df, f"{tag}_event_summary.csv")
 
     if all_events:
         events_df = pd.concat(all_events, ignore_index=True)
     else:
         events_df = pd.DataFrame(columns=["Subject", "Session", "Task", "EventType", "event_time"])
 
-    events_df.to_csv(stats_dir / f"{tag}_events.csv", index=False)
+    proj.io.table(events_df, f"{tag}_events.csv")
 
     n_total = len(events_df) // 2
     n_subjects = events_df["Subject"].nunique() if not events_df.empty else 0
@@ -510,8 +502,7 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
     # ── Group summary plot ──
     if not summary_df.empty and summary_df["n_events"].sum() > 0:
         fig_summary = plot_group_summary(summary_df, spec)
-        fig_summary.savefig(plots_dir / f"{tag}_group_summary.png", dpi=200, bbox_inches="tight")
-        plt.close(fig_summary)
+        proj.io.figure(fig_summary, f"{tag}_group_summary.png", dpi=200, tight=True)
 
     return n_total, n_subjects
 
@@ -523,7 +514,6 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
 proj = Project(
     dataset=DATASET,
     analyst="databench",
-    lab="Sipe Lab",
     run_name="event-detection",
     tag="hfsa",
 )
@@ -557,6 +547,6 @@ for spec in SIGNALS:
     else:
         notes_lines.append(f"  • {spec.source}/{spec.signal} ({spec.label}): skipped")
 
-proj.save_report(notes="\n".join(notes_lines))
+proj.io.report(notes="\n".join(notes_lines))
 
 print("\nDone.")

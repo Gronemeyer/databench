@@ -1,0 +1,10 @@
+# databench.toml — local user config (commit databench.toml.example, gitignore databench.toml)
+#
+# Copy to databench.toml and fill in your details. Values here populate
+# Project(analyst=..., lab=...) when the kwargs are omitted.
+#
+# Environment variables DATABENCH_ANALYST / DATABENCH_LAB take precedence.
+
+[user]
+analyst = "Your Name"
+lab = "Your Lab"

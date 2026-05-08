@@ -43,7 +43,7 @@ from scipy.ndimage import gaussian_filter1d
 from scipy.signal import savgol_filter
 
 from databench.project import Project
-from databench.analysis._signal.epoching import make_events
+from databench.signal.epoching import make_events
 from databench.config import resolve_dataset
 from databench.plotting import set_theme
 
@@ -1070,7 +1070,6 @@ args = parse_args()
 proj = Project(
     dataset=DATASET,
     analyst="databench",
-    lab="Sipe Lab",
     run_name="event-detection",
     tag="hfsa",
 ).filter(drop_rows=[
@@ -1220,6 +1219,6 @@ notes_lines.extend([
     f"Total sessions analyzed: {len(all_sessions)}",
 ])
 
-proj.save_report(notes="\n".join(notes_lines))
+proj.io.report(notes="\n".join(notes_lines))
 
 print("\nDone.")

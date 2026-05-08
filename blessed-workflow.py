@@ -27,7 +27,6 @@ import pandas as pd
 from databench.project import Project
 from databench.analysis.locomotion import locomotion_bout_events
 from databench.config import resolve_dataset
-from databench.session import SaveableFigure
 from databench.plotting import set_theme
 
 set_theme()
@@ -42,8 +41,6 @@ DROP_RULES = [{"subject": "GS27", "session": "ses-02", "task": "task-spont"}]
 
 proj = Project(
     dataset=DATASET,
-    analyst="Jacob Gronemeyer",
-    lab="Sipe Lab",
     run_name="sandbox",
     tag="blessed",
 ).filter(exclude=DROP_RULES)  # Example of dropping specific sessions
@@ -140,22 +137,18 @@ def feature_boxplot(table: pd.DataFrame, y: str, *, x_label="Session") -> plt.Fi
 
 # First-order
 fig = feature_boxplot(session_table, "speed_mean_cms")
-SaveableFigure(fig, proj._context).save("first_order_speed.png")
-plt.close(fig)
+proj.io.figure(fig, "first_order_speed.png")
 
 # Second-order
 fig = feature_boxplot(session_table, "d_speed_mean_cms")
-SaveableFigure(fig, proj._context).save("second_order_delta_speed.png")
-plt.close(fig)
+proj.io.figure(fig, "second_order_delta_speed.png")
 
 
 # ─── 5. Save table + report ──────────────────────────────────────────────
 
-stats_dir = proj._context.stats_dir
-stats_dir.mkdir(parents=True, exist_ok=True)
-session_table.to_csv(stats_dir / "blessed_session_table.csv", index=False)
+proj.io.table(session_table, "blessed_session_table.csv")
 
-proj.save_report(
+proj.io.report(
     notes="Blessed procedural workflow: first-order features + delta-from-baseline second-order analysis.",
 )
 print("Done.")

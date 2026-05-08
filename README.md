@@ -40,21 +40,26 @@ DATABENCH_DATASET=etoh python Scripts/oscillation-detector.py
 The API follows a linear pipeline:
 
 ```
-resolve_dataset() → Project → Session → align() → Detector.run() → Result → plot/save → report
+resolve_dataset() → Project → Session → align() → Detector.run() → Result → Plotter → proj.io.* → report
 ```
 
 | Object | Role |
 |---|---|
 | `Project` | Opens a dataset, creates the output directory, selects sessions |
+| `Project.io` | Single save surface: `figure`, `table`, `json`, `report`, `params` |
 | `Session` | One experimental session — provides `signal()`, `time()`, `align()` |
 | `SessionGroup` | Iterable collection of sessions (from `project.sessions()`) |
 | `AlignedData` | Time-aligned DataFrame produced by `session.align()` |
 | `OscillationDetector` | Detects oscillatory bursts via Hilbert envelope thresholding |
 | `EtaAnalysis` | Computes event-triggered averages across sessions/conditions |
-| `SaveableFigure` | Wraps a matplotlib Figure with `.save()` / `.show()` |
+| `Plotter` | Frozen-dataclass plot recipe with `.recipe(result) → dict` sidecar |
 
-All detector/analysis objects are **frozen dataclasses** — immutable configs
-that produce a result when you call `.run()`.
+All detector/analysis/plotter objects are **frozen dataclasses** — immutable
+configs that produce a result (or figure) when you call `.run()` or call them.
+
+A new analysis script begins from `SCRIPT_TEMPLATE.py` at the repo root.
+All knobs are UPPER_CASE module globals at the top — they are auto-snapshotted
+into `<run_dir>/config/params.json` on `proj.io.report(...)`.
 
 ---
 
@@ -114,25 +119,50 @@ python Scripts/scriptings/event-based.py
 
 ## Output Structure
 
-Every script run produces a timestamped output folder:
+Every script run produces a versioned, fully-provenanced output folder:
 
 ```
-outputs/<dataset_alias>/<script_name>/<YYMMDD>/<tag>/
-├── plots/          # SVG/PNG figures
-├── stats/          # CSV tables
-├── reports/        # Markdown summary
-└── summary.json    # Machine-readable run metadata
+outputs/<dataset_alias>/<script_name>/<YYMMDD>[_<tag>]/
+├── plots/                 # SVG/PNG figures (+ optional <name>.recipe.json sidecars)
+├── stats/                 # CSV / parquet / JSON tables
+├── reports/               # Markdown summary with clickable git permalink
+├── config/
+│   └── params.json        # snapshot of all UPPER_CASE script globals
+└── provenance.json        # databench version, git hash, env versions, paths
 ```
+
+Everything goes through `proj.io`:
+
+```python
+proj.io.figure(fig, "overview.svg", sidecar=plotter.recipe(result))
+proj.io.table(result.events, "bursts.csv")
+proj.io.json({"n": 42}, "summary.json")
+proj.io.report(result, notes="...")   # writes provenance + params + report.md
+```
+
+`provenance.json` includes a clickable GitHub permalink
+(`https://github.com/<owner>/<repo>/blob/<full-hash>/<script>`) plus a
+`Reproduce` block in the rendered report (`git checkout <hash> && python
+<script>`).  Reports use relative image links (`../plots/figure.svg`) so they
+render correctly on GitHub and in local Markdown viewers.
 
 `dataset_alias` comes from `DATABENCH_DATASET` (or `DATASET`) when set,
-otherwise from the `default` entry in `datasets.toml`.
-`script_name` is the executing script stem, and `tag` defaults to `untagged`
-when no tag is provided.
+otherwise from the `default` entry in `datasets.toml`.  `script_name` is the
+executing script stem; `tag` is appended after the date when supplied.
 
-`SaveableFigure.save()` writes to `plots/`, `result.save_events()` writes to
-`stats/`, and `proj.save_report()` writes to `reports/`. Reports use relative
-image links (`../plots/figure.svg`) so they render correctly on GitHub and in
-local Markdown viewers.
+## Time-column registry
+
+`session.align()` falls back through `databench.config.TIME_COLUMNS` when a
+requested `(source, column)` time vector is missing.  Override at the top of a
+script to teach databench about a new dataset's clocks:
+
+```python
+from databench import config
+config.TIME_COLUMNS = [
+    ("dataqueue", "time_elapsed_s"),
+    ("time",      "master_elapsed_s"),
+]
+```
 
 ---
 
@@ -155,7 +185,12 @@ proj = Project(
 |---|---|---|
 | `session(subject=, session=, task=)` | `Session` | Select one session |
 | `sessions(task=, subject=, ...)` | `SessionGroup` | Select multiple sessions |
-| `save_report(*results, notes=)` | `Path` | Generate Markdown report |
+| `filter(drop_rows=, include=, exclude=, **levels)` | `Project` | Single-call dataset filter |
+| `io.figure(fig, name, *, sidecar=None)` | `Path` | Save figure to `plots/` (closes fig) |
+| `io.table(df, name, *, index=False)` | `Path` | Save table to `stats/` (suffix-driven) |
+| `io.json(payload, name)` | `Path` | Save JSON to `stats/` |
+| `io.params()` | `Path` | Snapshot UPPER_CASE script globals to `config/params.json` |
+| `io.report(*results, notes=)` | `Path` | Provenance + params + Markdown report |
 
 ### `Session`
 

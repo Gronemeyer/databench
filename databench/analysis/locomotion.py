@@ -1,4 +1,4 @@
-"""Locomotion bout detection, event generation, and treadmill features.
+﻿"""Locomotion bout detection and event generation.
 
 Key public API:
 
@@ -6,50 +6,37 @@ Key public API:
   (accepts raw arrays or grouped DataFrames).
 * :func:`locomotion_events` — detect locomotion-bout events across a
   :class:`~databench.session.SessionGroup` for ETA.
-* :class:`MeanSpeedCMS`, :class:`StdSpeedCMS`, :class:`TotalDistanceM` —
-  simple per-session speed/distance features.
-* :class:`LocomotionBoutsCount`, :class:`LocomotionBoutSpeedMeanCMS`,
-  :class:`LocomotionBoutDistanceM`, :class:`LocomotionBoutDurationS` —
-  bout-based features.
 * :class:`LocomotionBoutEventsExtractor` — reusable extractor for
   long-table pipelines.
 """
 from __future__ import annotations
 
-import warnings
 from dataclasses import dataclass
 from typing import Any, Mapping, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
-from databench.analysis._signal.epoching import (
+from databench.signal.epoching import (
     make_events,
     REQUIRED_COLUMNS,
     detect_epochs,
     START_IDX,
     END_IDX,
 )
-from databench.analysis.base import FeatureFn
-from databench._utils import as_1d, clean_xy, get_first
 
 if TYPE_CHECKING:
     from databench.session import Session, SessionGroup
+    from databench.types import BoutEventsTable, EventsTable
 
 SOURCE_COLOR = "#2ca02c"
 
 __all__ = [
     "locomotion_bout_events",
+    "locomotion_bouts",
     "locomotion_events",
+    "quiescent_bouts",
     "LocomotionBoutEventsExtractor",
-    "MeanSpeedCMS",
-    "StdSpeedCMS",
-    "TotalDistanceM",
-    "LocomotionBoutFeature",
-    "LocomotionBoutsCount",
-    "LocomotionBoutSpeedMeanCMS",
-    "LocomotionBoutDistanceM",
-    "LocomotionBoutDurationS",
 ]
 
 
@@ -73,10 +60,78 @@ def _bout_stats(
     epochs["distance_m"] = distances_m
 
 
-def _nanmean_no_warn(values) -> float:
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
-        return float(np.nanmean(values))
+# ── Index-pair detectors (lightweight; for procedural scripts) ────────────
+
+def locomotion_bouts(
+    t: np.ndarray,
+    speed_cms: np.ndarray,
+    *,
+    min_speed_cms: float = 0.5,
+    min_duration_s: float = 1.0,
+    merge_gap_s: float = 0.5,
+) -> list[tuple[int, int]]:
+    """Detect locomotion bouts and return index pairs.
+
+    Convenience wrapper over :func:`locomotion_bout_events` for procedural
+    scripts that only need ``[(start_idx, end_idx), ...]`` rather than a
+    full EpochTable.
+    """
+    epochs = locomotion_bout_events(
+        t,
+        speed_cms,
+        min_speed_cms=min_speed_cms,
+        min_duration_s=min_duration_s,
+        merge_gap_s=merge_gap_s,
+    )
+    if epochs.empty:
+        return []
+    return [
+        (int(s), int(e))
+        for s, e in zip(epochs[START_IDX].to_numpy(), epochs[END_IDX].to_numpy())
+    ]
+
+
+def quiescent_bouts(
+    t: np.ndarray,
+    loco_bouts: list[tuple[int, int]],
+    *,
+    min_duration_s: float = 0.0,
+) -> list[tuple[int, int]]:
+    """Return index pairs for non-locomotion periods between *loco_bouts*.
+
+    Parameters
+    ----------
+    t : np.ndarray
+        Timestamps in seconds.
+    loco_bouts : list of (start_idx, end_idx)
+        Locomotion-bout indices, sorted in time.
+    min_duration_s : float
+        Drop quiescent intervals shorter than this.
+    """
+    n = len(t)
+    if not loco_bouts:
+        return [(0, n - 1)] if n > 0 else []
+
+    quiet: list[tuple[int, int]] = []
+    first_start = loco_bouts[0][0]
+    if first_start > 0:
+        quiet.append((0, first_start - 1))
+    for i in range(len(loco_bouts) - 1):
+        gap_start = loco_bouts[i][1] + 1
+        gap_end = loco_bouts[i + 1][0] - 1
+        if gap_end >= gap_start:
+            quiet.append((gap_start, gap_end))
+    last_end = loco_bouts[-1][1]
+    if last_end < n - 1:
+        quiet.append((last_end + 1, n - 1))
+
+    if min_duration_s <= 0:
+        return quiet
+    dt = float(np.nanmedian(np.diff(t))) if len(t) > 1 else 0.02
+    return [
+        (s, e) for s, e in quiet
+        if float(t[e] - t[s] + dt) >= min_duration_s
+    ]
 
 
 # ── Bout detection ─────────────────────────────────────────────────────────
@@ -93,7 +148,7 @@ def locomotion_bout_events(
     time_col: str = "time_elapsed_s",
     speed_col: str = "speed_mm",
     speed_scale_to_cms: float = 10.0,
-) -> pd.DataFrame:
+) -> BoutEventsTable:
     """Detect locomotion bouts and return a standard EpochTable.
 
     Accepts either raw arrays ``(t, speed_cms)`` or a grouped DataFrame.
@@ -164,7 +219,7 @@ def locomotion_events(
     merge_gap_s: float = 0.5,
     event_types: tuple[str, ...] = ("onset", "offset"),
     condition_map: dict[str, str] | None = None,
-) -> pd.DataFrame:
+) -> EventsTable:
     """Detect locomotion-bout events across sessions.
 
     Wraps :func:`locomotion_bout_events` for each session and returns a
@@ -277,27 +332,6 @@ class LocomotionBoutEventsExtractor:
     speed_col: str = "speed_mm"
     speed_scale_to_cms: float = 10.0
 
-    @classmethod
-    def from_feature(
-        cls,
-        feat: "LocomotionBoutFeature",
-        *,
-        group_cols: tuple[str, ...] = ("Subject", "Session", "Task"),
-        time_col: str = "time_elapsed_s",
-        speed_col: str = "speed_mm",
-        speed_scale_to_cms: float = 10.0,
-    ) -> "LocomotionBoutEventsExtractor":
-        """Build an extractor from a LocomotionBoutFeature's thresholds."""
-        return cls(
-            min_speed_cms=feat.min_speed_cms,
-            min_duration_s=feat.min_duration_s,
-            merge_gap_s=feat.merge_gap_s,
-            group_cols=group_cols,
-            time_col=time_col,
-            speed_col=speed_col,
-            speed_scale_to_cms=speed_scale_to_cms,
-        )
-
     def run(self, long: pd.DataFrame) -> pd.DataFrame:
         return locomotion_bout_events(
             long,
@@ -312,131 +346,3 @@ class LocomotionBoutEventsExtractor:
 
     def __call__(self, long: pd.DataFrame) -> pd.DataFrame:
         return self.run(long)
-
-
-# ── Feature extractors ─────────────────────────────────────────────────────
-
-@dataclass(frozen=True)
-class MeanSpeedCMS(FeatureFn):
-    """Mean treadmill speed per session in cm/s."""
-
-    name: str = "speed_mean_cms"
-    label: str = "Speed (cm/s)"
-    color: str = SOURCE_COLOR
-    source: str = "treadmill"
-    plotter: str = "boxplot"
-
-    def _run_impl(self, row) -> float:
-        t, spd_mm = clean_xy(
-            get_first(row, [("treadmill", "time_elapsed_s"), ("encoder", "time_elapsed_s")]),
-            get_first(row, [("treadmill", "speed_mm"), ("encoder", "speed")]),
-        )
-        return float(np.nanmean(spd_mm) / 10.0)
-
-
-@dataclass(frozen=True)
-class StdSpeedCMS(FeatureFn):
-    """Standard deviation of treadmill speed in cm/s."""
-
-    name: str = "speed_std_cms"
-    label: str = "Speed SD (cm/s)"
-    color: str = SOURCE_COLOR
-    source: str = "treadmill"
-
-    def _run_impl(self, row) -> float:
-        t, spd_mm = clean_xy(
-            get_first(row, [("treadmill", "time_elapsed_s"), ("encoder", "time_elapsed_s")]),
-            get_first(row, [("treadmill", "speed_mm"), ("encoder", "speed")]),
-        )
-        return float(np.nanstd(spd_mm) / 10.0)
-
-
-@dataclass(frozen=True)
-class TotalDistanceM(FeatureFn):
-    """Total distance traveled in meters during the session."""
-
-    name: str = "distance_m"
-    label: str = "Distance (m)"
-    color: str = SOURCE_COLOR
-    source: str = "treadmill"
-    plotter: str = "boxplot"
-
-    def _run_impl(self, row) -> float:
-        dist_mm = as_1d(get_first(row, [("treadmill", "distance_mm"), ("encoder", "distance")]))
-        dist_mm = dist_mm[np.isfinite(dist_mm)]
-        return float((dist_mm[-1] - dist_mm[0]) / 1000.0)
-
-
-@dataclass(frozen=True)
-class LocomotionBoutFeature(FeatureFn):
-    """Base class for locomotion-bout features with shared thresholds."""
-
-    color: str = SOURCE_COLOR
-    source: str = "treadmill"
-    plotter: str = "boxplot"
-    min_speed_cms: float = 5
-    min_duration_s: float = 1.5
-    merge_gap_s: float = 1.5
-
-    def _bout_params(self) -> dict[str, float]:
-        return {
-            "min_speed_cms": self.min_speed_cms,
-            "min_duration_s": self.min_duration_s,
-            "merge_gap_s": self.merge_gap_s,
-        }
-
-    def _get_bouts(self, row):
-        t, spd_mm = clean_xy(
-            get_first(row, [("treadmill", "time_elapsed_s"), ("encoder", "time_elapsed_s")]),
-            get_first(row, [("treadmill", "speed_mm"), ("encoder", "speed")]),
-        )
-        speed_cms = spd_mm / 10.0
-        return locomotion_bout_events(t, speed_cms, **self._bout_params())
-
-
-@dataclass(frozen=True)
-class LocomotionBoutsCount(LocomotionBoutFeature):
-    """Count of locomotion bouts per session."""
-
-    name: str = "locomotion_bouts_n"
-    label: str = "Locomotion bouts (n)"
-
-    def _run_impl(self, row) -> float:
-        epochs = self._get_bouts(row)
-        return float(len(epochs))
-
-
-@dataclass(frozen=True)
-class LocomotionBoutSpeedMeanCMS(LocomotionBoutFeature):
-    """Mean speed across locomotion bouts in cm/s."""
-
-    name: str = "locomotion_bout_speed_mean_cms"
-    label: str = "Bout speed (cm/s)"
-
-    def _run_impl(self, row) -> float:
-        epochs = self._get_bouts(row)
-        return _nanmean_no_warn(epochs["mean_speed_cms"]) if not epochs.empty else float("nan")
-
-
-@dataclass(frozen=True)
-class LocomotionBoutDistanceM(LocomotionBoutFeature):
-    """Mean distance across locomotion bouts in meters."""
-
-    name: str = "locomotion_bout_distance_m"
-    label: str = "Bout distance (m)"
-
-    def _run_impl(self, row) -> float:
-        epochs = self._get_bouts(row)
-        return _nanmean_no_warn(epochs["distance_m"]) if not epochs.empty else float("nan")
-
-
-@dataclass(frozen=True)
-class LocomotionBoutDurationS(LocomotionBoutFeature):
-    """Mean duration across locomotion bouts in seconds."""
-
-    name: str = "locomotion_bout_duration_s"
-    label: str = "Bout duration (s)"
-
-    def _run_impl(self, row) -> float:
-        epochs = self._get_bouts(row)
-        return _nanmean_no_warn(epochs["duration_s"]) if not epochs.empty else float("nan")

@@ -21,7 +21,7 @@ from databench.project import Project
 from databench.analysis.locomotion import locomotion_bout_events
 from databench.plotting.style import CONDITION_COLORS
 from databench.config import resolve_dataset
-from databench.session import SaveableFigure
+from databench.types import BoutEventsTable
 from databench.plotting import set_theme
 
 set_theme()
@@ -46,7 +46,7 @@ def detect_bouts_long(
         valid = np.isfinite(t) & np.isfinite(speed)
         if valid.sum() < 3:
             continue
-        epochs = locomotion_bout_events(
+        epochs: BoutEventsTable = locomotion_bout_events(
             t[valid], speed[valid], min_speed_cms=min_speed_cms,
             min_duration_s=min_duration_s, merge_gap_s=merge_gap_s,
         )
@@ -327,8 +327,6 @@ SESSION_TO_CONDITION = {
 proj = Project(
     dataset=DATASET,
     output_root=OUTPUT_ROOT,
-    analyst="Jacob Gronemeyer",
-    lab="Sipe Lab",
     run_name=RUN_NAME,
     tag=TAG,
 )
@@ -352,23 +350,22 @@ tables = locomotion_condition_task_analysis(long, bout_events, speed_scale_to_cm
 
 # Plot
 fig = plot_condition_task(tables["subject_stats"], task_order=TASKS)
-SaveableFigure(fig, proj._context).save(f"{OUTPUT_PREFIX}_summary.svg")
+proj.io.figure(fig, f"{OUTPUT_PREFIX}_summary.svg")
 
 # Save
-stats_dir = proj._context.stats_dir
-stats_dir.mkdir(parents=True, exist_ok=True)
-for name, df in tables.items():
-    if isinstance(df, pd.DataFrame) and not df.empty:
-        df.to_csv(stats_dir / f"{OUTPUT_PREFIX}_{name}.csv", index=False)
+proj.io.tables(
+    {name: df for name, df in tables.items() if isinstance(df, pd.DataFrame) and not df.empty},
+    prefix=f"{OUTPUT_PREFIX}_",
+)
 
 if len(TASKS) == 1:
     lme_tables = fit_condition_lme(tables["session_stats"], task=TASKS[0])
     if lme_tables is not None:
         coef_df, trend_df = lme_tables
-        coef_df.to_csv(stats_dir / f"{OUTPUT_PREFIX}_lme_condition_coefficients.csv")
-        trend_df.to_csv(stats_dir / f"{OUTPUT_PREFIX}_lme_dose_trend_coefficients.csv")
+        proj.io.table(coef_df, f"{OUTPUT_PREFIX}_lme_condition_coefficients.csv", index=True)
+        proj.io.table(trend_df, f"{OUTPUT_PREFIX}_lme_dose_trend_coefficients.csv", index=True)
 
-proj.save_report(
+proj.io.report(
     notes=(
         "Locomotion bout/stats comparison across condition labels. "
         f"Tasks: {', '.join(TASKS)}. "

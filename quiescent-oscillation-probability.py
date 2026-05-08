@@ -40,11 +40,14 @@ from statsmodels.genmod.generalized_estimating_equations import GEE
 from statsmodels.genmod.families import Binomial
 from statsmodels.genmod.cov_struct import Exchangeable
 
-from databench import Project, OscillationDetector
-from databench.analysis._signal.bouts import _locomotion_bouts
+from databench import (
+    Project,
+    OscillationDetector,
+    locomotion_bouts,
+    quiescent_bouts,
+    set_theme,
+)
 from databench.config import resolve_dataset
-from databench.session import SaveableFigure
-from databench.plotting import set_theme
 
 set_theme()
 
@@ -79,38 +82,6 @@ DURATION_TRUNCATE_PCTL = 95
 DURATION_BIN_WIDTH = 2  # seconds
 
 
-# ─── Helper: invert locomotion bouts to get quiescent periods ────────────
-
-def quiescent_bouts(
-    t: np.ndarray,
-    loco_bouts: list[Tuple[int, int]],
-    min_duration_s: float = 0.0,
-) -> list[Tuple[int, int]]:
-    """Return index pairs for non-locomotion periods between locomotion bouts."""
-    n = len(t)
-    if not loco_bouts:
-        return [(0, n - 1)]
-
-    quiet: list[Tuple[int, int]] = []
-    first_start = loco_bouts[0][0]
-    if first_start > 0:
-        quiet.append((0, first_start - 1))
-    for i in range(len(loco_bouts) - 1):
-        gap_start = loco_bouts[i][1] + 1
-        gap_end = loco_bouts[i + 1][0] - 1
-        if gap_end >= gap_start:
-            quiet.append((gap_start, gap_end))
-    last_end = loco_bouts[-1][1]
-    if last_end < n - 1:
-        quiet.append((last_end + 1, n - 1))
-
-    dt = float(np.nanmedian(np.diff(t))) if len(t) > 1 else 0.02
-    return [
-        (s, e) for s, e in quiet
-        if float(t[e] - t[s] + dt) >= min_duration_s
-    ]
-
-
 # ─── Helper: compute oscillation overlap for a quiescent bout ────────────
 
 def oscillation_overlap(
@@ -135,8 +106,6 @@ def oscillation_overlap(
 
 proj = Project(
     dataset=DATASET,
-    analyst="Jacob Gronemeyer",
-    lab="Sipe Lab",
     run_name="quiescent-oscillation-probability",
     tag=f"{ROI_NAME}-{TASK}",
 )
@@ -171,7 +140,7 @@ for sess in group:
         continue
 
     speed_cms = speed_v / 10.0
-    loco = _locomotion_bouts(
+    loco = locomotion_bouts(
         speed_t, speed_cms,
         min_speed_cms=MIN_SPEED_CMS,
         min_duration_s=MIN_LOCO_DURATION_S,
@@ -382,7 +351,7 @@ fig1.suptitle(
     y=1.01,
 )
 fig1.tight_layout()
-SaveableFigure(fig1, proj._context).save("per_animal_logistic_fits.svg")
+proj.io.figure(fig1, "per_animal_logistic_fits.svg")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PLOT 2: GEE model curve with 95% CI + data density histogram
@@ -446,7 +415,7 @@ ax.legend(frameon=False)
 ax.grid(axis="y", alpha=0.3)
 
 fig2.tight_layout()
-SaveableFigure(fig2, proj._context).save("gee_model_curve.svg")
+proj.io.figure(fig2, "gee_model_curve.svg")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PLOT 3: Per-animal binned P(oscillation) + pooled (descriptive only)
@@ -489,7 +458,7 @@ ax3.legend(frameon=False)
 ax3.grid(alpha=0.3)
 ax3.set_ylim(-0.05, 1.05)
 fig3.tight_layout()
-SaveableFigure(fig3, proj._context).save("per_animal_binned_probability.svg")
+proj.io.figure(fig3, "per_animal_binned_probability.svg")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PLOT 4: Scatter — duration vs oscillation fraction, by animal
@@ -514,7 +483,7 @@ ax4.set_title(
 ax4.legend(frameon=False, markerscale=2)
 ax4.grid(alpha=0.3)
 fig4.tight_layout()
-SaveableFigure(fig4, proj._context).save("scatter_duration_vs_osc_fraction.svg")
+proj.io.figure(fig4, "scatter_duration_vs_osc_fraction.svg")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Per-animal summary table
@@ -544,21 +513,20 @@ print(animal_summary.to_string(index=False))
 # Save tables
 # ═══════════════════════════════════════════════════════════════════════════
 
-stats_dir = proj._context.stats_dir
-stats_dir.mkdir(parents=True, exist_ok=True)
-
-qdf.to_csv(stats_dir / "quiescent_bouts_all.csv", index=False)
-animal_summary.to_csv(stats_dir / "per_animal_summary.csv", index=False)
+proj.io.table(qdf, "quiescent_bouts_all.csv")
+proj.io.table(animal_summary, "per_animal_summary.csv")
 
 # GEE summary as text
-with open(stats_dir / "gee_logistic_summary.txt", "w") as f:
-    f.write(str(gee_result.summary()))
-    f.write(f"\n\nExchangeable correlation estimate: {gee_result.cov_struct.summary()}\n")
+proj.io.text(
+    "gee_logistic_summary.txt",
+    str(gee_result.summary())
+    + f"\n\nExchangeable correlation estimate: {gee_result.cov_struct.summary()}\n",
+)
 
 # Per-animal fits table
 if animal_fits:
     fits_df = pd.DataFrame(animal_fits).T.reset_index().rename(columns={"index": "Subject"})
-    fits_df.to_csv(stats_dir / "per_animal_logistic_fits.csv", index=False)
+    proj.io.table(fits_df, "per_animal_logistic_fits.csv")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Markdown report
@@ -568,7 +536,7 @@ slopes_str = ", ".join(
     f"{s}: {animal_fits[s]['slope']:.3f}" for s in sorted(animal_fits)
 )
 
-report_path = proj.save_report(
+report_path = proj.io.report(
     notes=(
         f"## Quiescent bout duration vs oscillation probability\n\n"
         f"**Dataset:** ETOH-HFSA (10 sessions) | **Task:** {TASK}\n\n"
@@ -607,4 +575,4 @@ report_path = proj.save_report(
     ),
 )
 print(f"\nReport: {report_path}")
-print(f"Outputs saved to: {proj._context.run_dir}")
+print(f"Outputs saved to: {proj.io.run_dir}")

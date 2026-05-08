@@ -28,9 +28,8 @@ from scipy import stats as sp_stats
 from scipy.signal import welch
 
 from databench import Project, OscillationDetector
-from databench.analysis._signal.bandpass import bandpass_envelope
+from databench.signal.bandpass import bandpass_envelope
 from databench.config import resolve_dataset
-from databench.session import SaveableFigure
 from databench.plotting import set_theme
 
 set_theme()
@@ -57,8 +56,6 @@ MERGE_GAP = 0.0
 
 proj = Project(
     dataset=DATASET,
-    analyst="Jacob Gronemeyer",
-    lab="Sipe Lab",
     run_name="oscillation-descriptive-stats",
     tag=f"{ROI_NAME}-{TASK}",
 )
@@ -242,7 +239,7 @@ ax1.set_title(
 ax1.legend(loc="best", frameon=False)
 ax1.grid(alpha=0.3)
 fig1.tight_layout()
-SaveableFigure(fig1, proj._context).save("event_count_per_session.svg")
+proj.io.figure(fig1, "event_count_per_session.svg")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PLOT 2: Burst rate per minute (normalised by recording length)
@@ -272,7 +269,7 @@ ax2.set_title(
 ax2.legend(loc="best", frameon=False)
 ax2.grid(alpha=0.3)
 fig2.tight_layout()
-SaveableFigure(fig2, proj._context).save("burst_rate_per_session.svg")
+proj.io.figure(fig2, "burst_rate_per_session.svg")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PLOT 3: Duration distribution — overlaid histograms per animal
@@ -313,7 +310,7 @@ if not events_df.empty:
         y=1.02,
     )
     fig3.tight_layout()
-    SaveableFigure(fig3, proj._context).save("duration_distribution.svg")
+    proj.io.figure(fig3, "duration_distribution.svg")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PLOT 4: Peak envelope distribution — overlaid histograms per animal
@@ -354,7 +351,7 @@ if not events_df.empty:
         y=1.02,
     )
     fig4.tight_layout()
-    SaveableFigure(fig4, proj._context).save("peak_envelope_distribution.svg")
+    proj.io.figure(fig4, "peak_envelope_distribution.svg")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PLOT 5: Box plots — duration and peak envelope by animal
@@ -411,7 +408,7 @@ if not events_df.empty:
         y=1.01,
     )
     fig5.tight_layout()
-    SaveableFigure(fig5, proj._context).save("event_characteristics_boxplots.svg")
+    proj.io.figure(fig5, "event_characteristics_boxplots.svg")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PLOT 6: Fraction of recording spent in oscillation bursts
@@ -441,7 +438,7 @@ ax6.set_title(
 ax6.legend(loc="best", frameon=False)
 ax6.grid(alpha=0.3)
 fig6.tight_layout()
-SaveableFigure(fig6, proj._context).save("fraction_in_burst_per_session.svg")
+proj.io.figure(fig6, "fraction_in_burst_per_session.svg")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PLOT 7: Longitudinal burst power (mean peak envelope) across sessions
@@ -471,7 +468,7 @@ ax7.set_title(
 ax7.legend(loc="best", frameon=False)
 ax7.grid(alpha=0.3)
 fig7.tight_layout()
-SaveableFigure(fig7, proj._context).save("burst_power_longitudinal.svg")
+proj.io.figure(fig7, "burst_power_longitudinal.svg")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PLOT 7b: Longitudinal mean burst duration across sessions
@@ -501,7 +498,7 @@ ax7b.set_title(
 ax7b.legend(loc="best", frameon=False)
 ax7b.grid(alpha=0.3)
 fig7b.tight_layout()
-SaveableFigure(fig7b, proj._context).save("burst_duration_longitudinal.svg")
+proj.io.figure(fig7b, "burst_duration_longitudinal.svg")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PLOT 8: Longitudinal peak frequency across sessions
@@ -532,7 +529,7 @@ ax8.set_title(
 ax8.legend(loc="best", frameon=False)
 ax8.grid(alpha=0.3)
 fig8.tight_layout()
-SaveableFigure(fig8, proj._context).save("peak_frequency_longitudinal.svg")
+proj.io.figure(fig8, "peak_frequency_longitudinal.svg")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # PLOT 9: Spatial distribution — event count by ROI across sessions
@@ -559,7 +556,7 @@ if not spatial_df.empty:
     ax9a.legend(frameon=False, ncol=2)
     ax9a.grid(alpha=0.3)
     fig9a.tight_layout()
-    SaveableFigure(fig9a, proj._context).save("spatial_burst_rate_longitudinal.svg")
+    proj.io.figure(fig9a, "spatial_burst_rate_longitudinal.svg")
 
     # 9b: Mean burst power by ROI across sessions
     fig9b, ax9b = plt.subplots(figsize=(9, 5))
@@ -579,7 +576,7 @@ if not spatial_df.empty:
     ax9b.legend(frameon=False, ncol=2)
     ax9b.grid(alpha=0.3)
     fig9b.tight_layout()
-    SaveableFigure(fig9b, proj._context).save("spatial_burst_power_longitudinal.svg")
+    proj.io.figure(fig9b, "spatial_burst_power_longitudinal.svg")
 
     # 9c: Per-animal spatial heatmap (ROI × Session, values = burst rate)
     for subj in subjects:
@@ -602,7 +599,7 @@ if not spatial_df.empty:
         ax_h.set_title(f"{subj} — burst rate by ROI across sessions")
         fig_h.colorbar(im, ax=ax_h, label="events / min", fraction=0.03, pad=0.04)
         fig_h.tight_layout()
-        SaveableFigure(fig_h, proj._context).save(f"spatial_heatmap_{subj}.svg")
+        proj.io.figure(fig_h, f"spatial_heatmap_{subj}.svg")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Summary statistics table
@@ -634,21 +631,18 @@ else:
 # Save tables
 # ═══════════════════════════════════════════════════════════════════════════
 
-stats_dir = proj._context.stats_dir
-stats_dir.mkdir(parents=True, exist_ok=True)
-
-events_df.to_csv(stats_dir / "oscillation_events_all.csv", index=False)
-summary_df.to_csv(stats_dir / "session_summary.csv", index=False)
+proj.io.table(events_df, "oscillation_events_all.csv")
+proj.io.table(summary_df, "session_summary.csv")
 if not desc_stats.empty:
-    desc_stats.to_csv(stats_dir / "descriptive_stats_by_animal.csv", index=False)
+    proj.io.table(desc_stats, "descriptive_stats_by_animal.csv")
 if not spatial_df.empty:
-    spatial_df.to_csv(stats_dir / "spatial_distribution.csv", index=False)
+    proj.io.table(spatial_df, "spatial_distribution.csv")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Markdown report
 # ═══════════════════════════════════════════════════════════════════════════
 
-report_path = proj.save_report(
+report_path = proj.io.report(
     notes=(
         f"## Oscillation descriptive statistics\n\n"
         f"**Dataset:** ETOH-HFSA (10 sessions) | **Task:** {TASK}\n\n"
@@ -669,4 +663,4 @@ report_path = proj.save_report(
     ),
 )
 print(f"Report: {report_path}")
-print(f"\nOutputs saved to: {proj._context.run_dir}")
+print(f"\nOutputs saved to: {proj.io.run_dir}")

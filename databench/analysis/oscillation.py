@@ -11,23 +11,21 @@ Usage::
         band_hz=(2.0, 4.0),
     )
     result = detector.run(session)
-    result.plot_overview(aligned=aligned, pupil="pupil_diameter_mm").save("overview.svg")
-    result.events.to_csv("bursts.csv")
+    proj.io.figure(result.plot_overview(aligned=aligned, pupil="pupil_diameter_mm"), "overview.svg")
+    proj.io.table(result.events, "bursts.csv")
 """
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from typing import Tuple
 
 import numpy as np
 import pandas as pd
 
-from databench._utils._logger import get_logger, log_run
-from databench.analysis._signal.bandpass import bandpass_envelope, robust_threshold
-from databench.analysis._signal.epoching import detect_epochs, START_IDX, END_IDX
+from databench.utils.logger import get_logger, log_run
+from databench.signal.bandpass import bandpass_envelope, robust_threshold
+from databench.signal.epoching import detect_epochs, START_IDX, END_IDX
 
 _log = get_logger(__name__)
 
@@ -271,28 +269,11 @@ class OscillationResult:
         smooth_pupil_s: float = 0.5,
         smooth_speed_s: float = 0.2,
         window: Tuple[float, float] | None = None,
-    ) -> "SaveableFigure":
+    ):
         """Plot a multi-panel oscillation overview.
 
-        Parameters
-        ----------
-        aligned : AlignedData, optional
-            Time-aligned auxiliary data (for pupil / speed traces).
-        pupil : str, optional
-            Column name for pupil signal in *aligned*.
-        speed : str, optional
-            Column name for speed signal in *aligned*.
-        smooth_pupil_s, smooth_speed_s : float
-            Smoothing window in seconds.
-        window : (float, float), optional
-            Time window to zoom into. ``None`` shows full session.
-
-        Returns
-        -------
-        SaveableFigure
-            Wraps the matplotlib Figure with a ``.save()`` method.
+        Returns a matplotlib ``Figure``.  Persist via ``project.io.figure(...)``.
         """
-        from databench.session import SaveableFigure
         from databench.plotting.oscillation import plot_oscillation_overview
 
         pupil_arr = None
@@ -324,7 +305,7 @@ class OscillationResult:
             smooth_speed_s=smooth_speed_s,
             window=window,
         )
-        return SaveableFigure(fig, self._context)
+        return fig
 
     def plot_bursts(
         self,
@@ -337,27 +318,12 @@ class OscillationResult:
         speed: str | None = None,
         smooth_pupil_s: float = 0.5,
         smooth_speed_s: float = 0.2,
-    ) -> list["SaveableFigure"]:
+    ) -> list:
         """Plot zoomed windows around the longest bursts.
 
-        Parameters
-        ----------
-        aligned : AlignedData, optional
-            Time-aligned auxiliary data.
-        max_examples : int
-            Maximum number of burst examples to plot.
-        pad_s : float
-            Seconds of context around each burst.
-        fs : float, optional
-            Sampling rate override (defaults to ``self.fs``).
-        pupil, speed : str, optional
-            Column names in *aligned*.
-
-        Returns
-        -------
-        list of SaveableFigure
+        Returns a list of matplotlib ``Figure`` objects (longest burst first).
+        Persist via ``project.io.figure(...)``.
         """
-        from databench.session import SaveableFigure
         from databench.plotting.oscillation import plot_oscillation_burst
 
         if not self.bursts:
@@ -384,7 +350,7 @@ class OscillationResult:
         n_examples = min(max_examples, len(burst_order))
 
         figures = []
-        for rank, bi in enumerate(burst_order[:n_examples], start=1):
+        for bi in burst_order[:n_examples]:
             fig = plot_oscillation_burst(
                 time=self.time,
                 raw_signal=self.raw_signal,
@@ -406,65 +372,20 @@ class OscillationResult:
                 smooth_pupil_s=smooth_pupil_s,
                 smooth_speed_s=smooth_speed_s,
             )
-            sf = SaveableFigure(fig, self._context)
-            sf.save(f"burst_{rank:02d}.svg")
-            figures.append(sf)
+            figures.append(fig)
         return figures
 
-    # ── Saving ─────────────────────────────────────────────────────────────
+    # ── Plotter factories ──────────────────────────────────────────────────
 
-    def save_events(self, name: str = "bursts.csv") -> Path:
-        """Save the burst events table as CSV.
+    def overview_plotter(self, **kwargs):
+        """Return an :class:`OscillationOverviewPlotter` configured for this result."""
+        from databench.plotting.oscillation import OscillationOverviewPlotter
+        return OscillationOverviewPlotter(**kwargs)
 
-        Parameters
-        ----------
-        name : str
-            Filename for the CSV.
-
-        Returns
-        -------
-        Path
-            Absolute path to the saved file.
-        """
-        out_dir = self._context.stats_dir
-        out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / name
-        self.events.to_csv(path, index=False)
-        return path
-
-    def save_summary(self, name: str = "summary.json") -> Path:
-        """Save a JSON summary of the detection run.
-
-        Returns
-        -------
-        Path
-            Absolute path to the saved file.
-        """
-        out_dir = self._context.run_dir
-        out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / name
-
-        summary = {
-            "analysis": "oscillation_detection",
-            "created_at": datetime.now().isoformat(),
-            "analyst": self._context.analyst,
-            "lab": self._context.lab,
-            "run_name": self._context.run_name,
-            "tag": self._context.tag,
-            "subject": self.subject,
-            "session": self.session,
-            "task": self.task,
-            "source": self.source,
-            "signal": self.signal_name,
-            "band_hz": list(self.band_hz),
-            "fs": self.fs,
-            "threshold": self.threshold_value,
-            "n_bursts": len(self.bursts),
-            "total_burst_duration_s": float(self.events["duration_s"].sum()) if not self.events.empty else 0.0,
-        }
-        with open(path, "w") as f:
-            json.dump(summary, f, indent=2)
-        return path
+    def burst_plotter(self, **kwargs):
+        """Return an :class:`OscillationBurstPlotter` configured for this result."""
+        from databench.plotting.oscillation import OscillationBurstPlotter
+        return OscillationBurstPlotter(**kwargs)
 
     # ── Reporting ──────────────────────────────────────────────────────────
 

@@ -16,13 +16,11 @@ from __future__ import annotations
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.backends.backend_pdf import PdfPages
 
-from databench.project import Project
+from databench import Project, parse_session_day, set_theme
 from databench.analysis.locomotion import locomotion_bout_events
 from databench.config import resolve_dataset
-from databench.session import SaveableFigure
-from databench.plotting import set_theme
+from databench.types import BoutEventsTable
 
 set_theme()
 
@@ -51,8 +49,6 @@ RIGHT_LATE_DAYS = (7, 10)
 proj = Project(
     dataset=DATASET,
     output_root=OUTPUT_ROOT,
-    analyst="Jacob Gronemeyer",
-    lab="Sipe Lab",
     run_name=RUN_NAME,
     tag=TAG,
 ).filter(exclude={"session": "ses-11"})
@@ -85,7 +81,7 @@ for sess in group:
     speed_std = float(np.nanstd(np.abs(speed_cms)))
     dist_m = float(np.nansum(np.abs(speed_cms[1:]) * np.diff(t))) / 100.0
 
-    epochs = locomotion_bout_events(
+    epochs: BoutEventsTable = locomotion_bout_events(
         t, speed_cms,
         min_speed_cms=MIN_SPEED_CMS,
         min_duration_s=MIN_DURATION_S,
@@ -124,10 +120,8 @@ print(f"Computed features for {len(session_table)} sessions, {len(bout_table)} t
 
 # ─── Save session table ──────────────────────────────────────────────────
 
-stats_dir = proj._context.stats_dir
-stats_dir.mkdir(parents=True, exist_ok=True)
-session_table.to_csv(stats_dir / f"{OUTPUT_PREFIX}_session_table.csv", index=False)
-bout_table.to_csv(stats_dir / f"{OUTPUT_PREFIX}_bout_table.csv", index=False)
+proj.io.table(session_table, f"{OUTPUT_PREFIX}_session_table.csv")
+proj.io.table(bout_table, f"{OUTPUT_PREFIX}_bout_table.csv")
 
 
 # ─── Per-feature boxplots ────────────────────────────────────────────────
@@ -150,14 +144,7 @@ feature_labels = {
 
 def _session_to_day(session_label: str) -> int | None:
     """Parse session labels like 'ses-01' into integer day numbers."""
-    if not isinstance(session_label, str):
-        return None
-    if session_label.startswith("ses-"):
-        try:
-            return int(session_label.split("-")[-1])
-        except ValueError:
-            return None
-    return None
+    return parse_session_day(session_label, default=None)
 
 if not session_table.empty and "Session" in session_table.columns:
     sessions_sorted = sorted(session_table["Session"].unique())
@@ -176,20 +163,13 @@ if not session_table.empty and "Session" in session_table.columns:
         ax.set_title(col)
         ax.grid(axis="y", alpha=0.3)
         fig.tight_layout()
-        sf = SaveableFigure(fig, proj._context)
-        sf.save(f"{OUTPUT_PREFIX}_{col}_boxplot.png")
-        if EXPORT_SVG:
-            sf.save(f"{OUTPUT_PREFIX}_{col}_boxplot.svg")
-        plt.close(fig)
+        formats = ("svg",) if EXPORT_SVG else None
+        proj.io.figure(fig, f"{OUTPUT_PREFIX}_{col}_boxplot.png", formats=formats)
 
 
 # ─── PDF report with per-session speed traces + bout highlights ──────────
 
-report_dir = proj._context.reports_dir
-report_dir.mkdir(parents=True, exist_ok=True)
-report_path = report_dir / f"{OUTPUT_PREFIX}_report.pdf"
-
-with PdfPages(report_path) as pdf:
+with proj.io.pdf(f"{OUTPUT_PREFIX}_report.pdf") as pdf:
     for tr in raw_traces:
         fig, ax = plt.subplots(figsize=(10, 4))
         ax.plot(tr["t"], tr["speed_cms"], color="#2ca02c", lw=1.2, label="Speed (cm/s)")
@@ -224,7 +204,7 @@ with PdfPages(report_path) as pdf:
         pdf.savefig(fig, bbox_inches="tight")
         plt.close(fig)
 
-print(f"PDF report saved to {report_path}")
+print("PDF report saved.")
 
 
 # ─── Overlay histogram: bout velocity early vs late days ────────────────
@@ -281,13 +261,12 @@ if not bout_table.empty and "mean_speed_cms" in bout_table.columns and "Session"
 
     if has_data:
         fig.tight_layout()
-        sf = SaveableFigure(fig, proj._context)
-        sf.save(f"{OUTPUT_PREFIX}_speed_hist_comparison_panels.png")
-        if EXPORT_SVG:
-            sf.save(f"{OUTPUT_PREFIX}_speed_hist_comparison_panels.svg")
-    plt.close(fig)
+        formats = ("svg",) if EXPORT_SVG else None
+        proj.io.figure(fig, f"{OUTPUT_PREFIX}_speed_hist_comparison_panels.png", formats=formats)
+    else:
+        plt.close(fig)
 
-proj.save_report(
+proj.io.report(
     notes=(
         f"First-order locomotion bout features for ETOH R01 pre-condition dataset.\n"
         f"{len(session_table)} sessions, {len(bout_table)} total bouts detected.\n"

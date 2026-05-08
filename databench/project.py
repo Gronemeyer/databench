@@ -22,10 +22,14 @@ from pathlib import Path
 from datetime import datetime
 from typing import Any, cast
 
-import matplotlib.pyplot as plt
 import pandas as pd
 
-from databench.config import FilterConfig, OutputContext, _detect_script_name, _resolve_dataset_alias_for_output
+from databench.config import (
+    OutputContext,
+    _detect_script_name,
+    _resolve_dataset_alias_for_output,
+    _user_config,
+)
 from databench.tabler import DataTabler
 
 
@@ -108,7 +112,14 @@ class Project:
         self._dataset_path = Path(dataset)
         self._df: pd.DataFrame = load_dataset(self._dataset_path)
         self._tabler = DataTabler(self._df)
-        self.filter_config: FilterConfig | None = None
+
+        # Fill missing analyst/lab from databench.toml / env vars.
+        if not analyst or not lab:
+            user = _user_config()
+            if not analyst:
+                analyst = user.get("analyst", "")
+            if not lab:
+                lab = user.get("lab", "")
 
         # Resolve output_root: "dataset" → write next to the dataset file
         if isinstance(output_root, str) and output_root == "dataset":
@@ -119,6 +130,15 @@ class Project:
         # Build output directory structure
         # outputs/<dataset_alias>/<YYMMDD>/<script_name>[_<tag>]/{plots,reports,stats}
         dataset_alias = _resolve_dataset_alias_for_output(self._dataset_path)
+
+        # Load per-dataset params (session_map, condition_order, ...) from
+        # the matching `[datasets.<alias>]` table. Empty dict if missing.
+        from databench.config import dataset_params as _dataset_params
+        try:
+            self.params: dict = _dataset_params(dataset_alias)
+        except (KeyError, FileNotFoundError):
+            self.params = {}
+
         script_name = _detect_script_name()
         run_dir = self._build_run_dir(
             output_root=resolved_root,
@@ -132,6 +152,7 @@ class Project:
             plots_dir=run_dir / "plots",
             stats_dir=run_dir / "stats",
             reports_dir=run_dir / "reports",
+            config_dir=run_dir / "config",
             analyst=analyst,
             lab=lab,
             run_name=run_name,
@@ -139,6 +160,16 @@ class Project:
             script_name=script_name,
         )
         self._context.ensure_dirs()
+        self._dataset_alias = dataset_alias
+        self._io: "ProjectIO | None" = None
+
+    @property
+    def io(self) -> "ProjectIO":
+        """Unified save surface: ``project.io.figure / table / report``."""
+        if self._io is None:
+            from databench._io import ProjectIO
+            self._io = ProjectIO(self)
+        return self._io
 
     @staticmethod
     def _build_run_dir(
@@ -148,12 +179,18 @@ class Project:
         script_name: str,
         tag: str,
     ) -> Path:
-        """Compose the run directory path from date and script/tag folder."""
+        """Compose the run directory path: <root>/<alias>/<script>/<YYMMDD>[_<tag>]/."""
         date_folder = datetime.now().strftime("%y%m%d")
+        if tag:
+            date_folder = f"{date_folder}_{tag}"
         return output_root / dataset_alias / script_name / date_folder
 
     def _append_run_name(self, name: str) -> Path:
-        """Append run_name to a file stem while preserving parent and suffix."""
+        """Append run_name to a file stem while preserving parent and suffix.
+
+        Retained for ``Session``’s ``align()`` cache key and any internal
+        callers; not exposed in the public save surface (``project.io``).
+        """
         rel_path = Path(name)
         run_name = str(self._context.run_name).strip()
         if not run_name:
@@ -169,16 +206,6 @@ class Project:
     def tabler(self) -> DataTabler:
         """Index-aware dataframe helper owned by this project."""
         return self._tabler
-
-    def set_filters(self, drop_rows: Any = ()) -> "Project":
-        """Set dataset filters for later use with ``filter_data()``."""
-        self._tabler.set_filters(drop_rows)
-        self.filter_config = self._tabler.filter_config
-        return self
-
-    def filter_data(self, df: pd.DataFrame, drop_rows_list: Any = None) -> pd.DataFrame:
-        """Filter rows using stored or provided drop rules."""
-        return self._tabler.filter_data(df, drop_rows_list)
 
     def filter(
         self,
@@ -208,7 +235,6 @@ class Project:
             exclude=exclude,
             **kwargs,
         )
-        self.filter_config = self._tabler.filter_config
         self._df = self._tabler.df
         return self
 
@@ -360,100 +386,39 @@ class Project:
         """All unique task labels in the dataset."""
         return sorted(self.df.index.get_level_values("Task").unique())
 
-    # ── Reporting ──────────────────────────────────────────────────────────
-
-    def save_report(
-        self,
-        *results,
-        notes: str = "",
-        extra_metadata: dict[str, str] | None = None,
-    ) -> Path:
-        """Write a markdown summary report.
-
-        Collects sections from any result objects that define a
-        ``_report_section()`` method, then auto-discovers plots and
-        data files from the output directories.
-
-        Parameters
-        ----------
-        *results
-            Zero or more result objects (``OscillationResult``,
-            ``EtaResult``, etc.).  Each that has a ``_report_section()``
-            method contributes a section to the report.
-        notes : str
-            Free-form notes appended at the end.
-        extra_metadata : dict, optional
-            Extra key/value pairs for the header table.
-
-        Returns
-        -------
-        Path
-            Absolute path to the written ``.md`` file.
-        """
-        from databench._reporting import write_report
-
-        sections = []
-        for r in results:
-            if hasattr(r, "_report_section"):
-                sections.append(r._report_section())
-
-        return write_report(
-            self._context,
-            sections=sections,
-            notes=notes,
-            dataset_path=self._dataset_path,
-            extra_metadata=extra_metadata,
-        )
-
-    # ── Save helpers ───────────────────────────────────────────────────────
-
-    def save_table(
-        self,
-        df: pd.DataFrame,
-        name: str = "table.csv",
-    ) -> Path:
-        """Save a DataFrame to the stats output directory.
-
-        Returns the path to the saved file.
-        """
-        out_dir = self._context.stats_dir
-        path = out_dir / self._append_run_name(name)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.suffix == ".parquet":
-            df.to_parquet(path)
-        else:
-            path = path.with_suffix(".csv") if path.suffix not in (".csv",) else path
-            df.to_csv(path)
-        return path
-
-    def save_figure(
-        self,
-        fig,
-        name: str,
-        dpi: int = 300,
-        bbox_inches: str = "tight",
-    ) -> Path:
-        """Save a matplotlib figure to the plots output directory."""
-        out_dir = self._context.plots_dir
-        path = out_dir / self._append_run_name(name)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(path, dpi=dpi, bbox_inches=bbox_inches)
-        return path
-
-    def save_and_close(
-        self,
-        fig,
-        name: str,
-        dpi: int = 300,
-    ) -> Path:
-        """Save a figure and close it. Returns the output path."""
-        path = self.save_figure(fig, name, dpi=dpi)
-        plt.close(fig)
-        return path
-
     def __repr__(self) -> str:
         n = len(self.df)
         return (
             f"Project(dataset={self._dataset_path.name!r}, "
             f"rows={n}, run_name={self._context.run_name!r})"
         )
+
+    def describe(self) -> str:
+        """Print a human-readable summary of the dataset and run dirs.
+
+        Useful first call when starting a new analysis::
+
+            proj = Project(dataset=resolve_dataset(), ...)
+            proj.describe()
+        """
+        from collections import Counter
+        subjects = self.subjects
+        sessions = self.all_sessions
+        tasks = self.tasks
+        rows_per_task = Counter(self.df.index.get_level_values("Task"))
+        lines = [
+            repr(self),
+            f"  Subjects ({len(subjects)}): {subjects}",
+            f"  Sessions ({len(sessions)}): {sessions}",
+            f"  Tasks    ({len(tasks)}): {tasks}",
+            f"  Rows per task: {dict(rows_per_task)}",
+            f"  Run dir:    {self._context.run_dir}",
+            f"  Plots dir:  {self._context.plots_dir}",
+            f"  Stats dir:  {self._context.stats_dir}",
+            f"  Reports:    {self._context.reports_dir}",
+        ]
+        if self.params:
+            lines.append(f"  Params:     {sorted(self.params)}")
+        text = "\n".join(lines)
+        print(text)
+        return text

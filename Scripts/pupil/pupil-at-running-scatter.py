@@ -16,8 +16,8 @@ import numpy as np
 
 from databench.project import Project
 from databench.analysis.locomotion import locomotion_events
-from databench.session import SaveableFigure
 from databench.config import resolve_dataset
+from databench.types import EventsTable
 from databench.plotting import set_theme
 
 set_theme()
@@ -32,8 +32,6 @@ TASK = "task-widefield"
 
 proj = Project(
     dataset=DATASET,
-    analyst="Jacob Gronemeyer",
-    lab="Sipe Lab",
     run_name="pupil-at-running",
     tag="scatter",
 ).filter(exclude={"session": ["ses-00", "ses-11"]})  
@@ -42,7 +40,7 @@ group = proj.sessions(task=TASK)
 
 # ─── Detect locomotion events ────────────────────────────────────────────
 
-events = locomotion_events(
+events: EventsTable = locomotion_events(
     group,
     speed_source="treadmill",
     speed_column="speed_mm",
@@ -126,9 +124,9 @@ ax.set_ylabel("Pupil z-score at running end")
 ax.set_title("Pupil diameter (z-scored per session)", fontweight="bold")
 fig.tight_layout()
 
-SaveableFigure(fig, proj._context).save("pupil_diameter_running_scatter.svg")
+proj.io.figure(fig, "pupil_diameter_running_scatter.svg")
 
-proj.save_report(
+proj.io.report(
     notes=(
         f"Pupil z-scored diameter at locomotion bout onset vs. offset scatter. "
         f"{len(pupil_at_start)} bouts sampled."

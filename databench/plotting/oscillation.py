@@ -1,29 +1,20 @@
-"""Oscillation detection plotting helpers and registered plotters.
+﻿"""Oscillation detection plotting helpers.
 
 Provides:
   * ``shade_bursts`` — translucent burst overlays on an axes.
   * ``plot_oscillation_overview`` — multi-panel oscillation overview figure.
   * ``plot_oscillation_burst`` — zoomed window around a single burst.
-  * ``OscillationOverviewPlotter`` — full-session (or windowed) 4-panel overview.
-  * ``OscillationBurstDetailPlotter`` — zoomed window around one burst.
-  * ``OscillationReportPagePlotter`` — PDF-ready page (raw + envelope + optional pupil).
-  * ``OscillationEtaGroupPlotter`` — group mean ± SEM ETA by ROI.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 
-from databench.analysis.base import AnalysisResult
-from databench.analysis.oscillation import OscillationResult
-from databench.plotting.base import Plotter
-from databench._utils._logger import get_logger
-from databench.analysis._signal.preproc import smooth_savgol
-from databench._utils import time_mask
+from databench.utils.logger import get_logger
+from databench.signal.preproc import smooth_savgol
+from databench.utils import time_mask
 from databench.plotting.traces import dense_lw, prepare_trace_styled, plot_trace_styled
 from databench.plotting import get_theme, style_axes
 from databench.plotting.style import get_style
@@ -246,356 +237,94 @@ def plot_oscillation_burst(
 
 # ─── Overview Plotter ─────────────────────────────────────────────────────
 
+from dataclasses import dataclass, field
+from typing import Tuple as _Tuple
+
+from databench.plotting.base import Plotter
+
+
 @dataclass(frozen=True)
 class OscillationOverviewPlotter(Plotter):
-    """Full-session (or windowed) overview: ROI, Hilbert, pupil, speed.
+    """Reusable Plotter for oscillation-detection overviews.
 
-    Accepts an ``AnalysisResult`` whose ``data`` is an ``OscillationResult``
-    and whose ``context`` is the *long* DataFrame (aligned by ``build_long``).
-
-    Alternatively, call ``plot_overview()`` directly with explicit args.
+    Parameters
+    ----------
+    pupil, speed : str, optional
+        Column names in the aligned auxiliary data.
+    smooth_pupil_s, smooth_speed_s : float
+        Smoothing windows in seconds.
+    window : (float, float), optional
+        Time window to zoom into; ``None`` shows full session.
+    aligned : AlignedData, optional
+        Pre-aligned auxiliary data (pupil/speed traces).  Pass via
+        ``OscillationResult.overview_plotter(aligned=...)`` rather than
+        constructing the plotter directly.
     """
 
     name: str = "oscillation_overview"
-    pupil_col: str = "pupil_diameter_mm"
-    speed_col: str = "speed_mm"
+    pupil: Optional[str] = None
+    speed: Optional[str] = None
     smooth_pupil_s: float = 0.5
     smooth_speed_s: float = 0.2
-    band_label: str = ""
-    cfg_summary: str = ""
-    window: Tuple[float, float] | None = None
+    window: Optional[_Tuple[float, float]] = None
+    aligned: object = field(default=None, repr=False, compare=False)
 
-    def plot(self, result: AnalysisResult):
-        """Plot from AnalysisResult (data=OscillationResult, context=long df)."""
-        osc: OscillationResult = result.data
-        long: pd.DataFrame = result.context
-        return self.plot_overview(osc, long, window=self.window)
-
-    def plot_overview(
-        self,
-        osc: OscillationResult,
-        long: pd.DataFrame,
-        window: Tuple[float, float] | None = None,
-    ):
-        t_aligned = long["time_elapsed_s"].to_numpy()
-        pupil_raw = long[self.pupil_col].to_numpy() if self.pupil_col in long.columns else None
-        speed_raw = long[self.speed_col].to_numpy() if self.speed_col in long.columns else None
-
-        pupil = smooth_savgol(pupil_raw, self.smooth_pupil_s, osc.band[0] * 12.5) if pupil_raw is not None else None
-        speed = smooth_savgol(speed_raw, self.smooth_speed_s, osc.band[0] * 12.5) if speed_raw is not None else None
-
-        has_pupil = pupil is not None and len(pupil) > 0
-        has_speed = speed is not None and len(speed) > 0
-        n_panels = 2 + int(has_pupil) + int(has_speed)
-
-        per_panel_h = 2.8
-        fig, axes = plt.subplots(
-            n_panels, 1,
-            figsize=(12.8, per_panel_h * n_panels),
-            sharex=True,
-            gridspec_kw={"height_ratios": [1] * n_panels},
-        )
-        axes = np.atleast_1d(axes)
-
-        t = osc.time
-        _, time_slice = time_mask(t, window)
-        time_visible = t[time_slice]
-        xlim = (time_visible[0], time_visible[-1])
-        n_vis = len(time_visible)
-        fig_w = fig.get_size_inches()[0]
-
-        band_label = self.band_label or f"{osc.band[0]}\u2013{osc.band[1]} Hz"
-
-        # Panel 1: raw ROI trace + burst shading
-        ax = axes[0]
-        ax.plot(time_visible, osc.raw_signal[time_slice],
-                color=get_theme().colors[0],
-                lw=dense_lw(n_vis, fig_w, 1.4), alpha=0.9)
-        shade_bursts(ax, t, osc.bursts, *xlim)
-        ax.set_ylabel("ΔF/F")
-        ax.set_title(
-            f"{osc.context.label()} | {osc.context.signal_key} | {band_label}\n"
-            f"{len(osc.bursts)} bursts{' (' + self.cfg_summary + ')' if self.cfg_summary else ''}",
+    def plot(self, result):
+        return result.plot_overview(
+            aligned=self.aligned,
+            pupil=self.pupil,
+            speed=self.speed,
+            smooth_pupil_s=self.smooth_pupil_s,
+            smooth_speed_s=self.smooth_speed_s,
+            window=self.window,
         )
 
-        # Panel 2: bandpassed + envelope + threshold
-        ax = axes[1]
-        ax.plot(time_visible, osc.filtered_signal[time_slice],
-                color=get_theme().colors[2],
-                lw=dense_lw(n_vis, fig_w, 0.8), alpha=0.8, label="bandpassed")
-        ax.plot(time_visible, osc.envelope[time_slice],
-                color=get_theme().colors[3],
-                lw=dense_lw(n_vis, fig_w, 1.2), alpha=0.9, label="envelope")
-        ax.axhline(osc.threshold_value, color=get_theme().colors[3], ls="--", lw=0.9, alpha=0.6,
-                    label=f"threshold ({osc.threshold_value:.4f})")
-        shade_bursts(ax, t, osc.bursts, *xlim)
-        ax.set_ylabel("Amplitude")
-        ax.legend(loc="upper left", bbox_to_anchor=(0.01, 0.98), ncol=1, frameon=False)
+    def recipe(self, result=None) -> dict:
+        rec = super().recipe(result)
+        # Drop the non-serialisable AlignedData reference.
+        rec["config"].pop("aligned", None)
+        if result is not None:
+            rec["result"] = {
+                "subject": getattr(result, "subject", None),
+                "session": getattr(result, "session", None),
+                "task": getattr(result, "task", None),
+                "signal": getattr(result, "signal_name", None),
+                "band_hz": list(getattr(result, "band_hz", ()) or ()),
+                "fs": getattr(result, "fs", None),
+                "threshold": getattr(result, "threshold_value", None),
+                "n_bursts": len(getattr(result, "bursts", []) or []),
+            }
+        return rec
 
-        panel_idx = 2
-
-        # Panel 3: pupil
-        if has_pupil:
-            ax = axes[panel_idx]
-            pupil_time_mask, _ = time_mask(t_aligned, (xlim[0], xlim[1]))
-            if pupil_time_mask is not None:
-                ax.plot(t_aligned[pupil_time_mask], pupil[pupil_time_mask],
-                        color=get_theme().colors[1],
-                        lw=dense_lw(int(pupil_time_mask.sum()), fig_w, 1.6), alpha=0.9)
-            shade_bursts(ax, t, osc.bursts, *xlim)
-            ax.set_ylabel("Pupil (mm)")
-            panel_idx += 1
-
-        # Panel 4: locomotion speed
-        if has_speed:
-            ax = axes[panel_idx]
-            speed_time_mask, _ = time_mask(t_aligned, (xlim[0], xlim[1]))
-            if speed_time_mask is not None:
-                ax.plot(t_aligned[speed_time_mask], speed[speed_time_mask],
-                        color=get_theme().colors[2],
-                        lw=dense_lw(int(speed_time_mask.sum()), fig_w, 1.6), alpha=0.9)
-            shade_bursts(ax, t, osc.bursts, *xlim)
-            ax.set_ylabel("Speed (mm)")
-
-        for a in axes:
-            a.set_xlim(xlim)
-        axes[-1].set_xlabel("Time (s)")
-        for a in axes:
-            style_axes(a)
-        fig.tight_layout()
-        return fig, axes
-
-
-# ─── Burst Detail Plotter ────────────────────────────────────────────────
 
 @dataclass(frozen=True)
-class OscillationBurstDetailPlotter(Plotter):
-    """Zoomed window around a single burst, delegates to OscillationOverviewPlotter.
+class OscillationBurstPlotter(Plotter):
+    """Reusable Plotter that renders zoomed burst windows."""
 
-    Accepts an ``AnalysisResult`` whose ``data`` is an ``OscillationResult``
-    and whose ``context`` is the *long* DataFrame.
-    """
-
-    name: str = "oscillation_burst_detail"
-    overview: OscillationOverviewPlotter = field(default_factory=lambda: OscillationOverviewPlotter())
+    name: str = "oscillation_bursts"
+    max_examples: int = 12
     pad_s: float = 5.0
-    burst_idx: int = 0
-    fs: float = 50.0
+    fs: Optional[float] = None
+    pupil: Optional[str] = None
+    speed: Optional[str] = None
+    smooth_pupil_s: float = 0.5
+    smooth_speed_s: float = 0.2
+    aligned: object = field(default=None, repr=False, compare=False)
 
-    def plot(self, result: AnalysisResult):
-        """Plot from AnalysisResult (data=OscillationResult, context=long df)."""
-        osc: OscillationResult = result.data
-        long: pd.DataFrame = result.context
-        return self.plot_burst(osc, long, self.burst_idx, self.fs)
-
-    def plot_burst(
-        self,
-        osc: OscillationResult,
-        long: pd.DataFrame,
-        burst_idx: int,
-        fs: float = 50.0,
-    ):
-        burst_start, burst_end = osc.bursts[burst_idx]
-        t_start = osc.time[burst_start] - self.pad_s
-        t_end = osc.time[burst_end] + self.pad_s
-        window = (t_start, t_end)
-
-        fig, axes = self.overview.plot_overview(osc, long, window=window)
-        burst_dur = (burst_end - burst_start + 1) / fs
-        peak_env = float(osc.envelope[burst_start:burst_end + 1].max())
-        fig.suptitle(
-            f"Burst #{burst_idx + 1} — {osc.context.label()}\n"
-            f"{osc.time[burst_start]:.1f}–{osc.time[burst_end]:.1f} s  (dur={burst_dur:.1f}s, peak_env={peak_env:.4f})",
-            y=1.03,
-        )
-        return fig, axes
-
-
-# ─── Report Page Plotter (for PDF) ───────────────────────────────────────
-
-@dataclass(frozen=True)
-class OscillationReportPagePlotter(Plotter):
-    """One PDF page: raw signal, bandpassed + envelope + threshold, optional pupil.
-
-    Accepts either:
-    - An ``AnalysisResult`` with ``data=OscillationResult`` and optional
-      ``context={"pupil": array, "pupil_time": array}``
-    - Direct call via ``plot_page()`` with explicit args.
-
-    Reads pupil directly from the raw row (own time base) — no resampling.
-    """
-
-    name: str = "oscillation_report_page"
-    pupil_source: str = "pupil"
-    pupil_key: str = "pupil_diameter_mm"
-    band_label: str = ""
-    cfg_summary: str = ""
-    time_window: Tuple[float, float] | None = None
-
-    def plot(self, result: AnalysisResult):
-        """Plot from AnalysisResult (data=OscillationResult)."""
-        osc: OscillationResult = result.data
-        ctx = result.context or {}
-        pupil = ctx.get("pupil") if isinstance(ctx, dict) else None
-        pupil_time = ctx.get("pupil_time") if isinstance(ctx, dict) else None
-        return self.plot_page(osc, pupil=pupil, pupil_time=pupil_time, time_window=self.time_window)
-
-    def plot_page(
-        self,
-        osc: OscillationResult,
-        pupil: np.ndarray | None = None,
-        pupil_time: np.ndarray | None = None,
-        time_window: Tuple[float, float] | None = None,
-    ):
-        t = osc.time
-        raw_signal = osc.raw_signal
-        filtered = osc.filtered_signal
-        envelope = osc.envelope
-        threshold_val = osc.threshold_value
-        ctx = osc.context
-        band_label = self.band_label or f"{osc.band[0]}–{osc.band[1]} Hz"
-
-        if time_window is not None:
-            mask = (t >= time_window[0]) & (t <= time_window[1])
-        else:
-            mask = np.ones(len(t), dtype=bool)
-
-        has_pupil = (
-            pupil is not None
-            and pupil_time is not None
-            and len(pupil) > 0
-            and len(pupil_time) > 0
-        )
-        n_panels = 3 if has_pupil else 2
-        fig, axes = plt.subplots(n_panels, 1, figsize=(14, 3.2 * n_panels))
-
-        time_masked = t[mask]
-        n_vis = int(mask.sum())
-        fig_w = fig.get_size_inches()[0]
-
-        # Panel 1: raw signal + burst shading
-        ax0 = axes[0]
-        ax0.plot(time_masked, raw_signal[mask],
-                 color=get_theme().colors[0],
-                 lw=dense_lw(n_vis, fig_w, 0.6), alpha=0.8)
-        for burst_start, burst_end in osc.bursts:
-            if t[burst_start] > time_masked[-1] or t[burst_end] < time_masked[0]:
-                continue
-            ax0.axvspan(t[burst_start], t[burst_end], color=get_theme().colors[4], alpha=0.15)
-        ax0.set_ylabel(f"{ctx.signal_key} (raw)")
-        ax0.set_title(
-            f"{ctx.label()} | {ctx.signal_key} | {band_label}\n"
-            f"{len(osc.bursts)} bursts detected{' (' + self.cfg_summary + ')' if self.cfg_summary else ''}",
+    def plot(self, result):
+        return result.plot_bursts(
+            aligned=self.aligned,
+            max_examples=self.max_examples,
+            pad_s=self.pad_s,
+            fs=self.fs,
+            pupil=self.pupil,
+            speed=self.speed,
+            smooth_pupil_s=self.smooth_pupil_s,
+            smooth_speed_s=self.smooth_speed_s,
         )
 
-        # Panel 2: band-passed + envelope + threshold
-        ax1 = axes[1]
-        ax1.plot(time_masked, filtered[mask],
-                 color=get_theme().colors[2],
-                 lw=dense_lw(n_vis, fig_w, 0.5), alpha=0.7, label="bandpassed")
-        ax1.plot(time_masked, envelope[mask],
-                 color=get_theme().colors[3],
-                 lw=dense_lw(n_vis, fig_w, 0.8), label="envelope")
-        ax1.axhline(threshold_val, color=get_theme().colors[3], ls="--", lw=0.8, alpha=0.6, label=f"threshold ({threshold_val:.4f})")
-        for burst_start, burst_end in osc.bursts:
-            if t[burst_start] > time_masked[-1] or t[burst_end] < time_masked[0]:
-                continue
-            ax1.axvspan(t[burst_start], t[burst_end], color=get_theme().colors[4], alpha=0.15)
-        ax1.set_ylabel("Amplitude")
-        ax1.legend(loc="upper right", frameon=False)
+    def recipe(self, result=None) -> dict:
+        rec = super().recipe(result)
+        rec["config"].pop("aligned", None)
+        return rec
 
-        # Panel 3 (optional): pupil trace on its own time axis
-        if has_pupil:
-            ax2 = axes[2]
-            if time_window is not None:
-                pupil_mask = (pupil_time >= time_window[0]) & (pupil_time <= time_window[1])
-            else:
-                pupil_mask = np.ones(len(pupil_time), dtype=bool)
-            ax2.plot(pupil_time[pupil_mask], pupil[pupil_mask],
-                     color=get_theme().colors[4],
-                     lw=dense_lw(int(pupil_mask.sum()), fig_w, 0.6), alpha=0.8)
-            for burst_start, burst_end in osc.bursts:
-                if t[burst_start] > time_masked[-1] or t[burst_end] < time_masked[0]:
-                    continue
-                ax2.axvspan(t[burst_start], t[burst_end], color=get_theme().colors[4], alpha=0.15)
-            ax2.set_ylabel("Pupil diameter (mm)")
-
-        # Sync x-limits across all panels
-        xlim = (time_masked[0], time_masked[-1])
-        for ax in axes:
-            ax.set_xlim(xlim)
-        axes[-1].set_xlabel("Time (s)")
-        for ax in axes:
-            style_axes(ax)
-        fig.tight_layout()
-        return fig, axes
-
-
-# ─── ETA Group Plotter ───────────────────────────────────────────────────
-
-@dataclass(frozen=True)
-class OscillationEtaGroupPlotter(Plotter):
-    """Group mean ± SEM ETA for each ROI at oscillation burst onset or offset.
-
-    Accepts an ``AnalysisResult`` (auto-supplied by ``analysis.plot()``).
-    Extracts ``eta_group`` from ``result.data["eta_group"]``, matching the
-    ``EtaConditionPlotter`` contract.
-    """
-
-    name: str = "oscillation_eta_group"
-    roi_cols: tuple[str, ...] = ()
-    task: str = "task-widefield"
-    event_type: str = "onset"
-    band_label: str = ""
-    baseline_label: str = ""
-    detect_roi: str = ""
-    colors: dict[str, str] = field(default_factory=dict)
-    ylabels: dict[str, str] = field(default_factory=dict)
-
-    def plot(self, result: AnalysisResult):
-        eta_group = result.data["eta_group"]
-        event_type = self.event_type
-        rois = list(self.roi_cols)
-        d = eta_group.query(
-            "Task == @self.task and EventType == @event_type and ROI in @rois"
-        ).copy()
-
-        ncols = len(rois)
-        fig, axes = plt.subplots(1, ncols, figsize=(5 * ncols, 4.2), sharex=True)
-        axes = np.atleast_1d(axes).ravel()
-
-        default_colors = {rois[0]: get_theme().colors[0]} if rois else {}
-        if len(rois) > 1:
-            default_colors[rois[-1]] = get_theme().colors[4]
-        colors = {**default_colors, **self.colors}
-
-        default_ylabels = {r: "Value (baselined)" for r in rois}
-        ylabels = {**default_ylabels, **self.ylabels}
-
-        for ax, roi in zip(axes, rois):
-            g = d[d["ROI"] == roi].sort_values("rel_time")
-            c = colors.get(roi, get_theme().colors[0])
-            if not g.empty:
-                ax.plot(g["rel_time"], g["mean"], color=c, lw=1.8)
-                ax.fill_between(
-                    g["rel_time"],
-                    g["mean"] - g["sem"],
-                    g["mean"] + g["sem"],
-                    alpha=0.2, color=c,
-                )
-            ax.axvline(0, color=get_theme().fg, lw=1)
-            ax.axhline(0, color=get_theme().fg, lw=0.5, alpha=0.5)
-            ax.set_title(roi)
-            ax.set_xlabel(f"Time relative to burst {self.event_type} (s)")
-            ax.set_ylabel(ylabels.get(roi, "Value (baselined)"))
-            style_axes(ax)
-
-        band_label = self.band_label or ""
-        detect_roi = self.detect_roi or (rois[0] if rois else "")
-        fig.suptitle(
-            f"Oscillation-triggered ETA — {band_label} burst {self.event_type}\n"
-            f"detect: {detect_roi} | comparison: {', '.join(rois)}\n"
-            f"{self.baseline_label} | mean ± SEM across sessions",
-        )
-        fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.88])
-        return fig, axes

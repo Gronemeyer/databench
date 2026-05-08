@@ -9,10 +9,13 @@ Supports both:
 Usage:
     python Scripts/event-triggered/event-based.py
 """
+from __future__ import annotations
+
 from databench.project import Project
 from databench.analysis.eta import EtaAnalysis
 from databench.analysis.locomotion import locomotion_events
 from databench.config import resolve_dataset
+from databench.types import EventsTable
 from databench.plotting import set_theme
 
 set_theme()
@@ -40,8 +43,6 @@ SESSION_TO_CONDITION = {
 
 proj = Project(
     dataset=DATASET,
-    analyst="Jacob Gronemeyer",
-    lab="Sipe Lab",
     run_name="MOp-MOs_spont",
     tag="dev",
 )
@@ -51,7 +52,7 @@ print(f"Selected {len(group)} sessions for task={TASK}")
 
 # ─── Detect locomotion events ────────────────────────────────────────────
 
-events = locomotion_events(
+events: EventsTable = locomotion_events(
     group,
     speed_source="treadmill",
     speed_column="speed_mm",
@@ -81,17 +82,19 @@ result = eta.run(group, events)
 
 event_types = PLOT_EVENT_TYPES if PLOT_EVENT_TYPES is not None else result.event_types
 for event_type in event_types:
-    result.plot(event=event_type, rois=list(ROI_COLUMNS)).save(f"eta_{event_type}_rois.svg")
+    plotter = result.condition_plotter(event=event_type, rois=tuple(ROI_COLUMNS))
+    fig = plotter(result)
+    proj.io.figure(fig, f"eta_{event_type}_rois.svg", sidecar=plotter.recipe(result))
 
-result.save_tables(prefix="eta")
-result.save_summary("eta_summary.json")
+for name, df in result.tables.items():
+    proj.io.table(df, f"eta_{name}.csv")
 
-report_path = proj.save_report(
+report_path = proj.io.report(
     result,
     notes="Event-based ETA for mesomap ROIs aligned to locomotion onset/offset across conditions.",
 )
 
 print(f"Done — {len(result.events)} events across {result.events['Subject'].nunique()} subjects.")
 print(f"Report: {report_path}")
-print(f"Outputs in: {proj._context.run_dir}")
+print(f"Outputs in: {proj.io.run_dir}")
 

@@ -15,12 +15,11 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
-from matplotlib.backends.backend_pdf import PdfPages
 
 from databench.project import Project
 from databench.analysis.eta import EtaAnalysis
 from databench.analysis.oscillation import OscillationDetector
-from databench.analysis._signal.epoching import make_events
+from databench.signal.epoching import make_events
 from databench.config import resolve_dataset
 from databench.plotting import set_theme
 set_theme()
@@ -54,8 +53,6 @@ BAND_LABEL = f"{OSC_BAND[0]}–{OSC_BAND[1]} Hz"
 
 proj = Project(
     dataset=DATASET,
-    analyst="Jacob Gronemeyer",
-    lab="Sipe Lab",
     run_name="osc-eta-detect-compare",
     tag="L_VISp",
 ).filter(include={"session": "ses-00"})
@@ -112,9 +109,7 @@ n_bursts = len(events) // 2
 print(f"Detected {n_bursts} valid bursts → {len(events)} events")
 
 # Save burst events table
-stats_dir = proj._context.stats_dir
-stats_dir.mkdir(parents=True, exist_ok=True)
-events.to_csv(stats_dir / "oscillation_burst_events.csv", index=False)
+proj.io.table(events, "oscillation_burst_events.csv")
 
 # ─── Stage 2: ETA at oscillation events ──────────────────────────────────
 
@@ -142,19 +137,18 @@ eta_result = eta.run(group, events, aligned=aligned_list)
 # ─── Plot ETA ────────────────────────────────────────────────────────────
 
 for event_type in eta_result.event_types:
-    eta_result.plot(
+    fig = eta_result.plot(
         event=event_type,
         rois=[ETA_ROI, PUPIL_KEY],
-    ).save(f"osc_eta_{event_type}.svg")
+    )
+    proj.io.figure(fig, f"osc_eta_{event_type}.svg")
 
-eta_result.save_tables(prefix="osc_eta_detect_compare")
+for key, df in eta_result.tables.items():
+    proj.io.table(df, f"osc_eta_detect_compare_{key}.csv")
 
 # ─── Stage 3: Oscillation detection PDF report ──────────────────────────
 
-report_pdf = proj._context.reports_dir / "oscillation_detection_report.pdf"
-report_pdf.parent.mkdir(parents=True, exist_ok=True)
-
-with PdfPages(report_pdf) as pdf:
+with proj.io.pdf("oscillation_detection_report.pdf") as pdf:
     for osc_result, sess in osc_results:
         if osc_result.events.empty:
             continue
@@ -163,15 +157,15 @@ with PdfPages(report_pdf) as pdf:
             reference=ROI_SOURCE,
             tolerance_s=0.25,
         )
-        sf = osc_result.plot_overview(aligned=ad, pupil=PUPIL_KEY)
-        pdf.savefig(sf.fig, bbox_inches="tight")
-        plt.close(sf.fig)
+        fig = osc_result.plot_overview(aligned=ad, pupil=PUPIL_KEY)
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
 
-print(f"PDF report: {report_pdf}")
+print("PDF report saved.")
 
 # ─── Report ──────────────────────────────────────────────────────────────
 
-proj.save_report(
+proj.io.report(
     eta_result,
     notes=(
         f"Two-stage: (1) oscillation detection ({BAND_LABEL} Hilbert envelope, "

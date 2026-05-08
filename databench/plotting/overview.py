@@ -14,9 +14,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from databench._utils import as_1d
-from databench.analysis._signal.preproc import remove_outliers_iqr, smooth_dense
-from databench.analysis._signal.remap import remap_to_timebase
+from databench.utils import as_1d
+from databench.signal.preproc import remove_outliers_iqr, smooth_dense
+from databench.signal.remap import remap_to_timebase
 
 
 # ── Layout defaults ────────────────────────────────────────────────────────

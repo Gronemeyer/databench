@@ -2,13 +2,13 @@
 
 Just import and use::
 
-    from databench._utils._logger import get_logger
+    from databench.utils.logger import get_logger
     _log = get_logger(__name__)
     _log.info("Hello world")
 
 For analysis entry-points, decorate with ``@log_run``::
 
-    from databench._utils._logger import log_run
+    from databench.utils.logger import log_run
 
     @log_run
     def run(self, df):
@@ -127,17 +127,10 @@ def _summarize_arg(obj: object) -> str:
 
 def _summarize_result(obj: object) -> str:
     """Return a compact summary of an analysis result for log messages."""
-    cls = type(obj).__name__
-    if cls == "AnalysisResult":
-        name = getattr(obj, "name", "?")
-        data = getattr(obj, "data", None)
-        keys = list(data.keys()) if isinstance(data, dict) else None
-        extra = f", keys={keys}" if keys else ""
-        return f"AnalysisResult(name={name}{extra})"
     import pandas as pd
     if isinstance(obj, pd.DataFrame):
         return f"DataFrame({obj.shape[0]}x{obj.shape[1]})"
-    return cls
+    return type(obj).__name__
 
 
 _LOG_RUN_ATTR = "__log_run_wrapped__"
@@ -151,8 +144,7 @@ def log_run(func):
     ERROR with full traceback.
 
     Safe to stack with ``@log_this_fr`` — this decorator sets a sentinel
-    attribute (``__log_run_wrapped__``) that ``Analysis.__init_subclass__``
-    checks to avoid double-wrapping.
+    attribute (``__log_run_wrapped__``) so it won't double-wrap.
     """
     if getattr(func, _LOG_RUN_ATTR, False):
         return func  # already wrapped

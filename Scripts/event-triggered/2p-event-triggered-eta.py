@@ -16,6 +16,7 @@ from databench.project import Project
 from databench.analysis.eta import EtaAnalysis
 from databench.analysis.locomotion import locomotion_events
 from databench.config import resolve_dataset
+from databench.types import EventsTable
 from databench.plotting import set_theme
 
 set_theme()
@@ -47,8 +48,6 @@ CONDITION_COLORS = {
 
 proj = Project(
     dataset=DATASET,
-    analyst="Jacob Gronemeyer",
-    lab="Sipe Lab",
     run_name="2p-locomotion-eta",
     tag="ACUTEVIS",
 )
@@ -82,7 +81,7 @@ if injection_col in raw.columns:
 group = proj.sessions(task=TASK)
 print(f"Selected {len(group)} sessions for task={TASK}")
 
-events = locomotion_events(
+events: EventsTable = locomotion_events(
     group,
     speed_source="encoder",
     speed_column="speed_mm",
@@ -129,16 +128,18 @@ result = eta.run(group, events, aligned=aligned_list)
 # ─── Plot & save ─────────────────────────────────────────────────────────
 
 for event_type in result.event_types:
-    result.plot(
+    fig = result.plot(
         event=event_type,
         rois=[MEAN_FEATURE],
         condition_colors=CONDITION_COLORS,
         conditions=list(CONDITION_ORDER),
-    ).save(f"eta_locomotion_{event_type}.svg")
+    )
+    proj.io.figure(fig, f"eta_locomotion_{event_type}.svg")
 
-result.save_tables(prefix="eta_locomotion")
+for key, df in result.tables.items():
+    proj.io.table(df, f"eta_locomotion_{key}.csv")
 
-report_path = proj.save_report(
+report_path = proj.io.report(
     result,
     notes="Event-triggered ETA for 2p ROI traces aligned to locomotion onset/offset by injection condition.",
 )

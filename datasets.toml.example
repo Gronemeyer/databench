@@ -1,4 +1,4 @@
-# Dataset alias → absolute path mapping.
+# Dataset alias → path (and optional per-dataset parameters).
 # Copy to datasets.toml and fill in your local paths.
 #
 # Set DATABENCH_DATASET env var to pick one:
@@ -8,6 +8,20 @@
 default = "etoh-hfsa"
 
 [datasets]
-etoh      = "/path/to/260211_ETOH_dataset.pkl"
-etoh-hfsa = "/path/to/260212_ETOH-HFSA_dataset.pkl"
+# Shorthand: alias → path.  Use this when you only need a path.
 acutevis  = "/path/to/260212_ACUTEVIS_dataset.pkl"
+etoh-hfsa = "/path/to/260212_ETOH-HFSA_dataset.pkl"
+
+# Rich form: arbitrary user-defined keys are exposed as ``proj.params``.
+# Only ``path`` is required.  All other keys are passed through unchanged.
+[datasets.etoh]
+path = "/path/to/260211_ETOH_dataset.pkl"
+session_map = { "ses-01" = "baseline", "ses-02" = "saline", "ses-03" = "ethanol_low", "ses-04" = "ethanol_high" }
+condition_order = ["baseline", "saline", "ethanol_low", "ethanol_high"]
+condition_colors = { baseline = "#bbabab", saline = "#4289e6", ethanol_low = "#ffa251", ethanol_high = "#ce1818" }
+
+# In a script:
+#   proj = Project(dataset=resolve_dataset("etoh"), ...)
+#   session_map      = proj.params["session_map"]
+#   condition_order  = proj.params["condition_order"]
+#   condition_colors = proj.params["condition_colors"]

@@ -21,7 +21,7 @@ import seaborn as sns
 
 from databench.project import Project
 from databench.config import resolve_dataset
-from databench.analysis._signal.preproc import detrend_zscore_1d
+from databench.signal.preproc import detrend_zscore_1d
 
 # ── Config ────────────────────────────────────────────────────────────────
 

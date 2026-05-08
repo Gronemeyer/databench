@@ -41,8 +41,6 @@ BURST_PAD_S = 5.0
 
 proj = Project(
     dataset=DATASET,
-    analyst="Jacob Gronemeyer",
-    lab="Sipe Lab",
     run_name=f"{SUBJECT}-{SESSION}-osc",
     tag="L_VISp-spont",
 )
@@ -75,30 +73,43 @@ result = detector.run(session)
 # ─── Plot overview ───────────────────────────────────────────────────────
 
 slug = f"{SUBJECT}_{SESSION}_{TASK}"
-result.plot_overview(
+overview = result.overview_plotter(
     aligned=aligned,
     pupil=PUPIL_KEY,
     speed=SPEED_KEY,
     smooth_pupil_s=0.5,
     smooth_speed_s=0.2,
-).save(f"{slug}_{ROI_NAME}_overview.svg")
+)
+overview_fig = overview(result)
+proj.io.figure(
+    overview_fig,
+    f"{slug}_{ROI_NAME}_overview.svg",
+    sidecar=overview.recipe(result),
+)
 
 # ─── Plot burst details ─────────────────────────────────────────────────
 
-result.plot_bursts(
+bursts = result.burst_plotter(
     aligned=aligned,
     max_examples=MAX_BURST_EXAMPLES,
     pad_s=BURST_PAD_S,
     pupil=PUPIL_KEY,
     speed=SPEED_KEY,
 )
+burst_figs = bursts(result)
+burst_recipe = bursts.recipe(result)
+for rank, fig in enumerate(burst_figs, start=1):
+    proj.io.figure(
+        fig,
+        f"{slug}_{ROI_NAME}_burst_{rank:02d}.svg",
+        sidecar={**burst_recipe, "rank": rank},
+    )
 
 # ─── Save events & report ───────────────────────────────────────────────
 
-result.save_events(f"{slug}_{ROI_NAME}_bursts.csv")
-result.save_summary()
+proj.io.table(result.events, f"{slug}_{ROI_NAME}_bursts.csv")
 
-report_path = proj.save_report(
+report_path = proj.io.report(
     result,
     notes=(
         f"Oscillation detection ({BAND[0]}–{BAND[1]} Hz Hilbert envelope, "

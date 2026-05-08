@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any
 
 
@@ -9,11 +9,20 @@ from typing import Any
 class Plotter(ABC):
     """Base class for plotters.
 
-    Subclasses **must** override ``plot(result: AnalysisResult) -> (fig, axes)``.
-    All configuration lives on the frozen dataclass — no **kwargs.
+    Subclasses **must** override ``plot(result)`` returning a matplotlib
+    ``Figure`` (or list of figures).  All configuration lives on the
+    frozen dataclass — no ``**kwargs``.
 
-    The theme is auto-applied when ``plot()`` is called so every figure
-    inherits the active style without any manual ``set_theme()`` call.
+    The active theme is auto-applied when the plotter is *called* so
+    every figure inherits the lab style.
+
+    Recipe sidecars
+    ---------------
+    Each plotter exposes :meth:`recipe`, which returns a JSON-serialisable
+    dict capturing the plotter class and its frozen config.  Pass it to
+    ``project.io.figure(fig, name, sidecar=plotter.recipe(result))`` to
+    drop a ``<name>.recipe.json`` next to the saved figure for full
+    plotting reproducibility.
     """
 
     name: str
@@ -27,3 +36,15 @@ class Plotter(ABC):
     @abstractmethod
     def plot(self, result) -> Any:
         ...
+
+    def recipe(self, result=None) -> dict:
+        """Return a JSON-serialisable dict describing this plotter's config.
+
+        Subclasses may override to add per-result fields (e.g. event names,
+        ROI lists).  The default emits ``{"plotter": <class>, "config": …}``.
+        """
+        config = asdict(self) if is_dataclass(self) else {"name": self.name}
+        return {
+            "plotter": f"{type(self).__module__}.{type(self).__name__}",
+            "config": config,
+        }

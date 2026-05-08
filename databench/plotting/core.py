@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Callable, Mapping, Optional, Tuple, Union
+from typing import Optional, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 
 from databench.analysis.longitudinal import longitudinal_summary
-from databench.analysis.base import FeatureFn
-from databench.plotting.base import Plotter
-from databench._utils._logger import get_logger
+from databench.utils.logger import get_logger
 
 from databench.plotting import get_theme
 
@@ -177,106 +173,3 @@ def plot_two_panel_longitudinal(
     axes[1].set_xlabel(x_label or x)
     fig.tight_layout()
     return fig, axes
-
-
-PLOTTERS: dict[str, Callable[..., tuple]] = {
-    "longitudinal": plot_feature_longitudinal,
-    "boxplot": plot_feature_boxplot,
-}
-
-
-def _resolve_plotter(name: str):
-    return PLOTTERS[name]
-
-
-def plot_feature(
-    wide,
-    feature: Union[FeatureFn, "DerivedColumnSpec", Mapping[str, object], str],
-    x: str = "session_n",
-    color: Optional[str] = None,
-    x_label: Optional[str] = None,
-    **kwargs,
-):
-    """Route plotting based on the feature's plotter hint and label."""
-    spec = _coerce_plot_spec(feature)
-    plotter = _resolve_plotter(spec.plotter)
-    use_color = color or spec.color
-    return plotter(
-        wide,
-        y=spec.name,
-        x=x,
-        title=f"{spec.label} across sessions",
-        color=use_color,
-        y_label=spec.label,
-        x_label=x_label,
-        **kwargs,
-    )
-
-
-@dataclass(frozen=True)
-class FeaturePlotter(Plotter):
-    """Plot a feature from a wide table (session_table).
-
-    Set ``feature`` at construction time — accepts a FeatureFn,
-    DerivedColumnSpec, dict, or string.
-    """
-    name: str = "feature"
-    feature: Union[FeatureFn, DerivedColumnSpec, Mapping[str, object], str, None] = None
-    x: str = "session_n"
-    color: Optional[str] = None
-    x_label: Optional[str] = None
-
-    def plot(self, result):
-        """Plot feature from result.data (a wide DataFrame)."""
-        wide = result.data if hasattr(result, 'data') else result
-        if self.feature is None:
-            raise ValueError("FeaturePlotter requires a feature set at construction.")
-        return plot_feature(wide, self.feature, x=self.x, color=self.color, x_label=self.x_label)
-
-
-@dataclass(frozen=True)
-class DerivedColumnSpec:
-    name: str
-    label: str
-    color: Optional[str] = None
-    plotter: str = "longitudinal"
-
-
-def _coerce_plot_spec(feature: Union[FeatureFn, DerivedColumnSpec, Mapping[str, object], str]):
-    if isinstance(feature, FeatureFn):
-        return feature
-    if isinstance(feature, DerivedColumnSpec):
-        return feature
-    if isinstance(feature, str):
-        return DerivedColumnSpec(name=feature, label=feature)
-    if isinstance(feature, Mapping):
-        name = str(feature["name"])
-        label = str(feature.get("label", name))
-        color = feature.get("color")
-        plotter = str(feature.get("plotter", "longitudinal"))
-        return DerivedColumnSpec(name=name, label=label, color=color, plotter=plotter)
-    return feature
-
-
-@dataclass(frozen=True)
-class LongitudinalPlotter(Plotter):
-    """Plot a longitudinal summary (mean ± SEM over sessions).
-
-    Set ``y`` at construction time.
-    """
-    name: str = "longitudinal"
-    y: str = ""
-    x: str = "session_n"
-    title: Optional[str] = None
-    color: Optional[str] = None
-    y_label: Optional[str] = None
-    x_label: Optional[str] = None
-
-    def plot(self, result):
-        """Plot from result.data (a wide DataFrame)."""
-        wide = result.data if hasattr(result, 'data') else result
-        return plot_feature_longitudinal(
-            wide, y=self.y, x=self.x,
-            title=self.title, color=self.color,
-            y_label=self.y_label, x_label=self.x_label,
-        )

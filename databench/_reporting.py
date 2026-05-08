@@ -106,6 +106,7 @@ def write_report(
     notes: str = "",
     dataset_path: Path | str = "",
     extra_metadata: dict[str, str] | None = None,
+    provenance: dict[str, Any] | None = None,
 ) -> Path:
     """Write a markdown summary report to the reports directory.
 
@@ -121,6 +122,9 @@ def write_report(
         Path to the input dataset (for provenance).
     extra_metadata : dict, optional
         Additional key/value pairs for the header.
+    provenance : dict, optional
+        Result of :func:`databench._provenance.capture`.  When provided,
+        used to render the metadata table and a "Reproduce" line.
 
     Returns
     -------
@@ -149,13 +153,46 @@ def write_report(
         lines.append(f"| Lab | {context.lab} |")
     if dataset_path:
         lines.append(f"| Dataset | `{dataset_path}` |")
-    git = _git_hash()
-    if git:
-        lines.append(f"| Git | `{git}` |")
+    if provenance:
+        v = provenance.get("databench_version")
+        if v:
+            lines.append(f"| databench | `{v}` |")
+        g = provenance.get("git") or {}
+        short = g.get("short")
+        permalink = g.get("permalink")
+        dirty = g.get("dirty")
+        branch = g.get("branch")
+        if short:
+            label = short + ("-dirty" if dirty else "")
+            if permalink:
+                lines.append(f"| Git | [`{label}`]({permalink}) (`{branch}`) |")
+            else:
+                lines.append(f"| Git | `{label}` (`{branch}`) |")
+        env = provenance.get("env") or {}
+        if env:
+            env_str = ", ".join(f"{k} {v}" for k, v in env.items())
+            lines.append(f"| Env | {env_str} |")
+    else:
+        # Fallback to short hash only
+        git = _git_hash()
+        if git:
+            lines.append(f"| Git | `{git}` |")
     if extra_metadata:
         for k, v in extra_metadata.items():
             lines.append(f"| {k} | {v} |")
     lines.append("")
+
+    # ── Reproduce line ─────────────────────────────────────────────────────
+    if provenance:
+        g = provenance.get("git") or {}
+        s = provenance.get("script") or {}
+        rel = s.get("relative_path")
+        full = g.get("hash")
+        if rel and full:
+            lines.append("**Reproduce:**")
+            lines.append("")
+            lines.append(f"```bash\ngit checkout {full} && python {rel}\n```")
+            lines.append("")
 
     # ── Analysis sections ──────────────────────────────────────────────────
     if sections:

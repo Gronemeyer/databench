@@ -19,14 +19,14 @@ from typing import Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 
-from databench.analysis._signal.preproc import (  # canonical source
+from databench.signal.preproc import (  # canonical source
     smooth_savgol,
     smooth_dense,
     remove_outliers_iqr,
 )
 
-from databench.analysis._signal.remap import remap_to_timebase
-from databench._utils import time_mask
+from databench.signal.remap import remap_to_timebase
+from databench.utils import time_mask
 
 
 # ── Density-aware line width ────────────────────────────────────────────────

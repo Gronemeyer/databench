@@ -10,8 +10,7 @@ from typing import Any
 
 import pandas as pd
 
-from databench._utils import drop_rows
-from databench.config import FilterConfig
+from databench.utils import drop_rows
 
 
 class DataTabler:
@@ -26,7 +25,7 @@ class DataTabler:
 
     def __init__(self, df: pd.DataFrame) -> None:
         self._df = df
-        self.filter_config: FilterConfig | None = None
+        self._drop_spec: Any = ()
 
     @property
     def df(self) -> pd.DataFrame:
@@ -88,12 +87,12 @@ class DataTabler:
         raise ValueError("mode must be 'include' or 'exclude'")
 
     def set_filters(self, drop_spec: Any = ()) -> "DataTabler":
-        self.filter_config = FilterConfig(drop_rows=drop_spec)
+        self._drop_spec = drop_spec
         return self
 
     def filter_data(self, df: pd.DataFrame, drop_spec: Any = None) -> pd.DataFrame:
-        if drop_spec is None and self.filter_config is not None:
-            drop_spec = self.filter_config.drop_rows
+        if drop_spec is None:
+            drop_spec = self._drop_spec
         return drop_rows(df, drop_spec or ())
 
     def filter(
@@ -108,7 +107,7 @@ class DataTabler:
             self.set_filters(drop_rows)
 
         df = self._df
-        if self.filter_config is not None:
+        if self._drop_spec:
             df = self.filter_data(df)
 
         if exclude:

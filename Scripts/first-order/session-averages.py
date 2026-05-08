@@ -7,7 +7,6 @@ import pandas as pd
 
 from databench.project import Project
 from databench.config import resolve_dataset
-from databench.session import SaveableFigure
 from databench.plotting import set_theme
 from databench.plotting.core import plot_mean_sem, _theme_color
 from databench.analysis.longitudinal import longitudinal_summary
@@ -16,8 +15,6 @@ set_theme()
 
 proj = Project(
     dataset=resolve_dataset('etoh-hfsa'),
-    analyst="Jacob Gronemeyer",
-    lab="Sipe Lab",
     run_name="session-averages",
 ).filter(exclude={"session": ["ses-11", "ses-00"]})
 
@@ -85,7 +82,7 @@ loco_panels = [
     ("distance_m", "Total Distance", "Distance (m)", _theme_color("secondary")),
 ]
 fig_loco = _plot_panels(loco_panels)
-SaveableFigure(fig_loco, proj._context).save("session_avg_locomotion.png")
+proj.io.figure(fig_loco, "session_avg_locomotion.png")
 plt.close(fig_loco)
 
 # Pupil figure (1×2 horizontal layout)
@@ -94,6 +91,6 @@ pupil_panels = [
     ("pct_pupil_mean_mm", "Pupil Diameter (% Change from Baseline)", "% Change", _theme_color("primary")),
 ]
 fig_pupil = _plot_panels(pupil_panels)
-SaveableFigure(fig_pupil, proj._context).save("session_avg_pupil.png")
+proj.io.figure(fig_pupil, "session_avg_pupil.png")
 plt.close(fig_pupil)
 print("Done.")

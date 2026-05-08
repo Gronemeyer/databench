@@ -9,7 +9,7 @@ from typing import Literal, Tuple
 
 import numpy as np
 
-from databench.analysis._signal.preproc import (
+from databench.signal.preproc import (
     MEDIAN_FILTER_SIZE,
     SAVGOL_WINDOW,
     SAVGOL_POLYORDER,
