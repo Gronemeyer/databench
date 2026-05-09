@@ -77,6 +77,28 @@ def _env_info() -> dict[str, str]:
 
 
 def _databench_version() -> str:
+    """Resolve the running databench version.
+
+    Resolution order:
+    1. ``databench._version.__version__`` written by setuptools-scm at
+       build/install time.
+    2. ``git describe --tags --always --dirty`` against the repo root,
+       so editable checkouts without a build still report a meaningful
+       version.
+    3. ``importlib.metadata.version("databench")``.
+    4. ``"unknown"``.
+    """
+    try:
+        from databench._version import __version__  # type: ignore[import-not-found]
+        return __version__
+    except Exception:
+        pass
+
+    repo_root = Path(__file__).resolve().parents[1]
+    described = _git(["describe", "--tags", "--always", "--dirty"], repo_root)
+    if described:
+        return described
+
     try:
         return _md.version("databench")
     except _md.PackageNotFoundError:

@@ -1,5 +1,9 @@
 """Minimal, reproducible analysis/plotting toolkit for multiindex datasets."""
 
+from databench._provenance import _databench_version
+
+__version__ = _databench_version()
+
 from databench.utils.logger import setup_logging as _setup_logging
 
 _setup_logging()
@@ -30,4 +34,5 @@ __all__ = [
     "locomotion_events",
     "quiescent_bouts",
     "parse_session_day",
+    "__version__",
 ]

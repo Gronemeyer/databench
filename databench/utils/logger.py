@@ -81,6 +81,12 @@ def setup_logging(log_dir: Optional[str] = None, level: str = "INFO") -> None:
 
     _configured = True
 
+    try:
+        from databench._provenance import _databench_version
+        get_logger("databench").info(f"databench {_databench_version()}")
+    except Exception:
+        pass
+
 
 def log_this_fr(func):
     """Decorator that logs entry, exit (and exceptions) of the function."""

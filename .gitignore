@@ -5,6 +5,7 @@ __pycache__/
 *.py[cod]
 /databench.egg-info
 /databench/__pycache__
+/databench/_version.py
 *.csv
 /.DS_Store
 *.log
