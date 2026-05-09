@@ -127,8 +127,18 @@ def _to_drop_mask(df: pd.DataFrame, spec: Any) -> pd.Series:
         return _mask_for_tuple(df, spec)
 
     if isinstance(spec, Iterable) and not isinstance(spec, (str, bytes)):
+        scalar_items = list(spec)
+        if scalar_items and all(
+            not isinstance(item, (dict, tuple))
+            and not (isinstance(item, Iterable) and not isinstance(item, (str, bytes)))
+            for item in scalar_items
+        ):
+            # Treat flat scalar lists as one positional tuple spec, e.g.
+            # ["GS29", "ses-00"] -> (Subject="GS29", Session="ses-00").
+            return _mask_for_tuple(df, tuple(scalar_items))
+
         mask = pd.Series(False, index=df.index)
-        for item in spec:
+        for item in scalar_items:
             mask |= _to_drop_mask(df, item)
         return mask
 
@@ -141,6 +151,7 @@ def drop_rows(df: pd.DataFrame, drop_spec: Any) -> pd.DataFrame:
     Supported specs:
     - ``{"session": "ses-00"}``
     - ``("GS29", "ses-00", "task-widefield")``
+    - ``["GS29", "ses-00"]`` (flat positional shorthand)
     - Collections of mixed specs, e.g. ``[{...}, (...)]``
     """
     if not drop_spec:

@@ -217,17 +217,30 @@ class Project:
     ) -> "Project":
         """Apply filters to the project DataFrame in-place and return self.
 
-        Prefer explicit include/exclude index-level filters::
+        ``include`` uses index-level mapping filters::
+
+            project.filter(include={"task": "task-spont"})
+
+            project.filter(include={"subject": ["GS28", "GS29"]})
+
+        ``exclude`` uses drop-style specs::
 
             project.filter(exclude={"session": ["ses-00", "ses-11"]})
 
-            project.filter(include={"task": "task-spont"})
+            project.filter(exclude=("STREHAB14", "ses-01"))
+
+            project.filter(exclude=["STREHAB14", "ses-01"])
+
+        Positional tuple/list specs follow MultiIndex order from left to
+        right (typically ``Subject``, ``Session``, ``Task``).
+
+        ``drop_rows`` accepts the same drop-style specs::
+
+            project.filter(drop_rows=[("STREHAB02", "ses-01", "task-spont")])
 
         Keyword arguments are also supported as include-style filters::
 
             project.filter(Task="task-spont")
-
-        Or use ``drop_rows`` for explicit multi-index tuple exclusion.
         """
         self._tabler.filter(
             drop_rows=drop_rows,
