@@ -13,7 +13,7 @@ Includes:
 
 Dual-trace measurement strategy for longitudinal comparisons:
   Event *boundaries* are defined on the detrended trace (removes slow
-  drift that would shift percentile thresholds).  Event *amplitudes*
+  drift that would shift thresholds).  Event *amplitudes*
   (peak_raw, peak_z, mean_raw, mean_z) are measured on the non-detrended
   cleaned trace, preserving absolute scale for within-animal longitudinal
   and between-animal hierarchical comparisons.  Detrended-space metrics
@@ -45,13 +45,13 @@ from scipy.signal import savgol_filter
 from databench.project import Project
 from databench.signal.epoching import make_events
 from databench.config import resolve_dataset
-from databench.plotting import set_theme
+from databench.plotting import set_theme, style_axes, get_theme
 
 set_theme()
 
 # ─── Dataset ──────────────────────────────────────────────────────────────
 
-DATASET = resolve_dataset("etoh-hfsa")
+DATASET = resolve_dataset("hfsa")
 
 # ─── Signal definitions ──────────────────────────────────────────────────
 
@@ -83,6 +83,10 @@ class SignalSpec:
     # ── Normalization ──
     normalize: str = "none"        # "none", "zscore", or "dff"
 
+    # ── Noise-floor thresholds ──
+    noise_high_k: float = 4.0     # MAD multiplier for event onset
+    noise_low_k: float = 2.5      # MAD multiplier for event offset
+
 
 SIGNALS: list[SignalSpec] = [
     # ── Mesofield mean ──
@@ -101,6 +105,8 @@ SIGNALS: list[SignalSpec] = [
         detrend_window_s=60.0,
         detrend_quantile=0.1,
         artifact_k=8.0,
+        noise_high_k=4.0,
+        noise_low_k=2.5,
     ),
     # ── Pupil diameter ──
     SignalSpec(
@@ -120,6 +126,8 @@ SIGNALS: list[SignalSpec] = [
         artifact_k=5.0,      # pupil blinks are sharp; be more aggressive
         artifact_pad=5,
         normalize="zscore",
+        noise_high_k=3.0,
+        noise_low_k=2.0,
     ),
     # ── Add more signals here ──
     # SignalSpec(
@@ -145,9 +153,9 @@ TIME_COLUMN = "time_elapsed_s"
 SG_WINDOW = 11
 SG_POLYORDER = 3
 
-# Hysteresis thresholds (percentiles of the smoothed trace)
-HIGH_PERCENTILE = 80.0
-LOW_PERCENTILE = 60.0
+# Hysteresis thresholds (noise-floor MAD multipliers)
+NOISE_MAD_HIGH_K = 4.0   # MAD multiplier for event onset
+NOISE_MAD_LOW_K = 2.5    # MAD multiplier for event offset
 
 # Event filtering
 MAX_GAP_S = 1      # fill gaps shorter than this (seconds)
@@ -322,10 +330,27 @@ def smooth_trace(trace: np.ndarray, window_length: int, polyorder: int) -> np.nd
 
 
 def compute_hysteresis_thresholds(
-    trace: np.ndarray, high_percentile: float, low_percentile: float
+    trace: np.ndarray, high_k: float, low_k: float
 ) -> tuple[float, float]:
-    """Percentile-based high/low thresholds for hysteresis gating."""
-    return float(np.percentile(trace, high_percentile)), float(np.percentile(trace, low_percentile))
+    """Noise-floor MAD thresholds for hysteresis gating.
+
+    Selects the lower half of the trace (values ≤ median) as a proxy
+    for quiet periods, computes the MAD of that subset, scales to σ̂
+    via the 1.4826 consistency constant, and returns thresholds at
+    median_lower + k × σ̂.  This anchors detection to the noise floor
+    rather than the signal distribution, so thresholds stay stable as
+    long as noise is stable — regardless of biological signal amplitude.
+    """
+    trace_median = np.median(trace)
+    lower_half = trace[trace <= trace_median]
+    if len(lower_half) < 2:
+        lower_half = trace
+    lower_median = float(np.median(lower_half))
+    mad = float(np.median(np.abs(lower_half - lower_median)))
+    noise_sigma = 1.4826 * mad if mad > 0 else float(np.std(lower_half))
+    high_th = lower_median + high_k * noise_sigma
+    low_th = lower_median + low_k * noise_sigma
+    return high_th, low_th
 
 
 def apply_hysteresis_mask(trace: np.ndarray, high_th: float, low_th: float) -> np.ndarray:
@@ -387,8 +412,8 @@ def detect_events(
     *,
     sg_window: int = SG_WINDOW,
     sg_poly: int = SG_POLYORDER,
-    high_pct: float = HIGH_PERCENTILE,
-    low_pct: float = LOW_PERCENTILE,
+    noise_high_k: float = NOISE_MAD_HIGH_K,
+    noise_low_k: float = NOISE_MAD_LOW_K,
     max_gap_s: float = MAX_GAP_S,
     min_dur_s: float = MIN_DURATION_S,
     # ── Gaussian pre-smoothing ──
@@ -439,7 +464,7 @@ def detect_events(
 
     # ── 4. Smooth → threshold → hysteresis → filter ──
     smoothed = smooth_trace(detrended, sg_window, sg_poly)
-    high_th, low_th = compute_hysteresis_thresholds(smoothed, high_pct, low_pct)
+    high_th, low_th = compute_hysteresis_thresholds(smoothed, noise_high_k, noise_low_k)
     raw_mask = apply_hysteresis_mask(smoothed, high_th, low_th)
     filled_mask = fill_short_gaps(raw_mask, t_s, max_gap_s)
     events, durations_s = extract_events(filled_mask, t_s, min_dur_s)
@@ -467,6 +492,8 @@ def detect_events(
         "smoothed": smoothed,
         "high_th": high_th,
         "low_th": low_th,
+        "noise_high_k": noise_high_k,
+        "noise_low_k": noise_low_k,
         "mask": filled_mask,
         "events": events,
         "durations_s": durations_s,
@@ -595,9 +622,7 @@ def preprocess(raw: np.ndarray, use_dff: bool, normalize: str = "none") -> np.nd
 
 
 def _style_axis(ax: plt.Axes) -> None:
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.tick_params(labelsize=9)
+    style_axes(ax)
 
 
 def plot_single_session(
@@ -625,15 +650,15 @@ def plot_single_session(
 
     if show_top:
         fig, (ax0, ax1, ax2) = plt.subplots(
-            3, 1, figsize=(16, 7.5), sharex=True,
+            3, 1, figsize=(12, 5.5), sharex=True,
             gridspec_kw={"height_ratios": [2.5, 4, 1], "hspace": 0.08},
-            facecolor="white", layout="constrained",
+            layout="constrained",
         )
     else:
         fig, (ax1, ax2) = plt.subplots(
-            2, 1, figsize=(16, 5.5), sharex=True,
+            2, 1, figsize=(12, 4.0), sharex=True,
             gridspec_kw={"height_ratios": [4, 1], "hspace": 0.08},
-            facecolor="white", layout="constrained",
+            layout="constrained",
         )
         ax0 = None
 
@@ -641,25 +666,25 @@ def plot_single_session(
     if ax0 is not None:
         ax0.plot(t_s, raw, color="#AAAAAA", linewidth=0.4,
                  label=f"raw {spec.label}", rasterized=True)
-        ax0.plot(t_s, det["cleaned"], color="#1A1A2E", linewidth=0.6,
+        ax0.plot(t_s, det["cleaned"], color=get_theme().fg, linewidth=0.6,
                  label="artifact-cleaned")
 
         if has_detrend:
-            ax0.plot(t_s, det["baseline"], color="#E76F51", linewidth=1.4,
+            ax0.plot(t_s, det["baseline"], color=get_theme().colors[1], linewidth=1.4,
                      alpha=0.85, label="rolling-median baseline")
 
         if has_artifacts:
             art = det["artifact_mask"]
             ylo, yhi = raw[np.isfinite(raw)].min(), raw[np.isfinite(raw)].max()
             ax0.fill_between(t_s, ylo, yhi, where=art,
-                             color="#FF6B6B", alpha=0.25, lw=0, label="artifacts")
+                             color=get_theme().colors[3], alpha=0.25, lw=0, label="artifacts")
             n_art_events = (np.diff(art.astype(int), prepend=0) == 1).sum()
             ax0.set_title(
                 f"Original signal — {n_art_events} artifact region(s) rejected",
                 fontsize=9, fontstyle="italic", loc="left", pad=4,
             )
 
-        ax0.set_ylabel(spec.ylabel, fontsize=10)
+        ax0.set_ylabel(spec.ylabel)
         ax0.legend(loc="upper right", fontsize=7, framealpha=0.9, edgecolor="0.8")
         _style_axis(ax0)
 
@@ -670,35 +695,70 @@ def plot_single_session(
 
     working = det["working_trace"]
     ylabel_mid = f"{spec.ylabel} (detrended)" if has_detrend else spec.ylabel
-    trace_label = f"{'detrended' if has_detrend else 'raw'} {spec.label}"
 
-    ax1.plot(t_s, working, color="#AAAAAA", linewidth=0.35,
-             label=trace_label, rasterized=True)
-    ax1.plot(t_s, det["smoothed"], color="#1A1A2E", linewidth=1.0, label="smoothed")
-    ax1.axhline(det["high_th"], color="#E63946", ls="--", lw=1.0, alpha=0.85,
-                label=f"high threshold ({HIGH_PERCENTILE:.0f}th %ile)")
-    ax1.axhline(det["low_th"], color="#F4A261", ls="--", lw=1.0, alpha=0.85,
-                label=f"low threshold ({LOW_PERCENTILE:.0f}th %ile)")
+    # Ghost: pre-smoothed trace (detrended but no Gaussian/SG)
+    ghost = det["cleaned"] - det["baseline"]
+    ax1.plot(t_s, ghost, color="#AAAAAA", linewidth=0.35,
+             label="raw signal", rasterized=True)
+    ax1.plot(t_s, det["smoothed"], color=get_theme().fg, linewidth=1.0, label="smoothed")
+    ax1.axhline(det["high_th"], color=get_theme().colors[3], ls="--", lw=1.0, alpha=0.85,
+                label=f"high threshold ({det['noise_high_k']}× MAD)")
+    ax1.axhline(det["low_th"], color=get_theme().colors[1], ls="--", lw=1.0, alpha=0.85,
+                label=f"low threshold ({det['noise_low_k']}× MAD)")
+
+    # Threshold value labels
+    th_gap = abs(det["high_th"] - det["low_th"])
+    y_range = np.ptp(working[np.isfinite(working)])
+    low_va = "top" if (th_gap / max(y_range, 1e-9)) < 0.06 else "center"
+    ax1.text(t_s[-1], det["high_th"], f' {det["high_th"]:.3f}',
+             fontsize=6, va="center", ha="left",
+             color=get_theme().colors[3], clip_on=False)
+    ax1.text(t_s[-1], det["low_th"], f' {det["low_th"]:.3f}',
+             fontsize=6, va=low_va, ha="left",
+             color=get_theme().colors[1], clip_on=False)
+
+    # Baseline zero reference
+    if has_detrend:
+        ax1.axhline(0, color=get_theme().colors[1], linewidth=0.5,
+                    alpha=0.35, ls=":")
 
     # ── Peak markers ──
     if det["peak_times_s"]:
         peak_values = np.interp(det["peak_times_s"], t_s, det["smoothed"])
         ax1.scatter(
             det["peak_times_s"], peak_values,
-            marker="v", color="#E63946", s=28, zorder=5,
+            marker="v", color=get_theme().colors[3], s=28, zorder=5,
             label="peaks", edgecolors="white", linewidths=0.5,
         )
 
-    ax1.set_ylabel(ylabel_mid, fontsize=10)
-    ax1.set_title(title, fontsize=11, fontweight="bold", pad=10)
+    # ── Duration brackets along bottom ──
+    ylims = ax1.get_ylim()
+    bracket_y = ylims[0] + (ylims[1] - ylims[0]) * 0.015
+    for s, e in det["events"]:
+        e_idx = min(e, len(t_s) - 1)
+        ax1.plot([t_s[s], t_s[e_idx]], [bracket_y, bracket_y],
+                 color=spec.color_mask, linewidth=1.5,
+                 solid_capstyle="butt", alpha=0.7, zorder=4)
+
+    # ── Events summary annotation ──
+    n_events = len(det["events"])
+    durs = det["durations_s"]
+    mean_dur = f"{np.mean(durs):.1f}" if durs else "\u2014"
+    ax1.text(1.0, 1.02,
+             f"{n_events} events  |  x\u0304 dur {mean_dur} s",
+             transform=ax1.transAxes, fontsize=7, va="bottom",
+             ha="right", color=spec.color_mask, fontweight="bold")
+
+    ax1.set_ylabel(ylabel_mid)
+    ax1.set_title(title)
     ax1.legend(loc="upper right", fontsize=8, framealpha=0.9, edgecolor="0.8")
     _style_axis(ax1)
 
     # ── Bottom panel: event mask ──
     ax2.fill_between(t_s, det["mask"].astype(float), step="mid",
                      color=spec.color_mask, alpha=0.6, lw=0)
-    ax2.set_ylabel("Events", fontsize=10)
-    ax2.set_xlabel("Time (s)", fontsize=10)
+    ax2.set_ylabel("Events")
+    ax2.set_xlabel("Time (s)")
     ax2.set_ylim(-0.05, 1.15)
     ax2.set_yticks([0, 1])
     ax2.set_yticklabels(["off", "on"], fontsize=8)
@@ -706,34 +766,214 @@ def plot_single_session(
 
     all_axes = [ax for ax in [ax0, ax1, ax2] if ax is not None]
     fig.align_ylabels(all_axes)
+
+    # ── Parameter footer ──
+    param_parts = [
+        f"artifact k={spec.artifact_k} pad={spec.artifact_pad}",
+        f"gauss \u03c3={spec.gauss_sigma}",
+    ]
+    if has_detrend:
+        param_parts.append(
+            f"detrend {spec.detrend_window_s:.0f}s q={spec.detrend_quantile}"
+        )
+    param_parts.extend([
+        f"SG({SG_WINDOW},{SG_POLYORDER})",
+        f"high={spec.noise_high_k}\u00d7 low={spec.noise_low_k}\u00d7 MAD",
+        f"gap<{MAX_GAP_S}s  min dur\u2265{MIN_DURATION_S}s",
+    ])
+    fig.text(
+        0.5, -0.02, "   \u2502   ".join(param_parts),
+        ha="center", va="top", fontsize=6, family="monospace",
+        color="0.45",
+    )
+
+    return fig
+
+
+def plot_session_comparison(
+    session_data: list[dict],
+    spec: SignalSpec,
+    session_labels: list[str],
+) -> plt.Figure:
+    """
+    Compact side-by-side of two sessions for grant/publication figures.
+
+    Single overlaid axis per column showing the raw signal as a ghost,
+    the smoothed detection trace, MAD thresholds, event shading, peaks,
+    and duration brackets.  A legend and parameter footer label the
+    visual elements.
+    """
+    n_cols = len(session_data)
+    has_detrend = spec.detrend
+
+    fig, axes = plt.subplots(
+        1, n_cols, figsize=(7.0, 2.2), sharex="col", sharey="row",
+        gridspec_kw={"wspace": 0.08},
+        layout="constrained",
+    )
+    if n_cols == 1:
+        axes = [axes]
+
+    legend_handles = []
+
+    for col, sd in enumerate(session_data):
+        t_s = sd["t_s"]
+        det = sd["det"]
+        ax = axes[col]
+
+        working = det["working_trace"]
+
+        # ── Ghost: pre-smoothed trace (detrended but no Gaussian/SG) ──
+        # det["cleaned"] is artifact-interpolated; subtract baseline to
+        # put it on the same y-scale as the smoothed detection trace.
+        ghost = det["cleaned"] - det["baseline"]
+        working = det["working_trace"]
+        h_raw, = ax.plot(t_s, ghost, color="#AAAAAA", linewidth=0.3,
+                         alpha=0.5, rasterized=True)
+
+        # ── Artifact regions ──
+        if det["artifact_mask"].any():
+            art = det["artifact_mask"]
+            finite_w = working[np.isfinite(working)]
+            ylo, yhi = finite_w.min(), finite_w.max()
+            margin = (yhi - ylo) * 0.03
+            ax.fill_between(
+                t_s, ylo - margin, yhi + margin, where=art,
+                color="#E76F51", alpha=0.12, lw=0,
+            )
+
+        # ── Baseline zero ──
+        if has_detrend:
+            ax.axhline(0, color=get_theme().colors[1], linewidth=0.5,
+                       alpha=0.35, ls=":")
+
+        # ── Event spans ──
+        for s, e in det["events"]:
+            e_idx = min(e, len(t_s) - 1)
+            ax.axvspan(t_s[s], t_s[e_idx],
+                       color=spec.color_event, alpha=0.35, lw=0)
+
+        # ── Smoothed detection trace ──
+        h_smooth, = ax.plot(t_s, det["smoothed"], color=get_theme().fg,
+                            linewidth=0.7, zorder=3)
+
+        # ── MAD thresholds ──
+        h_high = ax.axhline(det["high_th"], color=get_theme().colors[3],
+                            ls="--", lw=0.6, alpha=0.7, zorder=2)
+        h_low = ax.axhline(det["low_th"], color=get_theme().colors[1],
+                           ls="--", lw=0.6, alpha=0.7, zorder=2)
+
+        # Threshold labels — offset low label if thresholds are close
+        th_gap = abs(det["high_th"] - det["low_th"])
+        y_range = np.ptp(working[np.isfinite(working)])
+        low_va = "top" if (th_gap / max(y_range, 1e-9)) < 0.06 else "center"
+        ax.text(t_s[-1], det["high_th"], f' {det["high_th"]:.3f}',
+                fontsize=4.5, va="center", ha="left",
+                color=get_theme().colors[3], clip_on=False)
+        ax.text(t_s[-1], det["low_th"], f' {det["low_th"]:.3f}',
+                fontsize=4.5, va=low_va, ha="left",
+                color=get_theme().colors[1], clip_on=False)
+
+        # ── Peak markers ──
+        if det["peak_times_s"]:
+            peak_values = np.interp(det["peak_times_s"], t_s,
+                                    det["smoothed"])
+            ax.scatter(
+                det["peak_times_s"], peak_values, marker="v",
+                color=get_theme().colors[3], s=12, zorder=5,
+                edgecolors="white", linewidths=0.25,
+            )
+
+        # ── Duration brackets along bottom ──
+        ylims = ax.get_ylim()
+        bracket_y = ylims[0] + (ylims[1] - ylims[0]) * 0.015
+        for s, e in det["events"]:
+            e_idx = min(e, len(t_s) - 1)
+            ax.plot([t_s[s], t_s[e_idx]], [bracket_y, bracket_y],
+                    color=spec.color_mask, linewidth=1.2,
+                    solid_capstyle="butt", alpha=0.7, zorder=4)
+
+        # ── Title (left) + events label (right, same height) ──
+        n_events = len(det["events"])
+        durs = det["durations_s"]
+        mean_dur = f"{np.mean(durs):.1f}" if durs else "—"
+
+        ax.text(0.0, 1.02, session_labels[col],
+                transform=ax.transAxes, fontsize=8, fontweight="bold",
+                va="bottom", ha="left")
+        ax.text(1.0, 1.02,
+                f"{n_events} events  |  x\u0304 dur {mean_dur} s",
+                transform=ax.transAxes, fontsize=6, va="bottom",
+                ha="right", color=spec.color_mask, fontweight="bold")
+        ax.set_title("")  # clear default title
+
+        if col == 0:
+            ylabel = (f"{spec.ylabel} (detrended)" if has_detrend
+                      else spec.ylabel)
+            ax.set_ylabel(ylabel, fontsize=7)
+            legend_handles = [h_raw, h_smooth, h_high, h_low]
+
+        ax.set_xlabel("Time (s)", fontsize=7)
+        _style_axis(ax)
+
+    # ── Legend (shared, anchored top-center) ──
+    if legend_handles:
+        fig.legend(
+            legend_handles,
+            ["raw signal", "smoothed", "high threshold", "low threshold"],
+            loc="upper center", ncol=4, fontsize=5.5,
+            frameon=True, framealpha=0.9, edgecolor="0.8",
+            handlelength=1.8, columnspacing=1.2,
+            bbox_to_anchor=(0.5, 1.06),
+        )
+
+    # ── Parameter footer ──
+    param_parts = [
+        f"artifact k={spec.artifact_k} pad={spec.artifact_pad}",
+        f"gauss \u03c3={spec.gauss_sigma}",
+    ]
+    if has_detrend:
+        param_parts.append(
+            f"detrend {spec.detrend_window_s:.0f}s q={spec.detrend_quantile}"
+        )
+    param_parts.extend([
+        f"SG({SG_WINDOW},{SG_POLYORDER})",
+        f"high={spec.noise_high_k}\u00d7 low={spec.noise_low_k}\u00d7 MAD",
+        f"gap<{MAX_GAP_S}s  min dur\u2265{MIN_DURATION_S}s",
+    ])
+    fig.text(
+        0.5, -0.01, "   \u2502   ".join(param_parts),
+        ha="center", va="top", fontsize=5.5, family="monospace",
+        color="0.45",
+    )
+
     return fig
 
 
 def plot_group_summary(summary_df: pd.DataFrame, spec: SignalSpec) -> plt.Figure:
     """Bar chart of event counts and mean durations per subject."""
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5), facecolor="white")
+    fig, axes = plt.subplots(1, 2, figsize=(10, 3.5))
 
     palette = list(spec.palette)
     counts = summary_df.groupby("Subject")["n_events"].sum().sort_index()
     colors = [palette[i % len(palette)] for i in range(len(counts))]
 
     bars1 = axes[0].bar(counts.index, counts.values, color=colors, edgecolor="white", lw=0.5)
-    axes[0].set_ylabel("Total events", fontsize=10)
-    axes[0].set_title("Event count per subject", fontsize=11, fontweight="bold")
+    axes[0].set_ylabel("Total events")
+    axes[0].set_title("Event count per subject")
     axes[0].tick_params(axis="x", rotation=45)
     axes[0].bar_label(bars1, fontsize=7, padding=2)
     _style_axis(axes[0])
 
     mean_dur = summary_df.groupby("Subject")["mean_duration_s"].mean().sort_index()
     bars2 = axes[1].bar(mean_dur.index, mean_dur.values, color=colors, edgecolor="white", lw=0.5)
-    axes[1].set_ylabel("Mean duration (s)", fontsize=10)
-    axes[1].set_title("Mean event duration per subject", fontsize=11, fontweight="bold")
+    axes[1].set_ylabel("Mean duration (s)")
+    axes[1].set_title("Mean event duration per subject")
     axes[1].tick_params(axis="x", rotation=45)
     axes[1].bar_label(bars2, fmt="%.1f", fontsize=7, padding=2)
     _style_axis(axes[1])
 
-    fig.suptitle(f"{spec.label} event detection — group summary",
-                 fontsize=13, fontweight="bold", y=1.01)
+    fig.suptitle(f"{spec.label} event detection — group summary", fontweight="bold")
     fig.tight_layout()
     return fig
 
@@ -759,7 +999,7 @@ def plot_cross_animal_comparison(
     colors = [palette[i % len(palette)] for i in range(n_sub)]
     sub_to_color = dict(zip(subjects, colors))
 
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5.5), facecolor="white")
+    fig, axes = plt.subplots(1, 3, figsize=(13, 4.0))
 
     panels = [
         ("peak_z", "Peak amplitude (z)", "Peak z-score per subject"),
@@ -801,13 +1041,13 @@ def plot_cross_animal_comparison(
 
         ax.set_xticks(range(n_sub))
         ax.set_xticklabels(subjects, rotation=45, ha="right", fontsize=8)
-        ax.set_ylabel(ylabel, fontsize=10)
-        ax.set_title(title, fontsize=11, fontweight="bold")
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
         _style_axis(ax)
 
     fig.suptitle(
         f"{spec.label} — cross-animal event comparison (z-scored amplitudes)",
-        fontsize=13, fontweight="bold", y=1.02,
+        fontweight="bold",
     )
     fig.tight_layout()
     return fig
@@ -865,6 +1105,8 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
         do_detrend=spec.detrend,
         detrend_window_s=spec.detrend_window_s,
         detrend_quantile=spec.detrend_quantile,
+        noise_high_k=spec.noise_high_k,
+        noise_low_k=spec.noise_low_k,
     )
     n = len(det["events"])
     durs = det["durations_s"]
@@ -894,6 +1136,7 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
     summary_rows: list[dict] = []
     all_events: list[pd.DataFrame] = []
     all_metric_rows: list[dict] = []
+    comparison_data: dict[str, dict | None] = {"ses-01": None, "ses-10": None}
 
     report_pdf = proj.reports_dir / f"{tag}_event_detection.pdf"
     report_pdf.parent.mkdir(parents=True, exist_ok=True)
@@ -927,6 +1170,8 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
                 do_detrend=spec.detrend,
                 detrend_window_s=spec.detrend_window_s,
                 detrend_quantile=spec.detrend_quantile,
+                noise_high_k=spec.noise_high_k,
+                noise_low_k=spec.noise_low_k,
             )
             n_ev = len(det["events"])
             durs = det["durations_s"]
@@ -934,6 +1179,12 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
                              prepend=0) == 1).sum()
 
             print(f"  {sess.label}  → {n_ev} events, {n_art} artifacts")
+
+            # ── Stash data for ses-01 / ses-10 comparison figure ──
+            if sess.session in comparison_data and comparison_data[sess.session] is None:
+                comparison_data[sess.session] = {
+                    "t_s": t_s, "det": det, "trace": trace, "label": sess.label,
+                }
 
             summary_rows.append({
                 "Subject": sess.subject,
@@ -1025,6 +1276,18 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
         fig_comp.savefig(plots_dir / f"{tag}_cross_animal_comparison.png",
                          dpi=200, bbox_inches="tight")
         plt.close(fig_comp)
+
+    # ── Publication comparison: ses-01 vs ses-10 side-by-side ──
+    if all(v is not None for v in comparison_data.values()):
+        fig_pub = plot_session_comparison(
+            [comparison_data["ses-01"], comparison_data["ses-10"]],
+            spec,
+            session_labels=["ses-01", "ses-10"],
+        )
+        fig_pub.savefig(plots_dir / f"{tag}_session_comparison.png",
+                        dpi=300, bbox_inches="tight")
+        plt.close(fig_pub)
+        print(f"  Publication comparison figure: {tag}_session_comparison.png")
 
     return n_total, n_subjects
 
@@ -1142,9 +1405,13 @@ notes_lines = [
     "## Event Detection",
     "",
     "Events were detected via hysteresis thresholding on the smoothed",
-    "detrended trace:",
-    f"  - High threshold: {HIGH_PERCENTILE}th percentile (event onset)",
-    f"  - Low threshold:  {LOW_PERCENTILE}th percentile (event offset)",
+    "detrended trace.  Thresholds were set relative to the noise floor",
+    "rather than the full signal distribution.  The lower half of the",
+    "smoothed trace (values ≤ median) was taken as a proxy for quiet",
+    "periods; the MAD of this subset was scaled by 1.4826 to estimate σ̂,",
+    "and thresholds were placed at median_quiet + k × σ̂:",
+    f"  - High threshold: {NOISE_MAD_HIGH_K}× MAD above noise floor (event onset)",
+    f"  - Low threshold:  {NOISE_MAD_LOW_K}× MAD above noise floor (event offset)",
     f"  - Short gaps (<{MAX_GAP_S} s) between events were filled",
     f"  - Events shorter than {MIN_DURATION_S} s were discarded",
     "",
@@ -1156,7 +1423,7 @@ notes_lines = [
     "This is the key methodological choice for longitudinal analysis.",
     "Event boundaries (onset, offset) were defined on the detrended +",
     "smoothed trace, where slow baseline drift has been removed so that",
-    "percentile-based thresholds are stable within a session.",
+    "noise-floor-based thresholds are stable within a session.",
     "",
     "However, amplitude metrics (peak_raw, mean_raw, peak_z, mean_z) were",
     "measured on the *non-detrended* cleaned trace (artifact-interpolated +",
@@ -1206,6 +1473,7 @@ for spec in SIGNALS:
         f"  - Gaussian σ: {spec.gauss_sigma} samples",
         f"  - Artifact rejection: k={spec.artifact_k}, pad={spec.artifact_pad}",
         f"  - Baseline: {detrend_note}",
+        f"  - Thresholds: noise_high_k={spec.noise_high_k}, noise_low_k={spec.noise_low_k}",
     ])
     if r:
         notes_lines.append(

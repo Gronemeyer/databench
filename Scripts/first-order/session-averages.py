@@ -18,6 +18,9 @@ proj = Project(
     run_name="session-averages",
 ).filter(exclude={"session": ["ses-11", "ses-00"]})
 
+GROUP_BY_SEX = True     # split plots by sex from session_config
+SEX_COLORS: dict[str, str] = {"M": _theme_color("accent") or "#1f77b4", "F": _theme_color("primary") or "#d62728"}
+
 group = proj.sessions()
 print(f"Loaded {len(group)} sessions")
 
@@ -43,10 +46,16 @@ for sess in group:
     pupil = sess.signal("pupil", "pupil_diameter_mm")
     pupil_mean = float(np.nanmean(pupil)) if pupil is not None and np.isfinite(pupil).any() else np.nan
 
+    try:
+        sex = str(sess.signal("session_config", "sex")[0])
+    except (SignalNotFoundError, IndexError):
+        sex = "unknown"
+
     rows.append({
         "Subject": sess.subject,
         "Session": sess.session,
         "Task": sess.task,
+        "sex": sex,
         "speed_mean_cms": float(np.nanmean(speed_cms)),
         "distance_m": distance_m,
         "pupil_mean_mm": pupil_mean,
@@ -70,9 +79,18 @@ def _plot_panels(panels, figsize=(8, 3)):
     if len(panels) == 1:
         axes = [axes]
     for ax, (y, title, ylabel, color) in zip(axes, panels):
-        _, stats = longitudinal_summary(session_table, y=y, x="session_n")
-        plot_mean_sem(stats, x="session_n", y_label=ylabel, title=title, color=color, ax=ax)
+        if GROUP_BY_SEX:
+            for sex, sex_df in session_table.groupby("sex"):
+                _, stats = longitudinal_summary(sex_df, y=y, x="session_n")
+                if stats is not None and not stats.empty:
+                    sex_color = SEX_COLORS.get(str(sex)) or color
+                    plot_mean_sem(stats, x="session_n", y_label=f"{sex}",
+                                  title=title, color=sex_color, ax=ax)
+        else:
+            _, stats = longitudinal_summary(session_table, y=y, x="session_n")
+            plot_mean_sem(stats, x="session_n", y_label=ylabel, title=title, color=color, ax=ax)
         ax.set_xlabel("Session")
+        ax.set_ylabel(ylabel)
     fig.tight_layout()
     return fig
 

@@ -8,6 +8,7 @@ For each signal (mesofield and pupil), plots six metrics across sessions:
   - mean_peak_raw      : mean peak amplitude (non-detrended absolute units)
   - mean_peak_z        : mean peak amplitude (z-scored on non-detrended trace)
   - mean_mean_z        : mean event amplitude (z-scored on non-detrended trace)
+    - high_th            : high hysteresis threshold used for event onset
   - session_baseline    : session baseline mean (rolling-quantile, for QC)
 
 Amplitude metrics (peak_raw, peak_z, mean_z) are measured on the non-
@@ -34,23 +35,25 @@ from matplotlib.axes import Axes
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.figure import Figure
 from databench.config import resolve_dataset
-from databench.plotting import set_theme
+from databench.plotting import set_theme, style_axes, get_theme
 
 set_theme()
 
 # ─── Locate latest event-detection output ────────────────────────────────────
 
 DATASET = resolve_dataset("hfsa")
-OUTPUT_ROOT = Path(r'C:\Users\cakei\OneDrive\Desktop\databench\outputs\etoh-hfsa\260408\event-detection_hfsa')
+SOURCE_SCRIPT = "event-detection"
+OUTPUT_ROOT = Path("outputs")
 
-stats_dirs = [OUTPUT_ROOT / "stats"]
-if not stats_dirs:
-    stats_dirs = [path for path in OUTPUT_ROOT.glob("*/stats") if path.is_dir()]
-if not stats_dirs:
-    raise FileNotFoundError(f"No stats directories found under {OUTPUT_ROOT}")
+from databench.config import _resolve_dataset_alias_for_output
+_alias = _resolve_dataset_alias_for_output(DATASET)
+_script_dir = OUTPUT_ROOT / _alias / SOURCE_SCRIPT
+_date_dirs = sorted(_script_dir.glob("[0-9][0-9][0-9][0-9][0-9][0-9]"))
+if not _date_dirs:
+    raise FileNotFoundError(f"No run folders found under {_script_dir}")
 
-STATS_DIR = max(stats_dirs, key=lambda path: path.stat().st_mtime)
-PLOT_DIR = STATS_DIR.parent / "plots"
+STATS_DIR = _date_dirs[-1] / "stats"
+PLOT_DIR = _date_dirs[-1] / "plots"
 PLOT_DIR.mkdir(exist_ok=True)
 
 print(f"Dataset: {DATASET.name}")
@@ -59,12 +62,12 @@ print(f"Reading from: {STATS_DIR}")
 # ─── Signal definitions ───────────────────────────────────────────────────────
 
 SIGNALS = [
-    # {
-    #     "name": "mesofield",
-    #     "summary_csv": "mesofield_event_summary.csv",
-    #     "metrics_csv": "mesofield_event_metrics.csv",
-    #     "title": "Mesofield",
-    # },
+    {
+        "name": "mesofield",
+        "summary_csv": "mesofield_event_summary.csv",
+        "metrics_csv": "mesofield_event_metrics.csv",
+        "title": "Mesofield",
+    },
     {
         "name": "pupil",
         "summary_csv": "pupil_event_summary.csv",
@@ -76,7 +79,7 @@ SIGNALS = [
 METRICS = [
     "n_events", "mean_duration_s",
     "mean_peak_raw", "mean_peak_z", "mean_mean_z",
-    "session_baseline",
+    "high_th", "session_baseline",
 ]
 
 METRIC_LABELS = {
@@ -85,6 +88,7 @@ METRIC_LABELS = {
     "mean_peak_raw": "Mean peak amplitude (raw)",
     "mean_peak_z": "Mean peak amplitude (z)",
     "mean_mean_z": "Mean event amplitude (z)",
+    "high_th": "High threshold",
     "session_baseline": "Session baseline mean",
 }
 
@@ -106,7 +110,7 @@ def build_session_table(summary_df: pd.DataFrame, metrics_df: pd.DataFrame) -> p
     )
 
     merged = summary_df[
-        ["Subject", "Session", "Task", "n_events", "mean_duration_s"]
+        ["Subject", "Session", "Task", "n_events", "mean_duration_s", "high_th"]
     ].merge(session_amplitudes, on=["Subject", "Session", "Task"], how="left")
 
     merged["session_num"] = pd.to_numeric(
@@ -119,13 +123,12 @@ def build_session_table(summary_df: pd.DataFrame, metrics_df: pd.DataFrame) -> p
 
 
 def make_subject_colors(subjects: list[str]) -> dict[str, tuple]:
-    colormap = plt.get_cmap("tab10")
-    return {subject: colormap(i % 10) for i, subject in enumerate(sorted(subjects))}
+    theme_colors = get_theme().colors
+    return {subject: theme_colors[i % len(theme_colors)] for i, subject in enumerate(sorted(subjects))}
 
 
 def style_axis(ax: Axes) -> None:
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
+    style_axes(ax)
 
 
 # ─── Mixed-effects models ────────────────────────────────────────────────────
@@ -212,7 +215,7 @@ def annotate_lmm(ax: Axes, lmm: dict | None) -> None:
         0.02, 0.96, txt,
         transform=ax.transAxes, fontsize=8,
         verticalalignment="top",
-        bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
+        bbox=dict(boxstyle="round,pad=0.3", facecolor=get_theme().lbl_bg,
                   edgecolor="0.7", alpha=0.85),
     )
 
@@ -242,13 +245,13 @@ def plot_lmm_summary(
     y_pos = np.arange(len(metrics))
 
     fig, (ax_forest, ax_table) = plt.subplots(
-        1, 2, figsize=(12, max(0.9 * len(metrics) + 2.4, 4.5)),
+        1, 2, figsize=(10, max(0.75 * len(metrics) + 2.0, 4.0)),
         gridspec_kw={"width_ratios": [3, 2]},
-        facecolor="white",
     )
 
     # ── Forest plot ──
-    colours = ["#2C73D2" if p < 0.05 else "#888888" for p in pvals]
+    sig_color = get_theme().colors[0]
+    colours = [sig_color if p < 0.05 else "#888888" for p in pvals]
     for i in range(len(metrics)):
         ax_forest.plot(
             [ci_lo[i], ci_hi[i]], [y_pos[i], y_pos[i]],
@@ -267,11 +270,11 @@ def plot_lmm_summary(
 
     ax_forest.axvline(0, color="0.4", linewidth=0.8, linestyle="--", zorder=0)
     ax_forest.set_yticks(y_pos)
-    ax_forest.set_yticklabels([METRIC_LABELS.get(m, m) for m in metrics], fontsize=10)
-    ax_forest.set_xlabel("Fixed-effect slope (β per session)", fontsize=10)
+    ax_forest.set_yticklabels([METRIC_LABELS.get(m, m) for m in metrics])
+    ax_forest.set_xlabel("Fixed-effect slope (β per session)")
     ax_forest.invert_yaxis()
     style_axis(ax_forest)
-    ax_forest.set_title("LMM fixed effects", fontsize=11, fontweight="bold")
+    ax_forest.set_title("LMM fixed effects")
 
     # ── Summary table ──
     ax_table.axis("off")
@@ -305,19 +308,19 @@ def plot_lmm_summary(
     for i in range(len(metrics)):
         if pvals[i] < 0.05:
             for j in range(len(col_labels)):
-                tbl[i + 1, j].set_facecolor("#D6EDFF")
+                tbl[i + 1, j].set_facecolor(get_theme().shade)
 
     # Style header
     for j in range(len(col_labels)):
-        tbl[0, j].set_facecolor("#E8E8E8")
+        tbl[0, j].set_facecolor(get_theme().shade)
         tbl[0, j].set_text_props(fontweight="bold")
 
-    ax_table.set_title("Model coefficients", fontsize=11, fontweight="bold", pad=12)
+    ax_table.set_title("Model coefficients", pad=12)
 
     fig.suptitle(
         f"{signal_title} — hierarchical LMM summary\n"
         f"metric ~ session  |  random intercept + slope per animal",
-        fontsize=12, fontweight="bold",
+        fontweight="bold",
     )
     fig.tight_layout()
     return fig
@@ -336,8 +339,8 @@ def plot_event_basics(
     n_metrics = len(METRICS)
     ncols = 3
     nrows = (n_metrics + ncols - 1) // ncols
-    fig, axes = plt.subplots(nrows, ncols, figsize=(18, 5.5 * nrows),
-                             facecolor="white", squeeze=False)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(12, 3.2 * nrows),
+                             squeeze=False)
     flat_axes = axes.flatten()
     session_ticks = sorted(dataframe["session_num"].unique())
 
@@ -365,24 +368,24 @@ def plot_event_basics(
         y_mean = group_mean.to_numpy()
         y_sem = group_sem.to_numpy()
 
-        ax.fill_between(x, y_mean - y_sem, y_mean + y_sem, color="#1A1A2E", alpha=0.12)
+        ax.fill_between(x, y_mean - y_sem, y_mean + y_sem, color=get_theme().fg, alpha=0.12)
         ax.plot(
             x,
             y_mean,
-            color="#1A1A2E",
+            color=get_theme().fg,
             linewidth=2.2,
             marker="s",
             markersize=5.5,
-            markerfacecolor="white",
-            markeredgecolor="#1A1A2E",
+            markerfacecolor=get_theme().bg,
+            markeredgecolor=get_theme().fg,
             markeredgewidth=1.2,
             label="Group mean ± SEM",
             zorder=5,
         )
 
-        ax.set_title(METRIC_LABELS[metric], fontsize=11, fontweight="bold")
-        ax.set_xlabel("Session / day", fontsize=10)
-        ax.set_ylabel(METRIC_LABELS[metric], fontsize=10)
+        ax.set_title(METRIC_LABELS[metric])
+        ax.set_xlabel("Session / day")
+        ax.set_ylabel(METRIC_LABELS[metric])
         ax.set_xticks(session_ticks)
         style_axis(ax)
 
@@ -402,7 +405,6 @@ def plot_event_basics(
 
     fig.suptitle(
         f"{signal_title} — event trajectories across sessions",
-        fontsize=13,
         fontweight="bold",
     )
     # Hide unused axes if grid has extra slots
