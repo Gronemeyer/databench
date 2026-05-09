@@ -33,6 +33,11 @@ _KIND_TO_ATTR = {
 }
 
 
+def clickLink(url: str, text: str) -> str:
+    """Return an OSC-8 hyperlink string for terminal output."""
+    return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
+
+
 class ProjectIO:
     """Save figures, tables, and reports under a Project's run directory."""
 
@@ -47,6 +52,12 @@ class ProjectIO:
     def run_dir(self) -> Path:
         """Top-level directory for this run (delegate to context)."""
         return self.context.run_dir
+
+    @staticmethod
+    def _announce_created_path(path: Path) -> None:
+        """Print created file paths so runs show concrete output locations."""
+        resolved = path.resolve()
+        print(f"[databench] wrote {clickLink(resolved.as_uri(), resolved.name)}")
 
     def path(self, name: str | None = None, *, kind: str = "stats") -> Path:
         """Return ``{kind}_dir / name`` (or just ``{kind}_dir`` if name is None).
@@ -119,6 +130,7 @@ class ProjectIO:
         path = out_dir / name
         path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(path, dpi=dpi, bbox_inches=bbox_inches)
+        self._announce_created_path(path)
 
         if formats:
             for fmt in formats:
@@ -126,12 +138,14 @@ class ProjectIO:
                 alt = path.with_suffix(f".{fmt_clean}")
                 if alt != path:
                     fig.savefig(alt, dpi=dpi, bbox_inches=bbox_inches)
+                    self._announce_created_path(alt)
 
         if sidecar is not None:
             recipe_path = path.with_suffix(path.suffix + ".recipe.json")
             recipe_path.write_text(
                 json.dumps(sidecar, indent=2, default=str), encoding="utf-8"
             )
+            self._announce_created_path(recipe_path)
         if close:
             plt.close(fig)
         return path
@@ -157,6 +171,7 @@ class ProjectIO:
             if path.suffix != ".csv":
                 path = path.with_suffix(".csv")
             df.to_csv(path, index=index)
+        self._announce_created_path(path)
         return path
 
     def tables(
@@ -204,12 +219,14 @@ class ProjectIO:
         path = out_dir / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        self._announce_created_path(path)
         return path
 
     def text(self, name: str, content: str, *, kind: str = "stats") -> Path:
         """Save plain text under ``{kind}/`` (default: ``stats/``)."""
         path = self.path(name, kind=kind)
         path.write_text(content, encoding="utf-8")
+        self._announce_created_path(path)
         return path
 
     def dump(
@@ -237,6 +254,7 @@ class ProjectIO:
             path = out_dir / f"{name}.csv"
             df = value if max_rows is None else value.head(max_rows)
             df.to_csv(path, index=False)
+            self._announce_created_path(path)
             written.append(path)
         return written
 
@@ -254,6 +272,7 @@ class ProjectIO:
         path = self.path(name, kind="reports")
         with PdfPages(path) as pdf:
             yield pdf
+        self._announce_created_path(path)
 
     # ── Report + provenance ────────────────────────────────────────────────
 
@@ -263,7 +282,9 @@ class ProjectIO:
         snap = _provenance.snapshot_main_params()
         if not snap:
             return None
-        return _provenance.write_params(self.context, snap)
+        path = _provenance.write_params(self.context, snap)
+        self._announce_created_path(path)
+        return path
 
     def report(
         self,
@@ -285,12 +306,14 @@ class ProjectIO:
             self._project._dataset_path,
             dataset_alias=getattr(self._project, "_dataset_alias", None),
         )
-        _provenance.write(self.context, prov)
+        provenance_path = _provenance.write(self.context, prov)
+        self._announce_created_path(provenance_path)
         snap = _provenance.snapshot_main_params()
         if snap:
-            _provenance.write_params(self.context, snap)
+            params_path = _provenance.write_params(self.context, snap)
+            self._announce_created_path(params_path)
 
-        return write_report(
+        report_path = write_report(
             self.context,
             sections=sections,
             notes=notes,
@@ -298,3 +321,5 @@ class ProjectIO:
             extra_metadata=extra_metadata,
             provenance=prov,
         )
+        self._announce_created_path(report_path)
+        return report_path
