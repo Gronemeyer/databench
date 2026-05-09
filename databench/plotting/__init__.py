@@ -115,3 +115,43 @@ def new_figure(
         **subplot_kw,
     )
     return fig, axes
+
+
+# ── Per-subject longitudinal line + group mean/SEM ────────────────────────
+
+def plot_metric_by_session(
+    table,
+    *,
+    x: str,
+    y: str,
+    ax: plt.Axes,
+    subject_col: str = "Subject",
+    subject_colors: dict | None = None,
+    group_color: str = "black",
+    group_label: str = "group mean",
+) -> plt.Axes:
+    """Per-subject lines + group mean ± SEM errorbar on a single axes.
+
+    *table* must have a subject column (default ``"Subject"``), an x
+    column (e.g. ``"day"`` or ``"session_n"``), and a numeric y column.
+
+    Returns the axes for further customisation (titles, labels, legend).
+    """
+    subjects = sorted(table[subject_col].dropna().unique())
+    if subject_colors is None:
+        palette = plt.cm.tab10(np.linspace(0, 1, max(len(subjects), 1)))
+        subject_colors = dict(zip(subjects, palette))
+
+    for subj in subjects:
+        sub = table[table[subject_col] == subj].sort_values(x)
+        ax.plot(
+            sub[x], sub[y],
+            "o-", color=subject_colors[subj], ms=5, lw=1.5, alpha=0.7, label=subj,
+        )
+
+    grp = table.groupby(x)[y].agg(["mean", "sem"]).reset_index()
+    ax.errorbar(
+        grp[x], grp["mean"], yerr=grp["sem"],
+        fmt="s-", color=group_color, ms=6, lw=2, zorder=5, label=group_label,
+    )
+    return ax

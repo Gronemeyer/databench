@@ -7,7 +7,7 @@ directly (though direct import works fine).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Optional
+from typing import Any, Callable, Iterable, Iterator, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -15,6 +15,7 @@ import pandas as pd
 
 from databench.config import OutputContext
 from databench.utils import session_to_int
+from databench.utils.labels import parse_session_day
 
 
 # ── Exceptions ─────────────────────────────────────────────────────────────
@@ -109,6 +110,11 @@ class Session:
     @property
     def task(self) -> str:
         return self._index[2]
+
+    @property
+    def day(self) -> int | None:
+        """Integer day parsed from a ``ses-NN`` session label, or ``None``."""
+        return parse_session_day(self.session, default=None)
 
     @property
     def label(self) -> str:
@@ -416,6 +422,37 @@ class SessionGroup:
     def session_labels(self) -> list[str]:
         """Unique session labels in this group."""
         return sorted({s.session for s in self._sessions})
+
+    def to_frame(
+        self,
+        extractor: "Callable[[Session], Iterable[dict] | None]",
+    ) -> pd.DataFrame:
+        """Build a long-form DataFrame by calling *extractor* on each session.
+
+        ``extractor(session)`` returns an iterable of row dicts (or ``None``
+        / empty iterable to skip the session).  ``Subject``, ``Session``,
+        and ``Task`` columns are auto-prepended to every row.
+
+        Example
+        -------
+        >>> def per_session(sess):
+        ...     speed = sess.signal("treadmill", "speed_mm")
+        ...     yield {"day": sess.day, "mean_speed_mm": float(np.nanmean(speed))}
+        >>> table = group.to_frame(per_session)
+        """
+        rows: list[dict] = []
+        for session in self._sessions:
+            produced = extractor(session)
+            if produced is None:
+                continue
+            for row in produced:
+                rows.append({
+                    "Subject": session.subject,
+                    "Session": session.session,
+                    "Task": session.task,
+                    **row,
+                })
+        return pd.DataFrame(rows)
 
     def align(
         self,
