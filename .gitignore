@@ -1,3 +1,4 @@
+databench/_version.py
 **/outputs
 */*/*/__pycache__/
 */__pycache__/*
@@ -10,3 +11,7 @@ __pycache__/
 /.DS_Store
 *.log
 datasets.toml
+
+
+# Ignore any .py files in the same root as the gitignore file, but not in subdirectories
+/*.py
