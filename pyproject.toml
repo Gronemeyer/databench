@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel", "setuptools-scm>=8"]
+requires = ["setuptools>=68", "setuptools-scm>=8", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -21,8 +21,6 @@ where = ["."]
 include = ["databench*"]
 
 [tool.setuptools_scm]
-# Version is derived from git tags (e.g. `git tag v0.2.0`) and written to
-# databench/_version.py at build / install time. Untagged commits get a
-# dev version like `0.2.1.dev3+gC7461EA`. A dirty tree appends `.dXXXXXXXX`.
-version_file = "databench/_version.py"
-fallback_version = "0.0.0+unknown"
+write_to = "databench/_version.py"
+version_scheme = "guess-next-dev"
+local_scheme = "no-local-version"

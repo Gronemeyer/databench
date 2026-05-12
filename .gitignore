@@ -1,3 +1,4 @@
+databench/_version.py
 **/outputs
 */*/*/__pycache__/
 */__pycache__/*
