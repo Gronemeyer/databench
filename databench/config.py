@@ -6,7 +6,7 @@ import tomllib
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 
 def _detect_script_name() -> str:
@@ -163,6 +163,89 @@ def dataset_params(alias: str | None = None) -> dict:
     entry = _dataset_entry(cfg, alias)
     entry["path"] = Path(entry["path"])
     return entry
+
+
+@dataclass(frozen=True)
+class ColumnSpec:
+    """Semantic description of a single (source, column) pair.
+
+    ``role`` is one of ``"timeseries"``, ``"event"``, ``"scalar"``, or
+    ``"time"`` (extensible).  ``unit`` is a free-form string used for
+    axis labels (e.g. ``"mm"``, ``"cm/s"``).
+    """
+
+    role: str = ""
+    unit: str = ""
+
+
+@dataclass(frozen=True)
+class Schema:
+    """Dataset schema: source aliases and per-column semantic metadata.
+
+    A schema is read from the ``[datasets.<alias>]`` table in
+    ``datasets.toml`` (sub-tables ``sources`` and ``schema``).  It powers
+    transparent source aliasing in :class:`~databench.session.Session`,
+    schema-aware printing in :meth:`Project.describe`, and the default
+    plotting dispatch in :mod:`databench.plotting`.
+
+    The dataclass is intentionally databench-import-free so the
+    dataset-producing repo can emit an equivalent JSON sidecar next to a
+    ``.pkl`` and have :class:`Project` consume it the same way.
+    """
+
+    sources: Mapping[str, str] = field(default_factory=dict)
+    columns: Mapping[tuple[str, str], ColumnSpec] = field(default_factory=dict)
+
+    @classmethod
+    def from_dataset_entry(cls, entry: Mapping[str, Any]) -> "Schema":
+        """Build a Schema from a parsed ``[datasets.<alias>]`` table."""
+        raw_sources = entry.get("sources")
+        sources: dict[str, str] = {}
+        if isinstance(raw_sources, dict):
+            for k, v in raw_sources.items():
+                if isinstance(k, str) and isinstance(v, str):
+                    sources[k] = v
+
+        raw_schema = entry.get("schema")
+        columns: dict[tuple[str, str], ColumnSpec] = {}
+        if isinstance(raw_schema, dict):
+            for key, spec in raw_schema.items():
+                if not isinstance(key, str) or "." not in key:
+                    continue
+                source, column = key.split(".", 1)
+                if not isinstance(spec, dict):
+                    continue
+                columns[(source, column)] = ColumnSpec(
+                    role=str(spec.get("role", "")),
+                    unit=str(spec.get("unit", "")),
+                )
+        return cls(sources=sources, columns=columns)
+
+    def resolve_source(self, name: str) -> str:
+        """Apply alias rewriting; return *name* unchanged when no alias."""
+        return self.sources.get(name, name)
+
+    def role_of(self, source: str, column: str) -> str:
+        spec = self.columns.get((self.resolve_source(source), column))
+        return spec.role if spec else ""
+
+    def unit_of(self, source: str, column: str) -> str:
+        spec = self.columns.get((self.resolve_source(source), column))
+        return spec.unit if spec else ""
+
+    def columns_for(self, source: str) -> list[tuple[str, ColumnSpec]]:
+        """Columns declared in the schema for *source* (after alias resolution)."""
+        canonical = self.resolve_source(source)
+        return [
+            (col, spec)
+            for (src, col), spec in self.columns.items()
+            if src == canonical
+        ]
+
+    def declared_sources(self) -> list[str]:
+        """Canonical source keys mentioned anywhere in the schema."""
+        names = set(self.sources.values()) | {src for src, _ in self.columns}
+        return sorted(names)
 
 
 def _resolve_dataset_alias_for_output(input_path: Path | None = None) -> str:

@@ -26,11 +26,36 @@ import pandas as pd
 
 from databench.config import (
     OutputContext,
+    Schema,
     _detect_script_name,
     _resolve_dataset_alias_for_output,
     _user_config,
+    resolve_dataset,
 )
 from databench.tabler import DataTabler
+
+
+def _parse_run_dir_stamp(name: str) -> str:
+    """Parse a run-dir name into an ISO timestamp; returns ``""`` on miss.
+
+    Accepted shapes (oldest-to-newest convention):
+      - ``YYMMDD``                 → ``20YY-MM-DDT00:00:00``
+      - ``YYMMDD_HHMMSS``          → ``20YY-MM-DDTHH:MM:SS``
+      - ``YYMMDD_HHMMSS_<tag>``    → ``20YY-MM-DDTHH:MM:SS``
+      - ``YYMMDD_<tag>``           → ``20YY-MM-DDT00:00:00``
+    """
+    import re
+    m = re.match(
+        r"^(\d{2})(\d{2})(\d{2})(?:_(\d{2})(\d{2})(\d{2}))?",
+        name,
+    )
+    if not m:
+        return ""
+    yy, mm, dd, h, mi, ss = m.groups()
+    hh = h or "00"
+    mn = mi or "00"
+    sc = ss or "00"
+    return f"20{yy}-{mm}-{dd}T{hh}:{mn}:{sc}"
 
 
 def load_dataset(path: Path) -> pd.DataFrame:
@@ -77,8 +102,12 @@ class Project:
 
     Parameters
     ----------
-    dataset : Path
-        Path to the dataset file (.pkl, .h5, .parquet, .csv).
+    dataset : Path or str
+        Path to a dataset file (.pkl, .h5, .parquet, .csv), **or** an
+        alias string registered in ``datasets.toml`` (e.g. ``"hfsa"``).
+        When a string is given the alias is resolved internally via
+        :func:`~databench.config.resolve_dataset` — callers no longer
+        need to import it separately.
     output_root : Path or ``"dataset"``
         Root directory for all outputs.  Defaults to ``Path("outputs")``,
         which writes to ``./outputs/`` relative to the working directory.
@@ -101,7 +130,7 @@ class Project:
 
     def __init__(
         self,
-        dataset: Path,
+        dataset: Path | str,
         *,
         output_root: Path | str = Path("outputs"),
         analyst: str = "",
@@ -109,7 +138,18 @@ class Project:
         run_name: str = "databench",
         tag: str = "",
     ) -> None:
-        self._dataset_path = Path(dataset)
+        # Accept either a filesystem path or a datasets.toml alias string.
+        # An alias resolves through resolve_dataset; an existing path is
+        # used as-is. Strings that look like paths (contain a separator
+        # or end in a known extension) skip the alias lookup.
+        if isinstance(dataset, str) and not (
+            "/" in dataset or "\\" in dataset
+            or dataset.endswith((".pkl", ".pickle", ".h5", ".hdf", ".hdf5",
+                                 ".parquet", ".csv"))
+        ):
+            self._dataset_path = resolve_dataset(dataset)
+        else:
+            self._dataset_path = Path(dataset)
         self._df: pd.DataFrame = load_dataset(self._dataset_path)
         self._tabler = DataTabler(self._df)
 
@@ -138,6 +178,11 @@ class Project:
             self.params: dict = _dataset_params(dataset_alias)
         except (KeyError, FileNotFoundError):
             self.params = {}
+
+        # Schema (source aliases + per-column role/unit). Empty schema if
+        # the dataset has no [sources] / [schema] sub-tables — every
+        # downstream consumer treats an empty Schema as "no metadata."
+        self._schema: Schema = Schema.from_dataset_entry(self.params)
 
         script_name = _detect_script_name()
         run_dir = self._build_run_dir(
@@ -179,11 +224,17 @@ class Project:
         script_name: str,
         tag: str,
     ) -> Path:
-        """Compose the run directory path: <root>/<alias>/<script>/<YYMMDD>[_<tag>]/."""
-        date_folder = datetime.now().strftime("%y%m%d")
+        """Compose the run directory path: <root>/<alias>/<script>/<YYMMDD_HHMMSS>[_<tag>]/.
+
+        The timestamp suffix is full second-precision so repeated runs on
+        the same day no longer overwrite each other.  Use
+        :meth:`Project.list_runs` / :meth:`Project.last_run` to navigate
+        across runs.
+        """
+        stamp = datetime.now().strftime("%y%m%d_%H%M%S")
         if tag:
-            date_folder = f"{date_folder}_{tag}"
-        return output_root / dataset_alias / script_name / date_folder
+            stamp = f"{stamp}_{tag}"
+        return output_root / dataset_alias / script_name / stamp
 
     def _append_run_name(self, name: str) -> Path:
         """Append run_name to a file stem while preserving parent and suffix.
@@ -302,7 +353,7 @@ class Project:
 
         row = matched.iloc[0]
         index = matched.index[0]
-        return Session(row=row, index=index, context=self._context)
+        return Session(row=row, index=index, context=self._context, schema=self._schema)
 
     def sessions(
         self,
@@ -358,7 +409,9 @@ class Project:
         session_list = []
         for row_idx in matched.index:
             row = matched.loc[row_idx]
-            session_list.append(Session(row=row, index=row_idx, context=self._context))
+            session_list.append(
+                Session(row=row, index=row_idx, context=self._context, schema=self._schema)
+            )
 
         return SessionGroup(sessions=session_list, context=self._context)
 
@@ -399,6 +452,125 @@ class Project:
         """All unique task labels in the dataset."""
         return sorted(self.df.index.get_level_values("Task").unique())
 
+    @property
+    def schema(self) -> Schema:
+        """Dataset schema (source aliases + per-column role/unit).
+
+        Loaded from the ``[datasets.<alias>]`` table in ``datasets.toml``
+        at construction time.  Empty :class:`Schema` when not declared.
+        """
+        return self._schema
+
+    def first_session(self) -> "Session":
+        """Return any session — a one-liner for "what's in this dataset?".
+
+        Useful for inspecting source/signal availability before deciding
+        what to analyse::
+
+            proj.first_session().describe()
+        """
+        from databench.session import Session
+        if len(self.df) == 0:
+            raise NoSessionsFoundError("Project has zero rows after filtering.")
+        row_idx = self.df.index[0]
+        row = self.df.loc[row_idx]
+        return Session(row=row, index=row_idx, context=self._context, schema=self._schema)
+
+    # ── Run history ────────────────────────────────────────────────────────
+
+    def list_runs(
+        self,
+        *,
+        script: str | None = None,
+        since: str | None = None,
+    ) -> pd.DataFrame:
+        """List previous runs for this dataset under ``outputs/``.
+
+        Each row corresponds to one run directory and exposes the metadata
+        recorded in ``provenance.json`` (written by every call to
+        :meth:`ProjectIO.report`).  Pure-pandas — compose with
+        ``.query(...)`` for richer filtering.
+
+        Parameters
+        ----------
+        script : str, optional
+            Only include runs whose ``script_name`` matches this stem.
+        since : str, optional
+            ISO date (``"2026-04-01"``) lower bound on ``created_at``.
+
+        Returns
+        -------
+        pd.DataFrame
+            Columns: ``run_dir``, ``script``, ``tag``, ``datetime``,
+            ``has_plots``, ``has_stats``, ``has_report``,
+            ``analyst``, ``git_short``, ``git_dirty``.
+        """
+        import json as _json
+
+        base = self._context.run_dir.parent.parent  # <root>/<alias>/
+        if not base.exists():
+            return pd.DataFrame(columns=[
+                "run_dir", "script", "tag", "datetime",
+                "has_plots", "has_stats", "has_report",
+                "analyst", "git_short", "git_dirty",
+            ])
+
+        rows: list[dict] = []
+        script_dirs = (
+            [base / script] if script is not None
+            else [p for p in base.iterdir() if p.is_dir()]
+        )
+        for script_dir in script_dirs:
+            if not script_dir.is_dir():
+                continue
+            for run_dir in script_dir.iterdir():
+                if not run_dir.is_dir():
+                    continue
+                prov_path = run_dir / "provenance.json"
+                if prov_path.is_file():
+                    try:
+                        prov = _json.loads(prov_path.read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        prov = {}
+                else:
+                    prov = {}
+                # Prefer the provenance timestamp; otherwise parse the
+                # dir name (format: YYMMDD_HHMMSS[_tag] or YYMMDD[_tag]).
+                dt = prov.get("created_at", "")
+                if not dt:
+                    dt = _parse_run_dir_stamp(run_dir.name)
+                row = {
+                    "run_dir": run_dir,
+                    "script": script_dir.name,
+                    "tag": prov.get("tag", ""),
+                    "datetime": dt,
+                    "has_plots": (run_dir / "plots").is_dir()
+                                 and any((run_dir / "plots").iterdir()),
+                    "has_stats": (run_dir / "stats").is_dir()
+                                 and any((run_dir / "stats").iterdir()),
+                    "has_report": any(run_dir.glob("reports/*.md"))
+                                  or any(run_dir.glob("reports/*.pdf")),
+                    "analyst": prov.get("analyst", ""),
+                    "git_short": (prov.get("git") or {}).get("short", ""),
+                    "git_dirty": (prov.get("git") or {}).get("dirty", False),
+                }
+                rows.append(row)
+
+        df = pd.DataFrame(rows)
+        if df.empty:
+            return df
+        df = df.sort_values("datetime", ascending=False).reset_index(drop=True)
+        if since is not None:
+            df = df[df["datetime"] >= since].reset_index(drop=True)
+        return df
+
+    def last_run(self, script: str | None = None) -> Path | None:
+        """Return the most recent run directory (or ``None``)."""
+        df = self.list_runs(script=script)
+        if df.empty:
+            return None
+        return Path(df.iloc[0]["run_dir"])
+
     def __repr__(self) -> str:
         n = len(self.df)
         return (
@@ -409,10 +581,14 @@ class Project:
     def describe(self) -> str:
         """Print a human-readable summary of the dataset and run dirs.
 
-        Useful first call when starting a new analysis::
+        The canonical first call when starting a new analysis::
 
-            proj = Project(dataset=resolve_dataset(), ...)
+            proj = Project("hfsa")
             proj.describe()
+
+        Output includes index structure (subjects/sessions/tasks), the
+        schema-declared sources and columns when available, and where
+        outputs from this run will land.
         """
         from collections import Counter
         subjects = self.subjects
@@ -425,13 +601,54 @@ class Project:
             f"  Sessions ({len(sessions)}): {sessions}",
             f"  Tasks    ({len(tasks)}): {tasks}",
             f"  Rows per task: {dict(rows_per_task)}",
+        ]
+
+        # Schema block — prefer the declared schema; otherwise fall back
+        # to dynamic introspection on a representative session.
+        try:
+            sample = self.first_session()
+        except Exception:
+            sample = None
+
+        schema = self._schema
+        if schema.sources or schema.columns:
+            lines.append("  Schema (declared):")
+            if schema.sources:
+                for alias, canonical in sorted(schema.sources.items()):
+                    lines.append(f"    {alias} -> {canonical}")
+            for src in schema.declared_sources():
+                cols = schema.columns_for(src)
+                if not cols:
+                    continue
+                col_strs = [
+                    f"{name} ({spec.role}, {spec.unit})" if spec.unit
+                    else f"{name} ({spec.role})"
+                    for name, spec in cols
+                ]
+                lines.append(f"    {src}: {', '.join(col_strs)}")
+        elif sample is not None:
+            srcs = sample.sources
+            if srcs:
+                lines.append("  Sources (introspected):")
+                for src in srcs:
+                    sigs = sample.signals(src)
+                    preview = sigs[:4] + (["…"] if len(sigs) > 4 else [])
+                    lines.append(f"    {src}: {preview}")
+
+        lines.extend([
             f"  Run dir:    {self._context.run_dir}",
             f"  Plots dir:  {self._context.plots_dir}",
             f"  Stats dir:  {self._context.stats_dir}",
             f"  Reports:    {self._context.reports_dir}",
-        ]
-        if self.params:
-            lines.append(f"  Params:     {sorted(self.params)}")
+        ])
+        # Drop schema-related and noise keys from the params print —
+        # they're already shown above.
+        user_params = sorted(
+            k for k in self.params
+            if k not in {"path", "schema", "sources"}
+        )
+        if user_params:
+            lines.append(f"  Params:     {user_params}")
         text = "\n".join(lines)
         print(text)
         return text

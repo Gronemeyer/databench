@@ -21,7 +21,34 @@ condition_order = ["baseline", "saline", "ethanol_low", "ethanol_high"]
 condition_colors = { baseline = "#bbabab", saline = "#4289e6", ethanol_low = "#ffa251", ethanol_high = "#ce1818" }
 
 # In a script:
-#   proj = Project(dataset=resolve_dataset("etoh"), ...)
+#   proj = Project("etoh")          # alias-string form
 #   session_map      = proj.params["session_map"]
 #   condition_order  = proj.params["condition_order"]
 #   condition_colors = proj.params["condition_colors"]
+
+# ── Schema (optional but recommended) ───────────────────────────────────
+#
+# The schema makes a dataset self-describing.  Two sub-tables:
+#
+#   [datasets.<alias>.sources]
+#     alias  = canonical_key
+#   [datasets.<alias>.schema]
+#     "canonical_key.column" = { role = "...", unit = "..." }
+#
+# Source aliases let scripts written against one dataset's naming
+# (e.g. source="pupil") work unchanged on a dataset that keys the same
+# data as "pupil_dlc".  Column specs give Project.describe() and
+# databench.plotting.quickplot enough metadata to label axes and pick a
+# sensible default plot type.  Roles: "timeseries", "event", "scalar",
+# "time".  Unknown columns are tolerated; only declare what you use.
+
+[datasets.hfsa]
+path = "/path/to/260513_HFSA.pkl"
+
+[datasets.hfsa.sources]
+pupil = "pupil_dlc"     # scripts using source="pupil" resolve to "pupil_dlc"
+
+[datasets.hfsa.schema]
+"pupil_dlc.pupil_diameter_mm"  = { role = "timeseries", unit = "mm"   }
+"treadmill.speed_mm"           = { role = "timeseries", unit = "mm/s" }
+"treadmill.time_elapsed_s"     = { role = "time",       unit = "s"    }

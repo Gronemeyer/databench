@@ -13,9 +13,24 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from databench.config import OutputContext
+from databench.config import OutputContext, Schema
 from databench.utils import session_to_int
 from databench.utils.labels import parse_session_day
+
+
+def _fuzzy_suggest(needle: str, haystack: list[str], n: int = 3) -> str:
+    """Return a 'Did you mean …?' suffix for not-found errors.
+
+    Returns an empty string when nothing reasonable matches.
+    """
+    import difflib
+    if not needle or not haystack:
+        return ""
+    matches = difflib.get_close_matches(str(needle), haystack, n=n, cutoff=0.4)
+    if not matches:
+        return ""
+    rendered = ", ".join(repr(m) for m in matches)
+    return f"\n  Did you mean {rendered}?"
 
 
 # ── Exceptions ─────────────────────────────────────────────────────────────
@@ -92,10 +107,17 @@ class Session:
         row: pd.Series,
         index: tuple,
         context: OutputContext,
+        schema: Schema | None = None,
     ) -> None:
         self._row = row
         self._index = index
         self._context = context
+        self._schema = schema if schema is not None else Schema()
+
+    @property
+    def schema(self) -> Schema:
+        """The dataset schema (source aliases + per-column role/unit)."""
+        return self._schema
 
     # ── Identity ───────────────────────────────────────────────────────────
 
@@ -129,24 +151,33 @@ class Session:
         ----------
         source : str
             Data source name (e.g. ``"mesomap"``, ``"pupil"``, ``"treadmill"``).
+            If the dataset's schema declares an alias for this name (e.g.
+            ``pupil -> pupil_dlc``) the alias is applied transparently.
         name : str
             Signal name within the source (e.g. ``"L_VISp"``, ``"pupil_diameter_mm"``).
 
         Raises
         ------
         SignalNotFoundError
-            If the source/signal combination is not found.
+            If the source/signal combination is not found.  The message
+            includes a fuzzy suggestion when a near-match exists.
         """
-        value = self._row.get((source, name))
+        canonical = self._schema.resolve_source(source)
+        value = self._row.get((canonical, name))
         if value is None:
-            available = self._available_signals(source)
-            sources = self._available_sources()
+            available = self.signals(canonical)
+            sources = self.sources
             msg = (
-                f"Signal {name!r} not found in source {source!r}.\n"
-                f"  Available signals for {source!r}: {available}"
+                f"Signal {name!r} not found in source {canonical!r}"
+                + (f" (resolved from alias {source!r})" if canonical != source else "")
+                + ".\n"
+                f"  Available signals for {canonical!r}: {available}"
             )
             if not available:
                 msg += f"\n  Available sources: {sources}"
+                msg += _fuzzy_suggest(source, sources)
+            else:
+                msg += _fuzzy_suggest(name, available)
             raise SignalNotFoundError(msg)
         arr = np.asarray(value)
         if arr.ndim == 0:
@@ -162,15 +193,27 @@ class Session:
         Parameters
         ----------
         source : str
-            Data source name.
+            Data source name; aliases declared in the schema are applied.
         column : str
             Name of the time column (default: ``"time_elapsed_s"``).
         """
-        value = self._row.get((source, column))
+        canonical = self._schema.resolve_source(source)
+        value = self._row.get((canonical, column))
         if value is None:
-            raise SignalNotFoundError(
-                f"Time column {column!r} not found in source {source!r}."
+            available = self.signals(canonical)
+            sources = self.sources
+            msg = (
+                f"Time column {column!r} not found in source {canonical!r}"
+                + (f" (resolved from alias {source!r})" if canonical != source else "")
+                + "."
             )
+            if not available:
+                msg += f"\n  Available sources: {sources}"
+                msg += _fuzzy_suggest(source, sources)
+            else:
+                msg += f"\n  Available columns for {canonical!r}: {available}"
+                msg += _fuzzy_suggest(column, available)
+            raise SignalNotFoundError(msg)
         arr = np.asarray(value, dtype=float).ravel()
         return arr
 
@@ -189,12 +232,14 @@ class Session:
         """
         from databench.config import TIME_COLUMNS
 
+        canonical = self._schema.resolve_source(source)
+
         # Determine the expected signal length for this source so we can
         # reject wildly mismatched time vectors.
         max_sig_len = 0
         if isinstance(self._row.index, pd.MultiIndex):
             for src, name in self._row.index:
-                if src == source and name != column:
+                if src == canonical and name != column:
                     val = self._row.get((src, name))
                     if val is not None:
                         arr = np.asarray(val)
@@ -202,8 +247,8 @@ class Session:
                             max_sig_len = max(max_sig_len, arr.size)
 
         candidates: list[tuple[str, str]] = [
-            (source, column),
-            (source, "time_elapse_s"),
+            (canonical, column),
+            (canonical, "time_elapse_s"),
             *TIME_COLUMNS,
         ]
         for src, col in candidates:
@@ -211,44 +256,59 @@ class Session:
             if value is None:
                 continue
             arr = np.asarray(value, dtype=float).ravel()
-            if max_sig_len > 0 and src != source and arr.size > 2 * max_sig_len:
+            if max_sig_len > 0 and src != canonical and arr.size > 2 * max_sig_len:
                 continue
             if col == "master_elapsed_s" and arr.size > 0:
                 arr = arr - arr[0]
             return arr
 
         raise SignalNotFoundError(
-            f"Time column {column!r} not found in source {source!r}; no "
+            f"Time column {column!r} not found in source {canonical!r}; no "
             "fallback in databench.config.TIME_COLUMNS matched either."
         )
 
-    def _available_signals(self, source: str, time_column: str = "time_elapsed_s") -> list[str]:
-        """List signal names available for a given source.
-
-        Filters to array-valued entries whose length is comparable to the
-        source's time array (i.e. real timeseries, not metadata that happens
-        to be stored as a short array).
-        """
-        if not isinstance(self._row.index, pd.MultiIndex):
-            return list(self._row.index)
-        # Get time array length as reference
-        t_val = self._row.get((source, time_column))
-        t_len = len(np.asarray(t_val)) if t_val is not None else 0
-        min_len = max(1, int(t_len * 0.5))  # must be at least 50 % of time length
-        signals = []
-        for src, name in self._row.index:
-            if src == source and name != time_column:
-                val = self._row.get((src, name))
-                arr = np.asarray(val)
-                if arr.ndim >= 1 and arr.size >= min_len:
-                    signals.append(name)
-        return sorted(signals)
-
-    def _available_sources(self) -> list[str]:
-        """List source names present in this session's data."""
+    @property
+    def sources(self) -> list[str]:
+        """Source names present in this session's data (canonical keys)."""
         if not isinstance(self._row.index, pd.MultiIndex):
             return []
         return sorted({src for src, _name in self._row.index})
+
+    def signals(
+        self,
+        source: str,
+        *,
+        time_column: str = "time_elapsed_s",
+    ) -> list[str]:
+        """Signal names available for *source* (canonical or aliased).
+
+        Filters to array-valued entries whose length is comparable to the
+        source's time array (i.e. real timeseries, not metadata that
+        happens to be stored as a short array).
+        """
+        canonical = self._schema.resolve_source(source)
+        if not isinstance(self._row.index, pd.MultiIndex):
+            return list(self._row.index)
+        t_val = self._row.get((canonical, time_column))
+        t_len = len(np.asarray(t_val)) if t_val is not None else 0
+        min_len = max(1, int(t_len * 0.5))
+        names: list[str] = []
+        for src, name in self._row.index:
+            if src == canonical and name != time_column:
+                val = self._row.get((src, name))
+                arr = np.asarray(val)
+                if arr.ndim >= 1 and arr.size >= min_len:
+                    names.append(name)
+        return sorted(names)
+
+    # Back-compat aliases — the leading-underscore names are kept so any
+    # internal/external caller that reached past the public API keeps
+    # working. New code should use `Session.sources` / `Session.signals`.
+    def _available_sources(self) -> list[str]:
+        return self.sources
+
+    def _available_signals(self, source: str, time_column: str = "time_elapsed_s") -> list[str]:
+        return self.signals(source, time_column=time_column)
 
     # ── Discovery ──────────────────────────────────────────────────────────
 
@@ -264,8 +324,8 @@ class Session:
         Returns the same text it prints, so it composes with logging.
         """
         lines = [self.label, "Sources:"]
-        for src in self._available_sources():
-            sigs = self._available_signals(src, time_column)
+        for src in self.sources:
+            sigs = self.signals(src, time_column=time_column)
             try:
                 t = self.time(src, time_column)
                 span = f"{t[0]:.1f}–{t[-1]:.1f}s, n={t.size}" if t.size else "empty"
@@ -321,7 +381,7 @@ class Session:
         """
         # Normalise list[str] â†’ dict[str, list[str]]
         if isinstance(sources, list):
-            sources = {src: self._available_signals(src, time_column) for src in sources}
+            sources = {src: self.signals(src, time_column=time_column) for src in sources}
 
         if reference not in sources:
             raise ValueError(

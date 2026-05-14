@@ -1,13 +1,36 @@
 ﻿"""Locomotion bout detection and event generation.
 
-Key public API:
+This module is the **canonical reference for the two-tier portability
+pattern** other analyses should follow: a pure-array core, then a thin
+SessionGroup wrapper on the side.
 
-* :func:`locomotion_bout_events` — detect locomotion bouts from speed traces
-  (accepts raw arrays or grouped DataFrames).
-* :func:`locomotion_events` — detect locomotion-bout events across a
-  :class:`~databench.session.SessionGroup` for ETA.
-* :class:`LocomotionBoutEventsExtractor` — reusable extractor for
-  long-table pipelines.
+Which function do I want?
+-------------------------
++--------------------------------+----------------------------------------------------+
+| You have…                      | Use…                                               |
++================================+====================================================+
+| Plain ``t`` and ``speed_cms``  | :func:`locomotion_bout_events` (returns full       |
+| numpy arrays, want bout info   | epoch DataFrame) — pure-array core, no databench   |
+|                                | imports required for downstream callers.           |
++--------------------------------+----------------------------------------------------+
+| Same arrays, just need         | :func:`locomotion_bouts` — thin wrapper that       |
+| ``[(start_idx, end_idx), ...]``| returns index pairs only.                          |
++--------------------------------+----------------------------------------------------+
+| Index pairs, want the inverse  | :func:`quiescent_bouts` — non-locomotion intervals |
+| (quiet periods)                | between bouts.                                     |
++--------------------------------+----------------------------------------------------+
+| A :class:`SessionGroup` and    | :func:`locomotion_events` — scans every session    |
+| need events for ETA            | and returns an :data:`~databench.types.EventsTable`|
+|                                | with ``EventType`` / ``event_time``.               |
++--------------------------------+----------------------------------------------------+
+| A long-format DataFrame        | :class:`LocomotionBoutEventsExtractor` — explicit  |
+| ``(Subject, Session, Task,     | extractor object you can compose with other        |
+| time, speed)``                 | long-table pipelines.                              |
++--------------------------------+----------------------------------------------------+
+
+A colleague who does not use databench can call
+``locomotion_bout_events(t, speed_cms)`` on their own arrays — no
+``Project``, ``SessionGroup``, or plotting setup required.
 """
 from __future__ import annotations
 

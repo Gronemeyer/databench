@@ -5,6 +5,22 @@ The active visual theme is controlled by :func:`set_theme` /
 lazily so that ``import databench.plotting`` alone never triggers heavy
 rcParams mutations — call ``set_theme()`` once at the top of a script.
 
+What's in this module
+---------------------
+* :func:`set_theme` / :func:`get_theme` — global visual theme.
+* :func:`new_figure` — themed figure factory.
+* :func:`style_axes` / :func:`style_figure` — spine and layout polish.
+* :func:`plot_metric_by_session` — per-subject lines + group mean ± SEM
+  for any longitudinal ``(Subject, x, y)`` table.
+* :func:`quickplot` — one-line "just plot this signal" for a single
+  session, dispatched on the dataset schema's role.
+* :func:`quickplot_group` — same dispatch, but across a SessionGroup
+  (uses :func:`plot_metric_by_session` for scalar-per-session).
+
+Submodules (``databench.plotting.<name>``) contain analysis-specific
+plotters: ``oscillation``, ``traces``, ``treadmill``, ``overview``,
+``mesomap``.  The default theme is ``cold_field_v5``.
+
 Quick start
 -----------
 >>> from databench.plotting import set_theme, new_figure, style_axes
@@ -12,6 +28,11 @@ Quick start
 >>> fig, ax = new_figure()                # themed figure + axes
 >>> ax.plot(x, y)
 >>> style_axes(ax)                        # clean spines / ticks
+
+One-line plot from a schema-aware project::
+
+    proj = Project("hfsa")
+    fig = quickplot(proj.first_session(), source="pupil")
 """
 
 from __future__ import annotations
@@ -20,6 +41,7 @@ from typing import Optional, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 from databench.plotting.style.cold_field_v5 import Theme, clean_ax
 
@@ -155,3 +177,167 @@ def plot_metric_by_session(
         fmt="s-", color=group_color, ms=6, lw=2, zorder=5, label=group_label,
     )
     return ax
+
+
+# ── Schema-aware "just plot it" defaults ──────────────────────────────────
+
+
+def _pick_default_column(sess, source: str) -> str:
+    """Pick a sensible default column for *source*.
+
+    Prefers a schema-declared ``timeseries`` column for that source;
+    falls back to the first introspected signal.
+    """
+    schema = getattr(sess, "schema", None)
+    if schema is not None:
+        for name, spec in schema.columns_for(source):
+            if spec.role == "timeseries":
+                return name
+    sigs = sess.signals(source)
+    if not sigs:
+        raise ValueError(
+            f"Source {source!r} has no plottable columns in this session."
+        )
+    return sigs[0]
+
+
+def quickplot(
+    sess,
+    source: str,
+    column: str | None = None,
+    *,
+    ax: plt.Axes | None = None,
+    label: str | None = None,
+) -> plt.Figure:
+    """One-line plot of a single session's signal, dispatched on schema role.
+
+    Looks up ``role`` in the project schema:
+
+    * ``"timeseries"`` (or unknown) → trace plot, unit-labelled Y axis.
+    * ``"scalar"``                  → single-value text annotation.
+    * ``"event"``                   → vertical raster of event times.
+
+    Falls back to a trace plot when no schema is configured.  The user
+    can still grab the Figure and customise; this is the "give me
+    *something* in one line" entry point, not a finished publication
+    figure.
+    """
+    get_theme()
+    if column is None:
+        column = _pick_default_column(sess, source)
+
+    schema = getattr(sess, "schema", None)
+    role = schema.role_of(source, column) if schema is not None else ""
+    unit = schema.unit_of(source, column) if schema is not None else ""
+    canonical = schema.resolve_source(source) if schema is not None else source
+    title = label or f"{sess.label} — {canonical}/{column}"
+    ylabel = f"{column} ({unit})" if unit else column
+
+    if ax is None:
+        fig, ax = new_figure()
+    else:
+        fig = ax.figure
+
+    if role == "event":
+        events = np.asarray(sess.signal(source, column), dtype=float).ravel()
+        for t in events:
+            ax.axvline(t, color="black", lw=0.5, alpha=0.7)
+        ax.set_xlabel("Time (s)")
+        ax.set_yticks([])
+        ax.set_title(title)
+    elif role == "scalar":
+        value = np.asarray(sess.signal(source, column)).ravel()
+        ax.text(0.5, 0.5, f"{column} = {value[0]:.3g} {unit}".strip(),
+                transform=ax.transAxes, ha="center", va="center", fontsize=14)
+        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_title(title)
+    else:
+        # timeseries / unknown
+        try:
+            t = sess.time(source)
+        except Exception:
+            t = np.arange(sess.signal(source, column).size)
+            ax.set_xlabel("Sample")
+        else:
+            ax.set_xlabel("Time (s)")
+        y = sess.signal(source, column)
+        m = min(len(t), len(y))
+        ax.plot(t[:m], y[:m], lw=1.0)
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+
+    style_axes(ax)
+    return fig
+
+
+def quickplot_group(
+    group,
+    source: str,
+    column: str | None = None,
+    *,
+    reducer: str = "mean",
+    ax: plt.Axes | None = None,
+) -> plt.Figure:
+    """One-line longitudinal plot for a SessionGroup, schema-dispatched.
+
+    Reduces the per-session signal to a single number (``mean`` by
+    default), then renders per-subject lines + group mean ± SEM via
+    :func:`plot_metric_by_session`.  Designed for the "habituation
+    across days" case.
+    """
+    get_theme()
+    sample = next(iter(group), None)
+    if sample is None:
+        raise ValueError("Empty SessionGroup")
+
+    if column is None:
+        column = _pick_default_column(sample, source)
+
+    schema = getattr(sample, "schema", None)
+    unit = schema.unit_of(source, column) if schema is not None else ""
+    canonical = schema.resolve_source(source) if schema is not None else source
+
+    rows: list[dict] = []
+    from databench.utils import session_to_int
+    for sess in group:
+        try:
+            y = sess.signal(source, column)
+        except Exception:
+            continue
+        y = np.asarray(y, dtype=float)
+        y = y[np.isfinite(y)]
+        if y.size == 0:
+            continue
+        if reducer == "mean":
+            value = float(np.mean(y))
+        elif reducer == "median":
+            value = float(np.median(y))
+        elif reducer == "max":
+            value = float(np.max(y))
+        else:
+            raise ValueError(f"Unknown reducer {reducer!r}")
+        rows.append({
+            "Subject": sess.subject,
+            "Session": sess.session,
+            "day": session_to_int(sess.session),
+            "value": value,
+        })
+    table = pd.DataFrame(rows)
+    if table.empty:
+        raise ValueError(
+            f"No usable data for {canonical}/{column} across the group."
+        )
+
+    if ax is None:
+        fig, ax = new_figure(width=7.5, height_per_row=3.6)
+    else:
+        fig = ax.figure
+
+    plot_metric_by_session(table, x="day", y="value", ax=ax)
+    ylabel = f"{column} ({unit})" if unit else column
+    ax.set_xlabel("Session day")
+    ax.set_ylabel(f"{reducer} {ylabel}")
+    ax.set_title(f"{canonical}/{column} across sessions")
+    ax.legend(fontsize=8, ncol=2, frameon=False)
+    style_axes(ax)
+    return fig

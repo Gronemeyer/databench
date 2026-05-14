@@ -1,19 +1,35 @@
-"""Template producer function — copy this module, rename, edit the body.
+"""Template producer function — the **full-integration** form.
 
-A canonical *event-producing* analysis function.  Mirrors the shape of
-``databench.analysis.locomotion.locomotion_events``: takes a
-:class:`SessionGroup`, scans each session, returns an
-:data:`~databench.types.EventsTable` ready for
-:meth:`~databench.analysis.eta.EtaAnalysis.run`.
+Use this template when your analysis must emit a standard
+:data:`~databench.types.EventsTable` for downstream ETA / oscillation
+plotting.  It takes a :class:`SessionGroup` directly and scans each
+session.
+
+For most new analyses, prefer
+:mod:`databench.analysis._template_minimal` instead — it's a plain
+function on numpy/pandas data, easier to reuse outside databench, and
+easier for a colleague to lift into their own code.
+
+Portability rule (applies to both templates)
+--------------------------------------------
+Analysis modules MUST NOT import from ``databench.session``,
+``databench.project``, or ``databench.plotting``.  They MAY import
+``databench.signal.*`` and ``databench.utils.*``.  The SessionGroup
+wrapper below uses duck-typing (``sess.time(...)``, ``sess.signal(...)``)
+so the only thing it actually relies on is the data interface, not the
+class.  Keep the core detection logic factorable into a plain function
+that takes arrays — see ``locomotion.locomotion_bout_events`` for the
+canonical example.
 
 Workflow for adding a new detector
 ----------------------------------
-1. Copy this file to ``databench/analysis/<name>.py``.
-2. Rename ``my_events`` and update the docstring.
+1. Copy this file (or ``_template_minimal.py``) to
+   ``databench/analysis/<name>.py``.
+2. Rename the function(s) and update the docstring.
 3. Replace the body of the per-session loop with your detection logic.
 4. Optionally add a new schema stub to :mod:`databench.types` and use it
    as the return annotation.
-5. Add a unit test or a smoke script under ``Scripts/<group>/``.
+5. Add a smoke script under ``Scripts/<group>/``.
 """
 from __future__ import annotations
 
