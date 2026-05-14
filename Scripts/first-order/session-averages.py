@@ -8,6 +8,7 @@ z-score and as a percent-change from baseline (session 1).
 from __future__ import annotations
 
 import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
 import numpy as np
 import pandas as pd
 
@@ -16,6 +17,7 @@ from databench.analysis.longitudinal import longitudinal_summary
 from databench.plotting import plot_metric_by_session
 from databench.plotting.core import _theme_color
 from databench.session import SignalNotFoundError
+from databench.utils import clean_xy
 
 set_theme()
 
@@ -48,8 +50,7 @@ def session_features(sess):
     else:
         return None
 
-    time_valid       = np.isfinite(time_s) & np.isfinite(speed_mm)
-    time_s, speed_mm = time_s[time_valid], speed_mm[time_valid]
+    time_s, speed_mm = clean_xy(time_s, speed_mm)
     if time_s.size < 3:
         return None
 
@@ -92,7 +93,7 @@ session_table, _ = longitudinal_summary(session_table, ycols=["pupil_mean_mm"])
 
 # ─── Plot helpers ────────────────────────────────────────────────────────
 
-def plot_panel(ax: plt.Axes, metric: str, title: str, ylabel: str, color: str) -> None:
+def plot_panel(ax: Axes, metric: str, title: str, ylabel: str, color: str) -> None:
     if GROUP_BY_SEX:
         for sex, sex_rows in session_table.reset_index().groupby("sex"):
             plot_metric_by_session(

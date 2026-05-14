@@ -139,18 +139,28 @@ def plot_trace(
     ax : plt.Axes
         The same Axes (for chaining).
     """
+    # 1) Prep data
     mask, _ = time_mask(time, window)
     if mask is None:
         return ax
+
     kwargs: dict = {"lw": lw, "alpha": alpha}
     if color is not None:
         kwargs["color"] = color
     if label is not None:
         kwargs["label"] = label
+
+    # 2) Create canvas
+    # Reuse the provided axes.
+
+    # 3) Draw panel
     ax.plot(time[mask], values[mask], **kwargs)
     if ylabel is not None:
         ax.set_ylabel(ylabel)
+
+    # 4) Finalize figure
     from databench.plotting import style_axes
+
     style_axes(ax)
     return ax
 
@@ -252,18 +262,27 @@ def plot_trace_styled(
     -------
     ax
     """
+    # 1) Prep data
     mask, _ = time_mask(time, window)
     if mask is None:
         return ax
+
     kwargs: dict = {"lw": style.lw, "alpha": style.alpha, "color": style.color}
     if style.drawstyle is not None:
         kwargs["drawstyle"] = style.drawstyle
     if label is not None:
         kwargs["label"] = label
+
+    # 2) Create canvas
+    # Reuse the provided axes.
+
+    # 3) Draw panel
     ax.plot(time[mask], values[mask], **kwargs)
     if style.ylabel:
         ax.set_ylabel(style.ylabel)
 
+    # 4) Finalize figure
     from databench.plotting import style_axes
+
     style_axes(ax)
     return ax

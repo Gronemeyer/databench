@@ -143,13 +143,9 @@ for etype in result.event_types:
 # ─── 3. Longitudinal metric plot ─────────────────────────────────────────
 
 # Metric: mean response in METRIC_WINDOW per (Subject, Session, ROI, EventType)
-eta_ev = result.eta_events.copy()
-metric_mask = (eta_ev["rel_time"] >= METRIC_WINDOW[0]) & (eta_ev["rel_time"] <= METRIC_WINDOW[1])
+per_event = result.window_mean(METRIC_WINDOW, name="peak")
 metric_df = (
-    eta_ev.loc[metric_mask]
-    .groupby(["Subject", "Session", "EventType", "ROI", "event_id"], sort=False)
-    .agg(peak=("value", "mean"))
-    .reset_index()
+    per_event
     .groupby(["Subject", "Session", "EventType", "ROI"], sort=False)
     .agg(metric=("peak", "mean"))
     .reset_index()

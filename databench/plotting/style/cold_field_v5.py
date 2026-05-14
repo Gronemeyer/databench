@@ -1,13 +1,7 @@
-"""
-cold_field_v5.py
-─────────────────────────────────────────────────────────
-Palette  : Lapis / Sienna / Viridian / Alizarin / Mauve
-           CB-safe. Dark: lower-chroma, warmer ground.
-Scalebar : axes-fraction anchor via transform chain.
-           anchor = transAxes → transData.inverted().
-           Always bottom-right, never clips, no fractions-of-sig math.
-Bars     : dark mode gets explicit lighter fill + visible dots.
-New      : tuning curve, longitudinal / session plot, scatter+regression.
+"""Minimal plotting style helpers for publication-ready figures.
+
+This module intentionally keeps styling explicit and conservative.
+The public API remains stable for existing scripts.
 """
 
 from __future__ import annotations
@@ -15,9 +9,10 @@ from __future__ import annotations
 import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from cycler import cycler
 from matplotlib.ticker import LinearLocator, FormatStrFormatter
 from scipy.ndimage import gaussian_filter1d
-from typing import Optional, List
+from typing import Optional, List, cast
 
 
 # ════════════════════════════════════════════════════════
@@ -25,21 +20,21 @@ from typing import Optional, List
 # ════════════════════════════════════════════════════════
 
 _LIGHT = [
-    "#1B3A6B",   # lapis
-    "#A8501C",   # sienna
-    "#1F6B55",   # viridian
-    "#A01830",   # alizarin
-    "#6B3670",   # mauve
-    "#46566A",   # steel
+    "#1f77b4",
+    "#d62728",
+    "#2ca02c",
+    "#ff7f0e",
+    "#9467bd",
+    "#7f7f7f",
 ]
 
 _DARK = [
-    "#6A95B8",   # lapis     — quiet periwinkle
-    "#B87858",   # sienna    — warm clay
-    "#5A9878",   # viridian  — forest sage
-    "#A86878",   # alizarin  — dusty wine
-    "#8878A8",   # mauve     — muted slate-violet
-    "#7888A0",   # steel     — cool pewter
+    "#8fbce6",
+    "#f2a4a4",
+    "#9ed89e",
+    "#f2c28b",
+    "#c5b0d5",
+    "#c0c0c0",
 ]
 
 _THEMES = {
@@ -47,27 +42,27 @@ _THEMES = {
         cycle      = _LIGHT,
         bg         = "#FFFFFF",
         surface    = "#FFFFFF",
-        fg         = "#1A1924",
-        tick       = "#4A4A5C",
-        shade      = "#E2DFF2",
+        fg         = "#111111",
+        tick       = "#333333",
+        shade      = "#E6E6E6",
         lbl_bg     = "#FFFFFF",
-        bar_hi     = _LIGHT[1],        # highlighted bar
-        bar_lo     = "#CCCAD8",        # neutral bar
-        dot_color  = "#1A1924",
+        bar_hi     = "#4D4D4D",
+        bar_lo     = "#C7C7C7",
+        dot_color  = "#111111",
         dot_alpha  = 0.35,
     ),
     "dark": dict(
         cycle      = _DARK,
-        bg         = "#100F0D",
-        surface    = "#1C1A17",
-        fg         = "#C4BFB6",
-        tick       = "#7A7570",
-        shade      = "#252218",
-        lbl_bg     = "#100F0D",
-        bar_hi     = "#C8945A",        # warm sienna — readable on dark
-        bar_lo     = "#3A3830",        # dark neutral — still distinct from bg
-        dot_color  = "#D4CFCA",
-        dot_alpha  = 0.55,
+        bg         = "#1A1A1A",
+        surface    = "#1A1A1A",
+        fg         = "#E6E6E6",
+        tick       = "#B8B8B8",
+        shade      = "#2A2A2A",
+        lbl_bg     = "#1A1A1A",
+        bar_hi     = "#CFCFCF",
+        bar_lo     = "#5A5A5A",
+        dot_color  = "#E6E6E6",
+        dot_alpha  = 0.45,
     ),
 }
 
@@ -77,7 +72,7 @@ _THEMES = {
 # ════════════════════════════════════════════════════════
 
 class Theme:
-    """Colour theme with ``apply()`` to push rcParams globally."""
+    """Color theme with apply() to push rcParams globally."""
 
     def __init__(self, mode: str = "light"):
         if mode not in ("light", "dark"):
@@ -86,78 +81,97 @@ class Theme:
         self.p    = _THEMES[mode]
 
     @property
-    def colors(self):    return self.p["cycle"]
+    def colors(self) -> List[str]:
+        return cast(List[str], self.p["cycle"])
+
     @property
-    def bg(self):        return self.p["bg"]
+    def bg(self) -> str:
+        return cast(str, self.p["bg"])
+
     @property
-    def surface(self):   return self.p["surface"]
+    def surface(self) -> str:
+        return cast(str, self.p["surface"])
+
     @property
-    def fg(self):        return self.p["fg"]
+    def fg(self) -> str:
+        return cast(str, self.p["fg"])
+
     @property
-    def shade(self):     return self.p["shade"]
+    def shade(self) -> str:
+        return cast(str, self.p["shade"])
+
     @property
-    def lbl_bg(self):    return self.p["lbl_bg"]
+    def lbl_bg(self) -> str:
+        return cast(str, self.p["lbl_bg"])
+
     @property
-    def bar_hi(self):    return self.p["bar_hi"]
+    def bar_hi(self) -> str:
+        return cast(str, self.p["bar_hi"])
+
     @property
-    def bar_lo(self):    return self.p["bar_lo"]
+    def bar_lo(self) -> str:
+        return cast(str, self.p["bar_lo"])
+
     @property
-    def dot_color(self): return self.p["dot_color"]
+    def dot_color(self) -> str:
+        return cast(str, self.p["dot_color"])
+
     @property
-    def dot_alpha(self): return self.p["dot_alpha"]
+    def dot_alpha(self) -> float:
+        return cast(float, self.p["dot_alpha"])
 
     def apply(self) -> "Theme":
-        """Push this theme's colours and sizing into ``mpl.rcParams``."""
+        """Push this theme's colors and sizing into mpl.rcParams."""
         p = self.p
         mpl.rcParams.update({
             "figure.facecolor":      p["bg"],
             "figure.dpi":            150,
             "axes.facecolor":        p["surface"],
             "axes.edgecolor":        p["tick"],
-            "axes.linewidth":        0.75,
+            "axes.linewidth":        0.8,
             "axes.spines.top":       False,
             "axes.spines.right":     False,
             "axes.labelcolor":       p["fg"],
-            "axes.labelsize":        8.5,
-            "axes.labelpad":         5,
+            "axes.labelsize":        8,
+            "axes.labelpad":         4,
             "axes.titlesize":        9,
-            "axes.titleweight":      "regular",
-            "axes.titlepad":         8,
-            "axes.titlelocation":    "left",
-            "axes.prop_cycle":       mpl.cycler(color=p["cycle"]),
+            "axes.titleweight":      "normal",
+            "axes.titlepad":         6,
+            "axes.prop_cycle":       cycler(color=cast(List[str], p["cycle"])),
             "axes.axisbelow":        True,
             "xtick.color":           p["tick"],
             "ytick.color":           p["tick"],
-            "xtick.labelsize":       7.5,
-            "ytick.labelsize":       7.5,
-            "xtick.major.size":      3.5,
-            "ytick.major.size":      3.5,
-            "xtick.minor.size":      2.0,
-            "ytick.minor.size":      2.0,
-            "xtick.major.width":     0.75,
-            "ytick.major.width":     0.75,
+            "xtick.labelsize":       7,
+            "ytick.labelsize":       7,
+            "xtick.major.size":      3.0,
+            "ytick.major.size":      3.0,
+            "xtick.minor.size":      1.8,
+            "ytick.minor.size":      1.8,
+            "xtick.major.width":     0.8,
+            "ytick.major.width":     0.8,
             "xtick.direction":       "out",
             "ytick.direction":       "out",
-            "xtick.major.pad":       4,
-            "ytick.major.pad":       4,
-            "lines.linewidth":       1.65,
-            "lines.solid_capstyle":  "round",
+            "xtick.major.pad":       3,
+            "ytick.major.pad":       3,
+            "lines.linewidth":       1.2,
+            "lines.solid_capstyle":  "butt",
             "patch.linewidth":       0.6,
-            "patch.edgecolor":       p["surface"],
+            "patch.edgecolor":       "none",
             "legend.frameon":        False,
-            "legend.fontsize":       7.5,
-            "legend.handlelength":   1.1,
+            "legend.fontsize":       7,
+            "legend.handlelength":   1.2,
             "legend.handletextpad":  0.4,
-            "legend.labelspacing":   0.35,
+            "legend.labelspacing":   0.3,
             "legend.borderaxespad":  0.4,
             "axes.grid":             False,
-            "font.family":           "sans-serif",
-            "font.sans-serif":       ["Helvetica Neue", "Source Sans Pro",
-                                      "IBM Plex Sans", "Arial", "DejaVu Sans"],
+            "font.family":           "DejaVu Sans",
             "text.color":            p["fg"],
             "savefig.dpi":           300,
             "savefig.bbox":          "tight",
             "savefig.facecolor":     p["bg"],
+            "svg.fonttype":          "none",
+            "pdf.fonttype":          42,
+            "ps.fonttype":           42,
         })
         return self
 
@@ -166,12 +180,13 @@ class Theme:
 #  AXIS HELPERS
 # ════════════════════════════════════════════════════════
 
-def clean_ax(ax, offset: int = 4):
-    """Remove top/right spines, offset remaining spines outward."""
+def clean_ax(ax, offset: int = 0):
+    """Remove top/right spines and optionally offset remaining spines."""
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_position(("outward", offset))
-    ax.spines["bottom"].set_position(("outward", offset))
+    if offset:
+        ax.spines["left"].set_position(("outward", offset))
+        ax.spines["bottom"].set_position(("outward", offset))
 
 
 def strip_ax(ax):
@@ -192,10 +207,10 @@ def anchor_ticks(ax, n_x: int = 3, n_y: int = 3):
 
 def panel_label(ax, letter: str, theme: Theme,
                 x: float = -0.08, y: float = 1.04):
-    """Italic panel label (a, b, c …) in axes-fraction coordinates."""
+    """Panel label in axes-fraction coordinates."""
     ax.text(x, y, letter,
             transform=ax.transAxes,
-            fontsize=10, fontstyle="italic", fontweight="semibold",
+            fontsize=9, fontstyle="normal", fontweight="bold",
             color=theme.fg, va="bottom", ha="right", clip_on=False)
 
 
@@ -209,15 +224,15 @@ def shade_epoch(ax, t0: float, t1: float,
                 color: Optional[str] = None,
                 alpha: float = 0.18):
     """Translucent vertical span (e.g. stimulus epoch)."""
-    c = color or (theme.shade if theme else "#E2DFF2")
+    c = color or (theme.shade if theme else "#E6E6E6")
     ax.axvspan(t0, t1, color=c, alpha=alpha, linewidth=0, zorder=0)
 
 
 def plot_mean_sem(ax, x, mean, sem,
-                  color: str = None, label: str = None,
+                  color: Optional[str] = None, label: Optional[str] = None,
                   alpha_fill: float = 0.13,
-                  smooth_sigma: float = None,
-                  lw: float = None,
+                  smooth_sigma: Optional[float] = None,
+                  lw: Optional[float] = None,
                   theme: Optional[Theme] = None):
     """Line + shaded SEM band."""
     if color is None:
@@ -243,7 +258,7 @@ def styled_legend(ax, loc: str = "best", theme: Optional[Theme] = None):
     return leg
 
 
-def label_traces(ax, labels: List[str] = None,
+def label_traces(ax, labels: Optional[List[str]] = None,
                  x_offset_frac: float = 0.012,
                  fontsize: int = 8,
                  theme: Optional[Theme] = None):
@@ -303,7 +318,7 @@ def sig_bracket(ax, x1: float, x2: float, y_base: float,
     y  = y_base + (yr[1] - yr[0]) * 0.018
     ax.plot([x1, x1, x2, x2], [y, y+h, y+h, y],
             lw=0.8, color=fg,
-            solid_capstyle="round", solid_joinstyle="round", clip_on=False)
+            solid_capstyle="butt", solid_joinstyle="miter", clip_on=False)
     ax.text((x1+x2)/2, y+h, text,
             ha="center", va="bottom", fontsize=9, color=fg)
 
@@ -314,7 +329,8 @@ def sig_bracket(ax, x1: float, x2: float, y_base: float,
 
 def draw_scalebar(ax, x_corner: float, y_corner: float,
                   scale_x: float, scale_y: float,
-                  label_x: str = None, label_y: str = None,
+                  label_x: Optional[str] = None,
+                  label_y: Optional[str] = None,
                   lw: float = 1.2,
                   theme: Optional[Theme] = None):
     """
@@ -354,12 +370,14 @@ def draw_scalebar(ax, x_corner: float, y_corner: float,
 def plot_timeseries(ax, data,
                     dt: float = 1.0, t_start: float = 0.0,
                     offset_factor: float = 4.0,
-                    labels: List[str] = None,
-                    colors: List[str] = None,
-                    lw: float = 0.75, alpha: float = 0.88,
-                    smooth_sigma: float = None,
-                    scale_x: float = None, scale_y: float = None,
-                    label_x: str = None, label_y: str = None,
+                    labels: Optional[List[str]] = None,
+                    colors: Optional[List[str]] = None,
+                    lw: float = 0.8, alpha: float = 0.85,
+                    smooth_sigma: Optional[float] = None,
+                    scale_x: Optional[float] = None,
+                    scale_y: Optional[float] = None,
+                    label_x: Optional[str] = None,
+                    label_y: Optional[str] = None,
                     theme: Optional[Theme] = None):
     """Waterfall (stacked offset) timeseries with automatic scale bar."""
     data   = np.atleast_2d(np.asarray(data, dtype=float))
@@ -382,7 +400,7 @@ def plot_timeseries(ax, data,
             t[0] - (t[-1] - t[0]) * 0.011, offsets[i],
             labels[i],
             ha="right", va="center", fontsize=7,
-            color=col, fontweight="semibold", clip_on=False,
+            color=col, clip_on=False,
         )
 
     scale_y_ = scale_y if scale_y is not None else sig
@@ -549,13 +567,12 @@ def make_demo(mode: str = "light"):
     mat  = k_h[None,:] + rng.normal(0, 0.2, (n_tr, len(t_h)))
     cmap = "inferno" if mode == "dark" else "YlOrRd"
     im   = ax_heat.imshow(mat, aspect="auto",
-                           extent=[t_h[0], t_h[-1], 0, n_tr],
+                           extent=(t_h[0], t_h[-1], 0.0, float(n_tr)),
                            origin="lower", cmap=cmap,
                            vmin=-0.3, vmax=1.4)
     cbar = fig.colorbar(im, ax=ax_heat, shrink=0.76, pad=0.03, aspect=20)
     cbar.set_label("ΔF/F", fontsize=7.5)
     cbar.ax.tick_params(labelsize=6.5)
-    cbar.outline.set_visible(False)
     ax_heat.axvline(0, color="white", lw=0.7, ls="--", alpha=0.45)
     ax_heat.set_xlabel("time (s)")
     ax_heat.set_ylabel("trial")

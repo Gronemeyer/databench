@@ -154,30 +154,38 @@ def plot_eta_by_condition(
     task: str | None = None,
 ) -> plt.Figure:
     """Plot group mean \u00b1 SEM ETA traces: one subplot per ROI, lines per condition."""
+
+    # 1) Prep data
     d = group_means.query("EventType == @event and ROI in @rois").copy()
     if task is not None and "Task" in d.columns:
         d = d.query("Task == @task")
 
     if conditions is None:
         conditions = sorted(d["Condition"].unique())
+
     if condition_colors is None:
         from databench.plotting import get_theme
+
         default_palette = get_theme().colors
         condition_colors = {c: default_palette[i % len(default_palette)] for i, c in enumerate(conditions)}
 
+    # 2) Create canvas
     n = len(rois)
     nrows = max(1, int(np.ceil(n / ncols)))
     fig, axes = plt.subplots(
         nrows, ncols,
-        figsize=(4.0 * ncols, 3.2 * nrows + 1.0),
+        figsize=(4.0 * ncols, 3.2 * nrows + 0.6),
         sharex=True, sharey="row",
     )
     axes = np.atleast_1d(axes).ravel()
 
+    # 3) Draw panels
+    from databench.plotting import style_axes
+
     for ax, roi in zip(axes, rois):
-        dd = d[d["ROI"] == roi]
+        roi_data = d[d["ROI"] == roi]
         for cond in conditions:
-            g = dd[dd["Condition"] == cond].sort_values("rel_time")
+            g = roi_data[roi_data["Condition"] == cond].sort_values("rel_time")
             if g.empty:
                 continue
             color = condition_colors.get(cond, "#333333")
@@ -191,17 +199,18 @@ def plot_eta_by_condition(
         ax.axvline(0, color="k", lw=1)
         ax.axhline(0, color="k", lw=0.5, alpha=0.5)
         ax.set_title(roi)
-        from databench.plotting import style_axes
         style_axes(ax)
 
     for ax in axes[n:]:
         ax.axis("off")
 
+    # 4) Finalize figure
     handles, labels = axes[0].get_legend_handles_labels()
-    if handles:
+    has_legend = bool(handles)
+    if has_legend:
         fig.legend(
             handles, labels,
-            loc="upper center", bbox_to_anchor=(0.5, 0.95),
+            loc="upper center", bbox_to_anchor=(0.5, 0.93),
             ncol=min(6, len(labels)), frameon=False,
         )
 
@@ -210,15 +219,20 @@ def plot_eta_by_condition(
         if baseline_s is None
         else f"baseline-subtracted [{baseline_s[0]:g}, {baseline_s[1]:g}] s"
     )
-    fig.supxlabel(f"Time relative to {event} (s)", y=0.01)
+    fig.supxlabel(f"Time relative to {event} (s)", y=0.03)
     fig.supylabel("Group mean \u00b1 SEM (subject-averaged)", x=0.02)
     fig.suptitle(
-        f"ETA across ROIs \u2014 {event}\n{baseline_label}",
+        f"ETA across ROIs \u2014 {event} ({baseline_label})",
+        y=0.98,
     )
-    fig.tight_layout(rect=[0.04, 0.03, 1.0, 0.88])
-    handles, _ = axes[0].get_legend_handles_labels()
-    if handles:
-        fig.subplots_adjust(top=0.82)
+    fig.subplots_adjust(
+        left=0.10,
+        right=0.99,
+        bottom=0.12,
+        top=0.84 if has_legend else 0.90,
+        wspace=0.15,
+        hspace=0.18,
+    )
     return fig
 
 
@@ -557,6 +571,35 @@ class EtaResult:
             "subject_means": self.subject_means,
             "group_means": self.group_means,
         }
+
+    # ── Per-event window aggregation ───────────────────────────────────────
+
+    def window_mean(
+        self,
+        window: tuple[float, float],
+        *,
+        name: str = "mean",
+    ) -> pd.DataFrame:
+        """Mean of ``value`` over ``rel_time`` ∈ ``window`` per event × ROI.
+
+        Returns one row per (Subject, Session, Task, Condition, EventType,
+        event_id, ROI) with column ``name`` holding the windowed mean.
+        Rows whose group has no samples in the window are dropped.
+        """
+        lo, hi = window
+        ev = self.eta_events
+        mask = (ev["rel_time"] >= lo) & (ev["rel_time"] <= hi)
+        key_cols = [
+            c for c in
+            ("Subject", "Session", "Task", "Condition", "EventType", "event_id", "ROI")
+            if c in ev.columns
+        ]
+        return (
+            ev.loc[mask]
+            .groupby(key_cols, sort=False)
+            .agg(**{name: ("value", "mean")})
+            .reset_index()
+        )
 
     # ── Plotter factory ────────────────────────────────────────────────────
 

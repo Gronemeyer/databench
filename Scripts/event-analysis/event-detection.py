@@ -95,7 +95,9 @@ SIGNALS: list[SignalSpec] = [
         signal="Mean",
         label="mesofield",
         ylabel="ΔF/F",
-        use_dff=True,
+        # meso_mean/Mean in current HFSA datasets is already ΔF/F.
+        # Do not apply a second ΔF/F normalization.
+        use_dff=False,
         color_event="#B3D9FF",
         color_mask="#457B9D",
         palette=("#457B9D", "#1D3557", "#A8DADC", "#2A9D8F",
@@ -606,9 +608,13 @@ def preprocess(raw: np.ndarray, use_dff: bool, normalize: str = "none") -> np.nd
         normalize = "dff"
     if normalize == "dff":
         f0 = np.percentile(raw, 5)
-        if f0 != 0:
-            return (raw - f0) / f0
-        return raw - np.mean(raw)
+        if f0 <= 0:
+            raise ValueError(
+                "Requested dF/F normalization but 5th-percentile baseline F0 <= 0. "
+                "This usually means the signal is already baseline-normalized (e.g., "
+                "already ΔF/F). Disable dF/F for this signal."
+            )
+        return (raw - f0) / f0
     elif normalize == "zscore":
         mu = np.nanmean(raw)
         sd = np.nanstd(raw)
@@ -1136,7 +1142,8 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
     summary_rows: list[dict] = []
     all_events: list[pd.DataFrame] = []
     all_metric_rows: list[dict] = []
-    comparison_data: dict[str, dict | None] = {"ses-01": None, "ses-10": None}
+    comparison_sessions = ("ses-01", "ses-10")
+    comparison_data_by_subject: dict[str, dict[str, dict | None]] = {}
 
     report_pdf = proj.reports_dir / f"{tag}_event_detection.pdf"
     report_pdf.parent.mkdir(parents=True, exist_ok=True)
@@ -1180,11 +1187,19 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
 
             print(f"  {sess.label}  → {n_ev} events, {n_art} artifacts")
 
-            # ── Stash data for ses-01 / ses-10 comparison figure ──
-            if sess.session in comparison_data and comparison_data[sess.session] is None:
-                comparison_data[sess.session] = {
-                    "t_s": t_s, "det": det, "trace": trace, "label": sess.label,
-                }
+            # ── Stash data for per-subject ses-01 / ses-10 comparison figures ──
+            if sess.session in comparison_sessions:
+                subject_comparison = comparison_data_by_subject.setdefault(
+                    sess.subject,
+                    {"ses-01": None, "ses-10": None},
+                )
+                if subject_comparison[sess.session] is None:
+                    subject_comparison[sess.session] = {
+                        "t_s": t_s,
+                        "det": det,
+                        "trace": trace,
+                        "label": sess.label,
+                    }
 
             summary_rows.append({
                 "Subject": sess.subject,
@@ -1277,17 +1292,33 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
                          dpi=200, bbox_inches="tight")
         plt.close(fig_comp)
 
-    # ── Publication comparison: ses-01 vs ses-10 side-by-side ──
-    if all(v is not None for v in comparison_data.values()):
+    # ── Per-subject comparison: ses-01 vs ses-10 side-by-side ──
+    n_comparison_plots = 0
+    for subject in sorted(comparison_data_by_subject):
+        subject_comparison = comparison_data_by_subject[subject]
+        if any(subject_comparison[s] is None for s in comparison_sessions):
+            continue
+
+        session_data = [
+            subject_comparison["ses-01"],
+            subject_comparison["ses-10"],
+        ]
         fig_pub = plot_session_comparison(
-            [comparison_data["ses-01"], comparison_data["ses-10"]],
+            session_data,
             spec,
-            session_labels=["ses-01", "ses-10"],
+            session_labels=[
+                f"{subject} | ses-01",
+                f"{subject} | ses-10",
+            ],
         )
-        fig_pub.savefig(plots_dir / f"{tag}_session_comparison.png",
-                        dpi=300, bbox_inches="tight")
+        out_name = f"{tag}_session_comparison_{subject}.png"
+        fig_pub.savefig(plots_dir / out_name, dpi=300, bbox_inches="tight")
         plt.close(fig_pub)
-        print(f"  Publication comparison figure: {tag}_session_comparison.png")
+        print(f"  Session comparison figure: {out_name}")
+        n_comparison_plots += 1
+
+    if n_comparison_plots == 0:
+        print("  Session comparison figure: skipped (no subjects had both ses-01 and ses-10)")
 
     return n_total, n_subjects
 
@@ -1384,8 +1415,8 @@ notes_lines = [
     "flanking clean values.  This removes blink artifacts (pupil) and",
     "motion-induced transients (mesofield) without distorting event shape.",
     "",
-    "For mesofield signals, raw fluorescence was converted to ΔF/F using the",
-    "5th-percentile as F0.  Pupil diameter was z-scored at the session level.",
+    "Mesofield input in this dataset is already ΔF/F and was used directly",
+    "(no additional ΔF/F transform).  Pupil diameter was z-scored at the session level.",
     "",
     "## Baseline Detrending (for detection only)",
     "",

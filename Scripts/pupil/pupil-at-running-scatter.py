@@ -19,6 +19,7 @@ from databench.analysis.locomotion import locomotion_events
 from databench.config import resolve_dataset
 from databench.types import EventsTable
 from databench.plotting import set_theme
+from databench.utils import clean_xy
 
 set_theme()
 
@@ -67,11 +68,7 @@ for sess in group:
         tolerance_s=0.25,
     )
     df = ad.df
-    t = df["time_elapsed_s"].to_numpy()
-    pup = df[PUPIL_KEY].to_numpy()
-    valid = np.isfinite(t) & np.isfinite(pup)
-    t_valid = t[valid]
-    pup_valid = pup[valid]
+    t_valid, pup_valid = clean_xy(df["time_elapsed_s"].to_numpy(), df[PUPIL_KEY].to_numpy())
     if t_valid.size < 2:
         continue
 

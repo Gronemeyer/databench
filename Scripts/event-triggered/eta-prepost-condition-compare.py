@@ -72,27 +72,11 @@ result = eta.run(group, events)
 
 # ─── Compute pre/post difference per event ───────────────────────────────
 
-
-def _mean_in_window(g: pd.DataFrame, window: tuple[float, float]) -> float:
-    mask = (g["rel_time"] >= window[0]) & (g["rel_time"] <= window[1])
-    return float(g.loc[mask, "value"].mean())
-
-
-diff_rows: list[dict] = []
-for keys, g in result.eta_events.groupby(
-    ["Subject", "Session", "Task", "Condition", "EventType", "event_id", "ROI"],
-    sort=False,
-):
-    subj, ses, task, cond, etype, eid, roi = keys
-    pre = _mean_in_window(g, PRE_WINDOW)
-    post = _mean_in_window(g, POST_WINDOW)
-    diff_rows.append({
-        "Subject": subj, "Session": ses, "Task": task,
-        "Condition": cond, "EventType": etype, "ROI": roi,
-        "pre_mean": pre, "post_mean": post, "diff": post - pre,
-    })
-
-diff_df = pd.DataFrame(diff_rows)
+pre_df  = result.window_mean(PRE_WINDOW,  name="pre_mean")
+post_df = result.window_mean(POST_WINDOW, name="post_mean")
+merge_keys = [c for c in pre_df.columns if c != "pre_mean"]
+diff_df = pre_df.merge(post_df, on=merge_keys, how="inner")
+diff_df["diff"] = diff_df["post_mean"] - diff_df["pre_mean"]
 
 # ─── Plot pre/post diff boxplot ──────────────────────────────────────────
 

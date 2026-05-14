@@ -18,6 +18,7 @@ import pandas as pd
 from databench import Project, resolve_dataset, set_theme
 from databench.analysis.locomotion import locomotion_bout_events
 from databench.types import BoutEventsTable
+from databench.utils import clean_xy
 
 set_theme()
 
@@ -69,12 +70,13 @@ with proj.io.pdf("locomotion_bouts_report.pdf") as pdf:
     for sess in group:
         time_s   = sess.time(SPEED_SOURCE)
         speed_mm = sess.signal(SPEED_SOURCE, SPEED_COL)
-        if time_s is None or speed_mm is None or time_s.size < 3:
+        if time_s is None or speed_mm is None:
             continue
 
-        time_valid       = np.isfinite(time_s) & np.isfinite(speed_mm)
-        time_s, speed_mm = time_s[time_valid], speed_mm[time_valid]
-        speed_cms        = speed_mm / SPEED_SCALE_TO_CMS
+        time_s, speed_mm = clean_xy(time_s, speed_mm)
+        if time_s.size < 3:
+            continue
+        speed_cms = speed_mm / SPEED_SCALE_TO_CMS
 
         sample_dt_s   = float(np.nanmedian(np.diff(time_s))) if time_s.size > 1 else 0.0
         recording_s   = float(time_s[-1] - time_s[0] + sample_dt_s)

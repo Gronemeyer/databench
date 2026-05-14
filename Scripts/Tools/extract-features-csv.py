@@ -17,6 +17,7 @@ import pandas as pd
 
 from databench.project import Project
 from databench.config import resolve_dataset
+from databench.utils import clean_xy
 
 # ─── Parameters ───────────────────────────────────────────────────────────
 
@@ -81,9 +82,7 @@ for out_name, candidates in EXTRACT_FEATURES.items():
         if sig is None or time is None:
             continue
 
-        valid = np.isfinite(time) & np.isfinite(sig)
-        t_v = time[valid]
-        s_v = sig[valid]
+        t_v, s_v = clean_xy(time, sig)
         for i in range(t_v.size):
             rows.append({
                 "Subject": sess.subject,

@@ -23,6 +23,7 @@ from databench.plotting.style import CONDITION_COLORS
 from databench.config import resolve_dataset
 from databench.types import BoutEventsTable
 from databench.plotting import set_theme
+from databench.utils import clean_xy
 
 set_theme()
 
@@ -40,14 +41,14 @@ def detect_bouts_long(
 ) -> pd.DataFrame:
     rows: list[dict] = []
     for (subj, ses, task), g in long.groupby(["Subject", "Session", "Task"], sort=False):
-        g = g.sort_values("time_elapsed_s")
-        t = g["time_elapsed_s"].to_numpy()
-        speed = g["speed_mm"].to_numpy() / speed_scale_to_cms
-        valid = np.isfinite(t) & np.isfinite(speed)
-        if valid.sum() < 3:
+        t, speed = clean_xy(
+            g["time_elapsed_s"].to_numpy(),
+            g["speed_mm"].to_numpy() / speed_scale_to_cms,
+        )
+        if t.size < 3:
             continue
         epochs: BoutEventsTable = locomotion_bout_events(
-            t[valid], speed[valid], min_speed_cms=min_speed_cms,
+            t, speed, min_speed_cms=min_speed_cms,
             min_duration_s=min_duration_s, merge_gap_s=merge_gap_s,
         )
         for _, r in epochs.iterrows():
@@ -78,11 +79,7 @@ def locomotion_condition_task_analysis(
     for key, g in long.groupby(key_cols, sort=False):
         subj, ses, task = key
         cond = g[condition_col].iloc[0]
-        g = g.sort_values("time_elapsed_s")
-        t = g["time_elapsed_s"].to_numpy()
-        v = g["speed_mm"].to_numpy()
-        valid = np.isfinite(t) & np.isfinite(v)
-        tt, vv = t[valid], v[valid]
+        tt, vv = clean_xy(g["time_elapsed_s"].to_numpy(), g["speed_mm"].to_numpy())
         if tt.size < 3:
             continue
 

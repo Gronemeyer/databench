@@ -60,7 +60,9 @@ SIGNALS: list[SignalSpec] = [
         signal="Mean",
         label="mesofield",
         ylabel="ΔF/F",
-        use_dff=True,
+        # meso_mean/Mean in current HFSA datasets is already ΔF/F.
+        # Do not apply a second ΔF/F normalization.
+        use_dff=False,
         color_event="#B3D9FF",
         color_mask="#457B9D",
         palette=("#457B9D", "#1D3557", "#A8DADC", "#2A9D8F",
@@ -231,9 +233,13 @@ def preprocess(raw: np.ndarray, use_dff: bool) -> np.ndarray:
     if not use_dff:
         return raw
     f0 = np.percentile(raw, 5)
-    if f0 != 0:
-        return (raw - f0) / f0
-    return raw - np.mean(raw)
+    if f0 <= 0:
+        raise ValueError(
+            "Requested dF/F normalization but 5th-percentile baseline F0 <= 0. "
+            "This usually means the signal is already baseline-normalized (e.g., "
+            "already ΔF/F). Disable dF/F for this signal."
+        )
+    return (raw - f0) / f0
 
 
 # ─── Plotting helpers ────────────────────────────────────────────────────

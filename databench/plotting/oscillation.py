@@ -71,6 +71,7 @@ def plot_oscillation_overview(
     Panels: raw signal, bandpassed+envelope, optional pupil, optional speed.
     All with burst shading.
     """
+    # 1) Prep data
     est_fs = band_hz[0] * 12.5  # rough estimate for smoothing
 
     # Prepare pupil via TraceStyle (already aligned by session.align)
@@ -100,6 +101,25 @@ def plot_oscillation_overview(
     has_speed = speed is not None and len(speed) > 0
     n_panels = 2 + int(has_pupil) + int(has_speed)
 
+    _, sl = time_mask(time, window)
+    if sl is None:
+        fig, _ = plt.subplots(
+            n_panels, 1,
+            figsize=(7.5, 1.8 * n_panels),
+            sharex=True,
+        )
+        return fig
+
+    ts = time[sl]
+    xlim = (ts[0], ts[-1])
+    n_vis = len(ts)
+
+    band_label = f"{band_hz[0]}\u2013{band_hz[1]} Hz"
+    roi_style = get_style("roi")
+    filt_style = get_style("filtered")
+    env_style = get_style("envelope")
+
+    # 2) Create canvas
     fig, axes = plt.subplots(
         n_panels, 1,
         figsize=(7.5, 1.8 * n_panels),
@@ -107,19 +127,9 @@ def plot_oscillation_overview(
     )
     axes = np.atleast_1d(axes)
 
-    t = time
-    _, sl = time_mask(t, window)
-    if sl is None:
-        return fig
-    ts = t[sl]
-    xlim = (ts[0], ts[-1])
-    n_vis = len(ts)
+    # 3) Draw panels
     fig_w = fig.get_size_inches()[0]
-
-    band_label = f"{band_hz[0]}\u2013{band_hz[1]} Hz"
-    roi_style = get_style("roi")
-    filt_style = get_style("filtered")
-    env_style = get_style("envelope")
+    t = time
 
     # Panel 1: raw ROI trace + burst shading
     ax = axes[0]
@@ -169,6 +179,7 @@ def plot_oscillation_overview(
         shade_bursts(ax, t, bursts, *xlim)
         ax.set_ylim(bottom=0)
 
+    # 4) Finalize figure
     for a in axes:
         a.set_xlim(xlim)
     axes[-1].set_xlabel("Time (s)")
@@ -199,11 +210,13 @@ def plot_oscillation_burst(
     smooth_speed_s: float = 0.2,
 ) -> plt.Figure:
     """Plot a zoomed window around a single burst."""
+    # 1) Prep data
     s, e = bursts[burst_idx]
     t_start = time[s] - pad_s
     t_end = time[e] + pad_s
     window = (t_start, t_end)
 
+    # 2) Create canvas
     fig = plot_oscillation_overview(
         time=time,
         raw_signal=raw_signal,
@@ -223,6 +236,10 @@ def plot_oscillation_burst(
         smooth_speed_s=smooth_speed_s,
         window=window,
     )
+
+    # 3) Draw panels
+
+    # 4) Finalize figure
     burst_dur = (e - s + 1) / fs
     peak_env = float(envelope[s : e + 1].max())
     fig.suptitle(
