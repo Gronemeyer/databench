@@ -32,10 +32,10 @@ SEX_COLORS   = {
 
 proj = Project(
     dataset=resolve_dataset("etoh-hfsa"),
-    run_name="session-averages",
 ).filter(exclude={"session": ["ses-11", "ses-00"]})
 
 group = proj.sessions()
+run = proj.run(name="session-averages")
 print(f"Loaded {len(group)} sessions")
 
 
@@ -117,7 +117,7 @@ fig_loco, (ax_speed, ax_dist) = plt.subplots(1, 2, figsize=(8, 3), sharey=False)
 plot_panel(ax_speed, "speed_mean_cms", "Mean Speed",     "Speed (cm/s)",  _theme_color("accent"))
 plot_panel(ax_dist,  "distance_m",     "Total Distance", "Distance (m)",  _theme_color("secondary"))
 fig_loco.tight_layout()
-proj.io.figure(fig_loco, "session_avg_locomotion.png")
+run.save_figure(fig_loco, "session_avg_locomotion.png")
 
 
 # ─── Pupil figure ────────────────────────────────────────────────────────
@@ -126,6 +126,6 @@ fig_pupil, (ax_z, ax_pct) = plt.subplots(1, 2, figsize=(8, 3), sharey=False)
 plot_panel(ax_z,   "pupil_z",            "Pupil Diameter (Z-scored)",                 "Z-score",  _theme_color("primary"))
 plot_panel(ax_pct, "pct_pupil_mean_mm",  "Pupil Diameter (% Change from Baseline)",   "% Change", _theme_color("primary"))
 fig_pupil.tight_layout()
-proj.io.figure(fig_pupil, "session_avg_pupil.png")
-
+run.save_figure(fig_pupil, "session_avg_pupil.png")
+run.finish()
 print("Done.")

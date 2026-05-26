@@ -21,8 +21,8 @@ from databench import (
     resolve_dataset,        # still exported for advanced cases
     dataset_params,         # raw [datasets.<alias>] dict
     set_theme,              # plotting theme
-    parse_session_day,      # "ses-07" -> 7
 )
+from databench.utils import session_to_int as parse_session_day   # "ses-07" -> 7
 from databench.plotting import (
     get_theme, new_figure, style_axes, style_figure,
     plot_metric_by_session, quickplot, quickplot_group,
@@ -45,16 +45,12 @@ set_theme()                       # global plot style; theme = get_theme()
 # ═════════════════════════════════════════════════════════════════════════
 section("Project construction")
 
-proj = Project(
-    "hfsa",                       # alias string from datasets.toml
-    run_name="databench-tour",
-    tag="api-demo",
-)
+proj = Project("hfsa")
+run = proj.run(name="databench-tour", tag="api-demo")
 print(repr(proj))
-print(f"output_dir : {proj.output_dir}")
-print(f"plots_dir  : {proj.plots_dir}")
-print(f"stats_dir  : {proj.stats_dir}")
-print(f"reports_dir: {proj.reports_dir}")
+print(f"run dir    : {run.dir}")
+print(f"plots_dir  : {run.plots_dir}")
+print(f"tables_dir : {run.tables_dir}")
 
 # Path form (advanced — most scripts don't need this):
 # proj_from_path = Project(resolve_dataset("hfsa"))
@@ -202,7 +198,7 @@ mask, sl = time_mask(t_clean, window=(60.0, 120.0))
 print(f"time_mask(60–120s): mask.sum()={int(mask.sum())}, slice={sl}")
 
 print(f"session_to_int('ses-07') = {session_to_int('ses-07')}")
-print(f"parse_session_day('ses-07', default=-1) = {parse_session_day('ses-07', default=-1)}")
+print(f"parse_session_day('ses-07') = {parse_session_day('ses-07')}")
 print(f"strip_prefix('ses-07', 'ses-') = {strip_prefix('ses-07', 'ses-')!r}")
 
 # get_first: pick the first present alternative from a row
@@ -244,52 +240,38 @@ ax.plot(t_pupil[:5000], pup[:5000], lw=0.8)
 ax.set_xlabel("Time (s)"); ax.set_ylabel("Pupil (mm)")
 style_axes(ax)
 style_figure(fig)
-proj.io.figure(fig, "01_new_figure.png")
+run.save_figure(fig, "01_new_figure.png")
 
 
 # Schema-aware one-liners
 fig = quickplot(sess, source="pupil")            # role -> timeseries trace
-proj.io.figure(fig, "02_quickplot_single.png")
+run.save_figure(fig, "02_quickplot_single.png")
 
 fig = quickplot_group(group, source="pupil", reducer="median")
-proj.io.figure(fig, "03_quickplot_group.png")
+run.save_figure(fig, "03_quickplot_group.png")
 
 # Per-subject longitudinal directly from a feature table
 fig, ax = new_figure()
 plot_metric_by_session(features, x="day", y="mean_speed_cms", ax=ax)
 ax.set_xlabel("Session day"); ax.set_ylabel("Mean speed (cm/s)")
 ax.legend(fontsize=8, ncol=2, frameon=False)
-proj.io.figure(fig, "04_plot_metric_by_session.png")
+run.save_figure(fig, "04_plot_metric_by_session.png")
 
 
 # ═════════════════════════════════════════════════════════════════════════
-# 12. ProjectIO — unified persistence (figure / table / json / pdf / report)
+# 12. Run — unified persistence (save_figure / save_table / save_json / pdf / finish)
 # ═════════════════════════════════════════════════════════════════════════
-section("project.io.* persistence surface")
+section("run.* persistence surface")
 
 # Tables (suffix decides format: csv / parquet / json)
-proj.io.table(features, "features.csv")
-
-# Save multiple at once
-proj.io.tables({"features": features, "labelled": labelled}, prefix="block")
-
-# Dict -> table
-stats = {
-    "mean_speed_cms": {"mean": float(features["mean_speed_cms"].mean()),
-                       "std":  float(features["mean_speed_cms"].std())},
-    "max_speed_cms":  {"mean": float(features["max_speed_cms"].mean()),
-                       "std":  float(features["max_speed_cms"].std())},
-}
-proj.io.dict_table(stats, "stats.csv")
+run.save_table(features, "features.csv")
+run.save_table(labelled, "block_labelled.csv")
 
 # Raw JSON (e.g. for parameters/sidecars)
-proj.io.json({"hello": "world", "n_sessions": len(group)}, "demo.json")
-
-# Plain text — kind chooses subdir (stats / plots / reports / config / run)
-proj.io.text("notes.txt", "Free-form text written under stats/.\n")
+run.save_json({"hello": "world", "n_sessions": len(group)}, "demo.json")
 
 # Multi-page PDF report
-with proj.io.pdf("session_overview.pdf") as pdf:
+with run.pdf("session_overview.pdf") as pdf:
     for s in list(group)[:3]:
         fig, ax = new_figure()
         try:
@@ -302,35 +284,9 @@ with proj.io.pdf("session_overview.pdf") as pdf:
         pdf.savefig(fig, bbox_inches="tight")
         plt.close(fig)
 
-# Escape-hatch for non-standard paths
-custom_path = proj.io.path("debug.txt", kind="run")
-custom_path.write_text("ad-hoc artefact\n")
-
-# Snapshot UPPER_CASE module globals (here we set one quickly):
-DEMO_PARAM = 42
-proj.io.params()
-
-# Full report (writes provenance.json + config/params.json + summary.md)
-proj.io.report(notes="Tour of databench non-analysis APIs.")
-
-
-# ═════════════════════════════════════════════════════════════════════════
-# 13. Run history — list_runs / last_run
-# ═════════════════════════════════════════════════════════════════════════
-section("Project.list_runs / Project.last_run")
-
-runs = proj.list_runs()
-print(f"total runs for this dataset: {len(runs)}")
-cols = ["script", "tag", "datetime", "has_plots", "has_stats", "has_report"]
-print(runs[cols].head(8).to_string(index=False))
-
-print(f"\nlast_run()                         = {proj.last_run()}")
-print(f"last_run(script='databench-tour')  = {proj.last_run(script='databench-tour')}")
-
-# Composes with pandas natively:
-recent = runs.query("has_plots and has_report").head(3)
-print(f"\nRuns with both plots+report (top 3):\n{recent[cols].to_string(index=False)}")
+# Full provenance snapshot (writes provenance.json + report.md)
+run.finish(notes="Tour of databench non-analysis APIs.")
 
 
 print("\nDone — explore the run directory below to see everything that was written:")
-print(f"  {proj.output_dir}")
+print(f"  {run.dir}")

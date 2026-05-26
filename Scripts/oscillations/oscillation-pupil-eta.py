@@ -51,13 +51,9 @@ BAND_LABEL = f"{OSC_BAND[0]}–{OSC_BAND[1]} Hz"
 
 # ─── Project setup ───────────────────────────────────────────────────────
 
-proj = Project(
-    dataset=DATASET,
-    run_name="osc-eta-detect-compare",
-    tag="L_VISp",
-).filter(include={"session": "ses-00"})
-
+proj = Project(dataset=DATASET).filter(include={"session": "ses-00"})
 group = proj.sessions(task=TASK)
+run = proj.run(name="osc-eta-detect-compare", tag="L_VISp")
 print(f"Selected {len(group)} sessions for task={TASK}")
 
 # ─── Stage 1: Oscillation burst detection ────────────────────────────────
@@ -109,7 +105,7 @@ n_bursts = len(events) // 2
 print(f"Detected {n_bursts} valid bursts → {len(events)} events")
 
 # Save burst events table
-proj.io.table(events, "oscillation_burst_events.csv")
+run.save_table(events, "oscillation_burst_events.csv")
 
 # ─── Stage 2: ETA at oscillation events ──────────────────────────────────
 
@@ -141,14 +137,14 @@ for event_type in eta_result.event_types:
         event=event_type,
         rois=[ETA_ROI, PUPIL_KEY],
     )
-    proj.io.figure(fig, f"osc_eta_{event_type}.svg")
+    run.save_figure(fig, f"osc_eta_{event_type}.svg")
 
 for key, df in eta_result.tables.items():
-    proj.io.table(df, f"osc_eta_detect_compare_{key}.csv")
+    run.save_table(df, f"osc_eta_detect_compare_{key}.csv")
 
 # ─── Stage 3: Oscillation detection PDF report ──────────────────────────
 
-with proj.io.pdf("oscillation_detection_report.pdf") as pdf:
+with run.pdf("oscillation_detection_report.pdf") as pdf:
     for osc_result, sess in osc_results:
         if osc_result.events.empty:
             continue
@@ -165,8 +161,7 @@ print("PDF report saved.")
 
 # ─── Report ──────────────────────────────────────────────────────────────
 
-proj.io.report(
-    eta_result,
+run.finish(
     notes=(
         f"Two-stage: (1) oscillation detection ({BAND_LABEL} Hilbert envelope, "
         f"threshold={OSC_THRESHOLD}) in {ROI_SOURCE}/{DETECT_ROI}, "

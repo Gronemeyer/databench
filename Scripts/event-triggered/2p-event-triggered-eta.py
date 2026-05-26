@@ -46,15 +46,12 @@ CONDITION_COLORS = {
 
 # ─── Project setup ────────────────────────────────────────────────────────
 
-proj = Project(
-    dataset=DATASET,
-    run_name="2p-locomotion-eta",
-    tag="ACUTEVIS",
-)
+proj = Project(dataset=DATASET)
+run = proj.run(name="2p-locomotion-eta", tag="ACUTEVIS")
 
 # ─── Compute mean suite2p trace if needed ─────────────────────────────────
 
-raw = proj._df
+raw = proj.df
 mean_col = ("suite2p", MEAN_FEATURE)
 if mean_col not in raw.columns:
     def _mean_trace(row: pd.Series) -> np.ndarray | float:
@@ -134,15 +131,14 @@ for event_type in result.event_types:
         condition_colors=CONDITION_COLORS,
         conditions=list(CONDITION_ORDER),
     )
-    proj.io.figure(fig, f"eta_locomotion_{event_type}.svg")
+    run.save_figure(fig, f"eta_locomotion_{event_type}.svg")
 
 for key, df in result.tables.items():
-    proj.io.table(df, f"eta_locomotion_{key}.csv")
+    run.save_table(df, f"eta_locomotion_{key}.csv")
 
-report_path = proj.io.report(
-    result,
+run.finish(
     notes="Event-triggered ETA for 2p ROI traces aligned to locomotion onset/offset by injection condition.",
 )
 
 print(f"Done — {len(result.events)} events across {result.events['Subject'].nunique()} subjects.")
-print(f"Report: {report_path}")
+print(f"Outputs: {run.dir}")

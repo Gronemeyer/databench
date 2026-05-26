@@ -44,8 +44,8 @@ proj = Project(
     dataset=resolve_dataset(DATASET),
     analyst="Jacob Gronemeyer",
     lab="Sipe Lab",
-    run_name="mesomap-xcorr-movie",
 )
+run = proj.run(name="mesomap-xcorr-movie")
 
 # ── Select single session ────────────────────────────────────────────────
 
@@ -60,7 +60,7 @@ print(f"Session: {sess.subject} / {sess.session}")
 # ── Discover bilateral regions ────────────────────────────────────────────
 
 strip_hemi = lambda r: r.replace("L_", "").replace("R_", "")
-available = set(sess._available_signals(SOURCE))
+available = set(sess.signals(SOURCE))
 bare_names = {strip_hemi(r) for r in available}
 bilateral = {
     b for b in bare_names
@@ -134,7 +134,7 @@ anim = FuncAnimation(fig, update, frames=n_frames, interval=1000 // FPS, blit=Tr
 
 # ── Save ──────────────────────────────────────────────────────────────────
 
-out_path = proj.plots_dir / f"{sess.subject}_{sess.session}_mesomap-ccr.mp4"
+out_path = run.plots_dir / f"{sess.subject}_{sess.session}_mesomap-ccr.mp4"
 
 try:
     writer = FFMpegWriter(fps=FPS, metadata={"title": "mesomap xcorr"})

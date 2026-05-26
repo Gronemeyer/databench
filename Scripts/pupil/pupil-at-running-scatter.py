@@ -31,11 +31,8 @@ TASK = "task-widefield"
 
 # ─── Project setup ────────────────────────────────────────────────────────
 
-proj = Project(
-    dataset=DATASET,
-    run_name="pupil-at-running",
-    tag="scatter",
-).filter(exclude={"session": ["ses-00", "ses-11"]})  
+proj = Project(dataset=DATASET).filter(exclude={"session": ["ses-00", "ses-11"]})
+run = proj.run(name="pupil-at-running", tag="scatter")  
 
 group = proj.sessions(task=TASK)
 
@@ -121,9 +118,9 @@ ax.set_ylabel("Pupil z-score at running end")
 ax.set_title("Pupil diameter (z-scored per session)", fontweight="bold")
 fig.tight_layout()
 
-proj.io.figure(fig, "pupil_diameter_running_scatter.svg")
+run.save_figure(fig, "pupil_diameter_running_scatter.svg")
 
-proj.io.report(
+run.finish(
     notes=(
         f"Pupil z-scored diameter at locomotion bout onset vs. offset scatter. "
         f"{len(pupil_at_start)} bouts sampled."

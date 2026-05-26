@@ -17,7 +17,8 @@ import pandas as pd
 from scipy import stats as sp_stats
 from scipy.signal import welch
 
-from databench import OscillationDetector, Project, resolve_dataset
+from databench import Project, resolve_dataset
+from databench.analysis.oscillation import OscillationDetector
 from databench.plotting import plot_metric_by_session, set_theme
 
 set_theme()
@@ -61,12 +62,9 @@ def make_detector(roi_name: str) -> OscillationDetector:
 
 # ─── Project setup ───────────────────────────────────────────────────────
 
-proj = Project(
-    dataset=DATASET,
-    run_name="oscillation-descriptive-stats",
-    tag=f"{ROI_NAME}-{TASK}",
-)
+proj = Project(dataset=DATASET)
 group = proj.sessions(task=TASK)
+run = proj.run(name="oscillation-descriptive-stats", tag=f"{ROI_NAME}-{TASK}")
 print(f"Selected {len(group)} sessions for task={TASK!r}; subjects={group.subjects}")
 
 
@@ -179,7 +177,7 @@ for metric, ylabel, title, fname in LONGITUDINAL_PANELS:
     ax.legend(loc="best", frameon=False)
     ax.grid(alpha=0.3)
     fig.tight_layout()
-    proj.io.figure(fig, fname)
+    run.save_figure(fig, fname)
 
 
 # ─── Per-animal distributions (histogram + KDE) ──────────────────────────
@@ -206,7 +204,7 @@ def hist_kde(metric: str, xlabel: str, fname: str) -> None:
         ax.legend(frameon=False)
     fig.suptitle(f"{ROI_NAME} | {BAND[0]}–{BAND[1]} Hz | {TASK}", y=1.02)
     fig.tight_layout()
-    proj.io.figure(fig, fname)
+    run.save_figure(fig, fname)
 
 hist_kde("duration_s", "Duration (s)",            "duration_distribution.svg")
 hist_kde("peak_env",   "Peak envelope amplitude", "peak_envelope_distribution.svg")
@@ -240,7 +238,7 @@ if not events_df.empty:
     ax_pe.set_title("Peak envelope by animal")
     fig.suptitle(f"{ROI_NAME} | {BAND[0]}–{BAND[1]} Hz | {TASK}", y=1.01)
     fig.tight_layout()
-    proj.io.figure(fig, "event_characteristics_boxplots.svg")
+    run.save_figure(fig, "event_characteristics_boxplots.svg")
 
 
 # ─── Spatial: by-ROI longitudinal + per-animal heatmaps ──────────────────
@@ -267,7 +265,7 @@ if not spatial_df.empty:
         ax.legend(frameon=False, ncol=2)
         ax.grid(alpha=0.3)
         fig.tight_layout()
-        proj.io.figure(fig, fname)
+        run.save_figure(fig, fname)
 
     for subj in subjects:
         subj_rows = spatial_df[spatial_df["Subject"] == subj]
@@ -286,7 +284,7 @@ if not spatial_df.empty:
         ax.set_title(f"{subj} — burst rate by ROI across sessions")
         fig.colorbar(im, ax=ax, label="events / min", fraction=0.03, pad=0.04)
         fig.tight_layout()
-        proj.io.figure(fig, f"spatial_heatmap_{subj}.svg")
+        run.save_figure(fig, f"spatial_heatmap_{subj}.svg")
 
 
 # ─── Tables ──────────────────────────────────────────────────────────────
@@ -306,17 +304,17 @@ descriptive_stats = (
     if not events_df.empty else pd.DataFrame()
 )
 
-proj.io.table(events_df,  "oscillation_events_all.csv")
-proj.io.table(summary_df, "session_summary.csv")
+run.save_table(events_df,  "oscillation_events_all.csv")
+run.save_table(summary_df, "session_summary.csv")
 if not descriptive_stats.empty:
-    proj.io.table(descriptive_stats, "descriptive_stats_by_animal.csv")
+    run.save_table(descriptive_stats, "descriptive_stats_by_animal.csv")
 if not spatial_df.empty:
-    proj.io.table(spatial_df, "spatial_distribution.csv")
+    run.save_table(spatial_df, "spatial_distribution.csv")
 
 
 # ─── Report ──────────────────────────────────────────────────────────────
 
-report_path = proj.io.report(
+report_path = run.finish(
     notes=(
         f"## Oscillation descriptive statistics\n\n"
         f"**Dataset:** ETOH-HFSA | **Task:** {TASK}\n\n"
@@ -329,4 +327,4 @@ report_path = proj.io.report(
     ),
 )
 print(f"Report: {report_path}")
-print(f"Outputs: {proj.io.run_dir}")
+print(f"Outputs: {run.dir}")

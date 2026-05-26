@@ -38,13 +38,9 @@ METRIC_WINDOW = (0.0, 2.0)
 
 # ─── Project setup ────────────────────────────────────────────────────────
 
-proj = Project(
-    dataset=DATASET,
-    run_name="widefield-10day",
-    tag="ROI-speed_eta-2s",
-)
-
+proj = Project(dataset=DATASET)
 group = proj.sessions(task=TASK)
+run = proj.run(name="widefield-10day", tag="ROI-speed_eta-2s")
 _log.info(f"Selected {len(group)} sessions for task={TASK}")
 
 # ─── Detect events ───────────────────────────────────────────────────────
@@ -77,7 +73,8 @@ result = eta.run(group, events)
 # ─── 1. Pooled average plots ─────────────────────────────────────────────
 
 for etype in result.event_types:
-    result.plot(event=etype, rois=list(ROI_COLUMNS)).save(f"eta_{etype}_rois_10day_avg.svg")
+    fig = result.plot(event=etype, rois=list(ROI_COLUMNS))
+    run.save_figure(fig, f"eta_{etype}_rois_10day_avg.svg")
 
 # ─── 2. Per-day heatmaps ─────────────────────────────────────────────────
 
@@ -138,7 +135,7 @@ for etype in result.event_types:
 
     fig.suptitle(f"Longitudinal ETA heatmap — {etype}")
     fig.tight_layout()
-    proj.io.figure(fig, f"eta_{etype}_longitudinal_heatmap.svg")
+    run.save_figure(fig, f"eta_{etype}_longitudinal_heatmap.svg")
 
 # ─── 3. Longitudinal metric plot ─────────────────────────────────────────
 
@@ -190,17 +187,16 @@ for etype in result.event_types:
 
     fig.suptitle(f"Longitudinal metric — {etype}")
     fig.tight_layout()
-    proj.io.figure(fig, f"eta_{etype}_longitudinal_metric.svg")
+    run.save_figure(fig, f"eta_{etype}_longitudinal_metric.svg")
 
 # ─── Save ─────────────────────────────────────────────────────────────────
 
 for key, df in result.tables.items():
-    proj.io.table(df, f"eta_widefield_10day_{key}.csv")
+    run.save_table(df, f"eta_widefield_10day_{key}.csv")
 
-proj.io.table(metric_df, "eta_longitudinal_metric.csv")
+run.save_table(metric_df, "eta_longitudinal_metric.csv")
 
-report_path = proj.io.report(
-    result,
+report_path = run.finish(
     notes=(
         "Widefield event-based ETA workflow for a longitudinal 10-day dataset. "
         "Includes pooled 10-day averages and day-wise longitudinal visualizations."
@@ -208,4 +204,4 @@ report_path = proj.io.report(
 )
 
 print(f"Done — {len(result.events)} events across {result.events['Subject'].nunique()} subjects.")
-print(f"Report: {report_path}")
+print(f"Outputs: {run.dir}")

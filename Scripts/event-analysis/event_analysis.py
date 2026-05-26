@@ -376,7 +376,7 @@ def plot_group_summary(summary_df: pd.DataFrame, spec: SignalSpec) -> plt.Figure
 # ─── Analysis runner ─────────────────────────────────────────────────────
 
 
-def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
+def run_signal(spec: SignalSpec, proj: Project, run, all_sessions) -> None:
     """Run single-session test + group analysis for one signal spec."""
     source = spec.source
     signal = spec.signal
@@ -388,12 +388,12 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
 
     # ── Discover actual signal name ──
     first_sess = all_sessions[0]
-    available_sources = first_sess._available_sources()
+    available_sources = first_sess.sources
     if source not in available_sources:
         print(f"  ✗ Source {source!r} not found. Available: {available_sources}")
         return
 
-    available_signals = first_sess._available_signals(source)
+    available_signals = first_sess.signals(source)
     if signal not in available_signals:
         if available_signals:
             signal = available_signals[0]
@@ -429,7 +429,7 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
         spec=spec,
         suptitle=f"{source}/{signal} — first {SAMPLE_DURATION_S}s comparison",
     )
-    proj.io.figure(fig_test, f"{tag}_single_session_test.png", dpi=200, tight=True)
+    run.save_figure(fig_test, f"{tag}_single_session_test.png", dpi=200)
 
     # ── Stage 2: All sessions ──
     print(f"\n── Group analysis ({tag}, {len(all_sessions)} sessions) ──")
@@ -437,7 +437,7 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
     summary_rows: list[dict] = []
     all_events: list[pd.DataFrame] = []
 
-    with proj.io.pdf(f"{tag}_event_detection.pdf") as pdf:
+    with run.pdf(f"{tag}_event_detection.pdf") as pdf:
         for sess in all_sessions:
             try:
                 t_s = sess.time(source, column=TIME_COLUMN)[1:]
@@ -492,14 +492,14 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
 
     # ── Save tables ──
     summary_df = pd.DataFrame(summary_rows)
-    proj.io.table(summary_df, f"{tag}_event_summary.csv")
+    run.save_table(summary_df, f"{tag}_event_summary.csv")
 
     if all_events:
         events_df = pd.concat(all_events, ignore_index=True)
     else:
         events_df = pd.DataFrame(columns=["Subject", "Session", "Task", "EventType", "event_time"])
 
-    proj.io.table(events_df, f"{tag}_events.csv")
+    run.save_table(events_df, f"{tag}_events.csv")
 
     n_total = len(events_df) // 2
     n_subjects = events_df["Subject"].nunique() if not events_df.empty else 0
@@ -508,7 +508,7 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
     # ── Group summary plot ──
     if not summary_df.empty and summary_df["n_events"].sum() > 0:
         fig_summary = plot_group_summary(summary_df, spec)
-        proj.io.figure(fig_summary, f"{tag}_group_summary.png", dpi=200, tight=True)
+        run.save_figure(fig_summary, f"{tag}_group_summary.png", dpi=200)
 
     return n_total, n_subjects
 
@@ -517,20 +517,15 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
 #  Main
 # ═══════════════════════════════════════════════════════════════════════════
 
-proj = Project(
-    dataset=DATASET,
-    analyst="databench",
-    run_name="event-detection",
-    tag="hfsa",
-)
-
+proj = Project(dataset=DATASET, analyst="databench")
 all_sessions = proj.sessions()
+run = proj.run(name="event-detection", tag="hfsa")
 print(f"Dataset: {DATASET.name} — {len(all_sessions)} sessions")
 
 results: dict[str, tuple] = {}
 
 for spec in SIGNALS:
-    result = run_signal(spec, proj, all_sessions)
+    result = run_signal(spec, proj, run, all_sessions)
     if result is not None:
         results[spec.label] = result
 
@@ -553,6 +548,6 @@ for spec in SIGNALS:
     else:
         notes_lines.append(f"  • {spec.source}/{spec.signal} ({spec.label}): skipped")
 
-proj.io.report(notes="\n".join(notes_lines))
+run.finish(notes="\n".join(notes_lines))
 
 print("\nDone.")

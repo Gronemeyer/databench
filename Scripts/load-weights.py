@@ -368,7 +368,8 @@ def plot_subject_traces(
     return fig
 
 
-proj = Project(dataset=DATASET, run_name=RUN_NAME, tag=TAG)
+proj = Project(dataset=DATASET)
+run = proj.run(name=RUN_NAME, tag=TAG)
 
 weights_poops = load_hfsa_weights_poops(WEIGHTS_XLSX)
 longitudinal_all = prepare_longitudinal_table(weights_poops, proj)
@@ -390,11 +391,11 @@ missing_sessions = [
     if session_n not in observed_sessions
 ]
 
-proj.io.table(longitudinal, "weights_change_longitudinal.csv")
-proj.io.table(baseline_by_subject, "weights_hab_baseline.csv")
-proj.io.table(raw_weight_longitudinal, "weights_raw_hab_to_ses10.csv")
-proj.io.table(mean_trace, "weights_change_mean_sem.csv")
-proj.io.table(mean_poop_trace, "poops_change_mean_sem.csv")
+run.save_table(longitudinal, "weights_change_longitudinal.csv")
+run.save_table(baseline_by_subject, "weights_hab_baseline.csv")
+run.save_table(raw_weight_longitudinal, "weights_raw_hab_to_ses10.csv")
+run.save_table(mean_trace, "weights_change_mean_sem.csv")
+run.save_table(mean_poop_trace, "poops_change_mean_sem.csv")
 
 figure = plot_subject_traces(
     longitudinal,
@@ -402,13 +403,13 @@ figure = plot_subject_traces(
     mean_trace,
     mean_poop_trace,
 )
-plot_path = proj.io.figure(
+plot_path = run.save_figure(
     figure,
     "weights_poops_subject_traces.svg",
     formats=("png",),
 )
 
-report_path = proj.io.report(
+report_path = run.finish(
     notes=(
         "Per-subject habituation baseline computed as mean weight over hab-01..hab-05. "
         "Figure panels include raw weight trajectories (hab through ses-10), "
@@ -425,4 +426,4 @@ if missing_sessions:
     print(f"Missing sessions in sheet (ses days): {missing_sessions}")
 print(f"Figure: {plot_path}")
 print(f"Report: {report_path}")
-print(f"Run dir: {proj.io.run_dir}")
+print(f"Run dir: {run.dir}")
