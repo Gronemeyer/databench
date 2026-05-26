@@ -13,8 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from databench.config import OutputContext, Schema
-from databench.utils import session_to_int
+from databench.config import Schema
 from databench.utils.labels import parse_session_day
 
 
@@ -106,12 +105,10 @@ class Session:
         self,
         row: pd.Series,
         index: tuple,
-        context: OutputContext,
         schema: Schema | None = None,
     ) -> None:
         self._row = row
         self._index = index
-        self._context = context
         self._schema = schema if schema is not None else Schema()
 
     @property
@@ -291,6 +288,11 @@ class Session:
             return list(self._row.index)
         t_val = self._row.get((canonical, time_column))
         t_len = len(np.asarray(t_val)) if t_val is not None else 0
+        if t_val is None:
+            t_len = 0
+        else:
+            t_arr = np.asarray(t_val)
+            t_len = t_arr.size if t_arr.ndim >= 1 else 0
         min_len = max(1, int(t_len * 0.5))
         names: list[str] = []
         for src, name in self._row.index:
@@ -300,15 +302,6 @@ class Session:
                 if arr.ndim >= 1 and arr.size >= min_len:
                     names.append(name)
         return sorted(names)
-
-    # Back-compat aliases — the leading-underscore names are kept so any
-    # internal/external caller that reached past the public API keeps
-    # working. New code should use `Session.sources` / `Session.signals`.
-    def _available_sources(self) -> list[str]:
-        return self.sources
-
-    def _available_signals(self, source: str, time_column: str = "time_elapsed_s") -> list[str]:
-        return self.signals(source, time_column=time_column)
 
     # ── Discovery ──────────────────────────────────────────────────────────
 
@@ -456,13 +449,8 @@ class SessionGroup:
     Supports iteration, indexing, and ``len()``.
     """
 
-    def __init__(
-        self,
-        sessions: list[Session],
-        context: OutputContext,
-    ) -> None:
+    def __init__(self, sessions: list[Session]) -> None:
         self._sessions = sessions
-        self._context = context
 
     def __len__(self) -> int:
         return len(self._sessions)

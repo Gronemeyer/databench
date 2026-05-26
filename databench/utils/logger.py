@@ -82,7 +82,7 @@ def setup_logging(log_dir: Optional[str] = None, level: str = "INFO") -> None:
     _configured = True
 
     try:
-        from databench._provenance import _databench_version
+        from databench.provenance import _databench_version
         get_logger("databench").info(f"databench {_databench_version()}")
     except Exception:
         pass

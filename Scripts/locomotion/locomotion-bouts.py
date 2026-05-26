@@ -17,7 +17,6 @@ import pandas as pd
 
 from databench import Project, resolve_dataset, set_theme
 from databench.analysis.locomotion import locomotion_bout_events
-from databench.types import BoutEventsTable
 from databench.utils import clean_xy
 
 set_theme()
@@ -54,9 +53,8 @@ FEATURE_LABELS = {
 
 # ─── Project setup ────────────────────────────────────────────────────────
 
-proj = Project(
-    dataset=DATASET, output_root="outputs", run_name=RUN_NAME, tag=TAG,
-).filter(exclude={"session": "ses-11"})
+proj = Project(DATASET).filter(exclude={"session": "ses-11"})
+run = proj.run(name=RUN_NAME, tag=TAG)
 group = proj.sessions(task=TASK)
 print(f"Selected {len(group)} sessions for task={TASK}")
 
@@ -66,7 +64,7 @@ print(f"Selected {len(group)} sessions for task={TASK}")
 session_rows: list[dict] = []
 bout_rows:    list[dict] = []
 
-with proj.io.pdf("locomotion_bouts_report.pdf") as pdf:
+with run.pdf("locomotion_bouts_report.pdf") as pdf:
     for sess in group:
         time_s   = sess.time(SPEED_SOURCE)
         speed_mm = sess.signal(SPEED_SOURCE, SPEED_COL)
@@ -82,7 +80,7 @@ with proj.io.pdf("locomotion_bouts_report.pdf") as pdf:
         recording_s   = float(time_s[-1] - time_s[0] + sample_dt_s)
         recording_min = recording_s / 60.0 if recording_s > 0 else np.nan
 
-        bouts: BoutEventsTable = locomotion_bout_events(
+        bouts = locomotion_bout_events(
             time_s, speed_cms,
             min_speed_cms=MIN_SPEED_CMS,
             min_duration_s=MIN_DURATION_S,
@@ -150,8 +148,8 @@ print(f"Computed {len(session_table)} sessions, {len(bout_table)} total bouts")
 
 # ─── Save tables ─────────────────────────────────────────────────────────
 
-proj.io.table(session_table, "locomotion_bouts_session_table.csv")
-proj.io.table(bout_table,    "locomotion_bouts_bout_table.csv")
+run.save_table(session_table, "locomotion_bouts_session_table.csv")
+run.save_table(bout_table,    "locomotion_bouts_bout_table.csv")
 
 
 # ─── Per-feature boxplots across sessions ───────────────────────────────
@@ -177,7 +175,7 @@ if not session_table.empty:
         ax.set_title(column)
         ax.grid(axis="y", alpha=0.3)
         fig.tight_layout()
-        proj.io.figure(fig, f"locomotion_bouts_{column}_boxplot.png", formats=formats)
+        run.save_figure(fig, f"locomotion_bouts_{column}_boxplot.png", formats=formats)
 
 
 # ─── Bout speed: early vs late days, two comparison panels ──────────────
@@ -211,15 +209,15 @@ if not bout_table.empty and "day" in bout_table.columns:
 
     if has_any:
         fig.tight_layout()
-        proj.io.figure(fig, "locomotion_bouts_speed_hist_comparison_panels.png",
-                       formats=("svg",) if EXPORT_SVG else None)
+        run.save_figure(fig, "locomotion_bouts_speed_hist_comparison_panels.png",
+                        formats=("svg",) if EXPORT_SVG else None)
     else:
         plt.close(fig)
 
 
 # ─── Report ──────────────────────────────────────────────────────────────
 
-proj.io.report(
+run.finish(
     notes=(
         f"First-order locomotion bout features for ETOH R01 pre-condition dataset.\n"
         f"{len(session_table)} sessions, {len(bout_table)} total bouts detected.\n"
