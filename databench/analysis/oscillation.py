@@ -11,8 +11,9 @@ Usage::
         band_hz=(2.0, 4.0),
     )
     result = detector.run(session)
-    proj.io.figure(result.plot_overview(aligned=aligned, pupil="pupil_diameter_mm"), "overview.svg")
-    proj.io.table(result.events, "bursts.csv")
+    run = proj.run(name="oscillation-detector")
+    run.save_figure(result.plot_overview(aligned=aligned, pupil="pupil_diameter_mm"), "overview.svg")
+    run.save_table(result.events, "bursts.csv")
 """
 from __future__ import annotations
 
@@ -28,8 +29,6 @@ from databench.signal.bandpass import bandpass_envelope, robust_threshold
 from databench.signal.epoching import detect_epochs, START_IDX, END_IDX
 
 _log = get_logger(__name__)
-
-from databench.config import OutputContext
 
 
 # ── OscillationDetector ────────────────────────────────────────────────────
@@ -129,7 +128,6 @@ class OscillationDetector:
                 signal_name=self.signal,
                 band_hz=self.band_hz,
                 fs=self.fs,
-                _context=session._context,
                 _session=session,
             )
         filtered, env = bandpass_envelope(x, self.fs, self.band_hz, self.filter_order)
@@ -174,7 +172,6 @@ class OscillationDetector:
             signal_name=self.signal,
             band_hz=self.band_hz,
             fs=self.fs,
-            _context=session._context,
             _session=session,
         )
 
@@ -255,7 +252,6 @@ class OscillationResult:
     fs: float
 
     # Private
-    _context: OutputContext = field(repr=False)
     _session: "Session" = field(repr=False)
 
     # ── Plotting ───────────────────────────────────────────────────────────
@@ -272,7 +268,7 @@ class OscillationResult:
     ):
         """Plot a multi-panel oscillation overview.
 
-        Returns a matplotlib ``Figure``.  Persist via ``project.io.figure(...)``.
+        Returns a matplotlib ``Figure``.  Persist via ``run.save_figure(...)``.
         """
         from databench.plotting.oscillation import plot_oscillation_overview
 
@@ -322,7 +318,7 @@ class OscillationResult:
         """Plot zoomed windows around the longest bursts.
 
         Returns a list of matplotlib ``Figure`` objects (longest burst first).
-        Persist via ``project.io.figure(...)``.
+        Persist via ``run.save_figure(...)``.
         """
         from databench.plotting.oscillation import plot_oscillation_burst
 
@@ -386,37 +382,3 @@ class OscillationResult:
         """Return an :class:`OscillationBurstPlotter` configured for this result."""
         from databench.plotting.oscillation import OscillationBurstPlotter
         return OscillationBurstPlotter(**kwargs)
-
-    # ── Reporting ──────────────────────────────────────────────────────────
-
-    def _report_section(self) -> "ReportSection":
-        """Build a :class:`~databench._reporting.ReportSection` for this result."""
-        from databench._reporting import ReportSection
-
-        total = float(self.events["duration_s"].sum()) if not self.events.empty else 0.0
-        notes = (
-            f"Detected **{len(self.bursts)} bursts** "
-            f"(total {total:.1f} s) in `{self.source}/{self.signal_name}` "
-            f"for {self.subject} / {self.session} / {self.task}.\n\n"
-            f"Bandpass {self.band_hz[0]}–{self.band_hz[1]} Hz, "
-            f"threshold {self.threshold_value:.5f}, fs {self.fs} Hz."
-        )
-        params = {
-            "source": self.source,
-            "signal": self.signal_name,
-            "band_hz": self.band_hz,
-            "fs": self.fs,
-            "threshold": self.threshold_value,
-            "n_bursts": len(self.bursts),
-            "total_burst_duration_s": round(total, 2),
-        }
-        # Collect any figures/tables already saved
-        figures = sorted(self._context.plots_dir.glob("*.svg")) + sorted(self._context.plots_dir.glob("*.png"))
-        tables = sorted(self._context.stats_dir.glob("*.csv"))
-        return ReportSection(
-            heading="Oscillation Detection",
-            params=params,
-            notes=notes,
-            figures=figures,
-            tables=tables,
-        )

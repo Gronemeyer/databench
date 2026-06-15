@@ -186,7 +186,7 @@ def prepare_trace_styled(
     source_values : array
         Raw signal values.
     style : TraceStyle
-        Rendering recipe (from :data:`~databench.plotting.trace_config.TRACE_STYLES`).
+        Rendering recipe (from :data:`~databench.plotting.style.trace_config.TRACE_STYLES`).
     est_fs : float, optional
         Estimated sampling rate (used for ``smooth_savgol_s`` conversion).
 

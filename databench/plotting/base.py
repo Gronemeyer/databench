@@ -19,10 +19,9 @@ class Plotter(ABC):
     Recipe sidecars
     ---------------
     Each plotter exposes :meth:`recipe`, which returns a JSON-serialisable
-    dict capturing the plotter class and its frozen config.  Pass it to
-    ``project.io.figure(fig, name, sidecar=plotter.recipe(result))`` to
-    drop a ``<name>.recipe.json`` next to the saved figure for full
-    plotting reproducibility.
+    dict capturing the plotter class and its frozen config.  Persist it
+    alongside the saved figure (e.g. ``run.save_json(plotter.recipe(result),
+    "<name>.recipe.json")``) for full plotting reproducibility.
     """
 
     name: str
