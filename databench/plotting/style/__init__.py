@@ -35,9 +35,10 @@ from databench.plotting.style.trace_config import (  # noqa: F401
 # Every style module must expose a ``Theme`` class with an ``apply()`` method.
 _REGISTRY: dict[str, str] = {
     "cold_field_v5": ".cold_field_v5",
+    "gsipe_v1": ".gsipe_v1",
 }
 
-_DEFAULT_STYLE = "cold_field_v5"
+_DEFAULT_STYLE = "gsipe_v1"
 
 
 def available() -> list[str]:
