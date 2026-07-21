@@ -24,7 +24,7 @@ set_theme()
 
 # ─── Parameters ───────────────────────────────────────────────────────────
 
-DATASET             = resolve_dataset("hfsa")
+DATASET             = resolve_dataset("etoh")
 TASK                = "task-widefield"
 SPEED_SOURCE        = "treadmill"
 SPEED_COL           = "speed_mm"
@@ -32,6 +32,7 @@ SPEED_SCALE_TO_CMS  = 10.0
 MIN_SPEED_CMS       = 0.5
 MIN_DURATION_S      = 2.0
 MERGE_GAP_S         = 0.5
+FRAME_SOURCE        = "mesomap"   # Camera clock the mask table's frame indices refer to
 RUN_NAME            = "locomotion-bouts"
 TAG                 = "canonical"
 EXPORT_SVG          = True
@@ -65,6 +66,7 @@ print(f"Selected {len(group)} sessions for task={TASK}")
 
 session_rows: list[dict] = []
 bout_rows:    list[dict] = []
+mask_rows:    list[dict] = []
 
 with proj.io.pdf("locomotion_bouts_report.pdf") as pdf:
     for sess in group:
@@ -99,6 +101,57 @@ with proj.io.pdf("locomotion_bouts_report.pdf") as pdf:
                 "mean_speed_cms": bout["mean_speed_cms"],
                 "distance_m":     bout["distance_m"],
             })
+
+        # ── Running/quiescent mask rows, indexed by camera frame ─────────
+        # Bouts are detected on the treadmill clock, then projected onto the
+        # mesofield camera frame clock so downstream scripts can slice the
+        # movie directly (see Scripts/oscillations/optic-flow.py).
+        # A bout owns the frames fully contained in its time window;
+        # quiescence is the complement, taken in frame space.
+        frame_t = sess.time(FRAME_SOURCE)
+        if frame_t is not None and np.size(frame_t) > 1:
+            frame_t  = np.asarray(frame_t, dtype=float)
+            n_frames = frame_t.size
+
+            # (onset_frame, offset_frame, mean_speed_cms) per bout; a bout that
+            # spans no complete frame is dropped.
+            run_frames: list[tuple[int, int, float]] = []
+            for _, bout in bouts.iterrows():
+                f0 = int(np.searchsorted(frame_t, bout["start_s"], side="left"))
+                f1 = int(np.searchsorted(frame_t, bout["end_s"],   side="right")) - 1
+                if f0 <= f1 and f0 < n_frames:
+                    run_frames.append((f0, min(f1, n_frames - 1),
+                                       float(bout["mean_speed_cms"])))
+
+            # Complement of the running frames within [0, n_frames - 1].
+            quiet_frames: list[tuple[int, int, float | None]] = []
+            cursor = 0
+            for f0, f1, _ in run_frames:
+                if f0 - 1 > cursor:          # skip degenerate single-frame gaps
+                    quiet_frames.append((cursor, f0 - 1, None))
+                cursor = f1 + 1
+            if cursor < n_frames - 1:
+                quiet_frames.append((cursor, n_frames - 1, None))
+
+            # Running rows carry the treadmill-derived speed verbatim;
+            # quiescent rows get their speed from the same treadmill trace.
+            for state, pairs in (("running", run_frames), ("quiescent", quiet_frames)):
+                for f0, f1, speed in pairs:
+                    t0, t1 = float(frame_t[f0]), float(frame_t[f1])
+                    if speed is None:
+                        window = (time_s >= t0) & (time_s <= t1)
+                        speed = (float(np.nanmean(np.abs(speed_cms[window])))
+                                 if window.any() else np.nan)
+                    mask_rows.append({
+                        "Subject": sess.subject, "Session": sess.session, "Task": sess.task,
+                        "state":          state,
+                        "onset_frame":    f0,
+                        "offset_frame":   f1,
+                        "onset_t":        t0,
+                        "offset_t":       t1,
+                        "duration_s":     t1 - t0,
+                        "mean_speed_cms": float(speed),
+                    })
 
         n_bouts = len(bouts)
         session_rows.append({
@@ -145,13 +198,16 @@ with proj.io.pdf("locomotion_bouts_report.pdf") as pdf:
             plt.close(fig)
 
 session_table = pd.DataFrame(session_rows)
-print(f"Computed {len(session_table)} sessions, {len(bout_table)} total bouts")
+mask_table    = pd.DataFrame(mask_rows)
+print(f"Computed {len(session_table)} sessions, {len(bout_table)} total bouts, "
+      f"{len(mask_table)} mask epochs")
 
 
 # ─── Save tables ─────────────────────────────────────────────────────────
 
 proj.io.table(session_table, "locomotion_bouts_session_table.csv")
 proj.io.table(bout_table,    "locomotion_bouts_bout_table.csv")
+proj.io.table(mask_table,    "locomotion_mask_table.csv")
 
 
 # ─── Per-feature boxplots across sessions ───────────────────────────────
