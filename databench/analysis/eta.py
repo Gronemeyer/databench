@@ -13,8 +13,9 @@ Usage::
     )
     result = eta.run(group, events)
     fig = result.plot(event="onset")
-    project.io.figure(fig, "eta_onset.svg")
-    project.io.table(result.tables["events"], "events.csv")
+    run = proj.run(name="eta")
+    run.save_figure(fig, "eta_onset.svg")
+    run.save_table(result.events, "events.csv")
 """
 from __future__ import annotations
 
@@ -29,7 +30,6 @@ import pandas as pd
 
 from databench.signal.epoching import extract_epoch_interpolated
 from databench.utils.logger import get_logger, log_run
-from databench.config import OutputContext
 
 if TYPE_CHECKING:
     from databench.types import EventsTable
@@ -464,7 +464,6 @@ class EtaAnalysis:
             event_types=event_types,
             window=self.window,
             baseline=self.baseline,
-            _context=sessions[0]._context if len(sessions) > 0 else None,
         )
 
     # ── Aggregation helpers ────────────────────────────────────────────────
@@ -530,8 +529,6 @@ class EtaResult:
     window: Tuple[float, float]
     baseline: Tuple[float, float]
 
-    _context: OutputContext | None = field(repr=False, default=None)
-
     # ── Plotting ───────────────────────────────────────────────────────────
 
     def plot(
@@ -546,7 +543,7 @@ class EtaResult:
     ):
         """Plot group-mean ± SEM ETA traces.  Returns a matplotlib ``Figure``.
 
-        Persist via ``project.io.figure(...)``.
+        Persist via ``run.save_figure(...)``.
         """
         rois_to_plot = rois if rois is not None else self.roi_columns
 
@@ -606,40 +603,6 @@ class EtaResult:
     def condition_plotter(self, **kwargs):
         """Return an :class:`EtaConditionPlotter` configured for this result."""
         return EtaConditionPlotter(**kwargs)
-
-    # ── Reporting ──────────────────────────────────────────────────────────
-
-    def _report_section(self) -> "ReportSection":
-        """Build a :class:`~databench._reporting.ReportSection` for this result."""
-        from databench._reporting import ReportSection
-
-        n_subj = int(self.events["Subject"].nunique()) if not self.events.empty else 0
-        conds = sorted(self.events["Condition"].unique().tolist()) if not self.events.empty else []
-        notes = (
-            f"**{len(self.events)} events** across **{n_subj} subjects**.\n\n"
-            f"Conditions: {', '.join(conds) if conds else 'all'}.\n\n"
-            f"ROIs: {', '.join(self.roi_columns)}."
-        )
-        params = {
-            "roi_columns": self.roi_columns,
-            "event_types": self.event_types,
-            "window": self.window,
-            "baseline": self.baseline,
-            "n_events": len(self.events),
-            "n_subjects": n_subj,
-        }
-        figures = []
-        tables = []
-        if self._context is not None:
-            figures = sorted(self._context.plots_dir.glob("*.svg")) + sorted(self._context.plots_dir.glob("*.png"))
-            tables = sorted(self._context.stats_dir.glob("*.csv"))
-        return ReportSection(
-            heading="Event-Triggered Average",
-            params=params,
-            notes=notes,
-            figures=figures,
-            tables=tables,
-        )
 
 
 # --- Plotter ---

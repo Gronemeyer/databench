@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
+from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
 
@@ -16,26 +17,27 @@ from databench import Project, resolve_dataset, set_theme
 from databench.analysis.longitudinal import longitudinal_summary
 from databench.plotting import plot_metric_by_session
 from databench.plotting.core import _theme_color
+from databench.plotting.style.gsipe_v1 import nice_ticks, ordinal_ticks
 from databench.session import SignalNotFoundError
 from databench.utils import clean_xy
 
-set_theme()
+set_theme(style="gsipe_v1")
 
 GROUP_BY_SEX = True
 SEX_COLORS   = {
-    "M": _theme_color("accent")  or "#1f77b4",
-    "F": _theme_color("primary") or "#d62728",
+    "M": _theme_color("accent"),
+    "F": _theme_color("primary"),
 }
 
 
 # ─── Project setup ───────────────────────────────────────────────────────
 
 proj = Project(
-    dataset=resolve_dataset("etoh-hfsa"),
-    run_name="session-averages",
+    dataset=resolve_dataset("hfsa"),
 ).filter(exclude={"session": ["ses-11", "ses-00"]})
 
 group = proj.sessions()
+run = proj.run(name="session-averages")
 print(f"Loaded {len(group)} sessions")
 
 
@@ -111,21 +113,26 @@ def plot_panel(ax: Axes, metric: str, title: str, ylabel: str, color: str) -> No
     ax.set_title(title)
 
 
-# ─── Locomotion figure ───────────────────────────────────────────────────
+# ─── Combined stacked figure ─────────────────────────────────────────────
 
-fig_loco, (ax_speed, ax_dist) = plt.subplots(1, 2, figsize=(8, 3), sharey=False)
-plot_panel(ax_speed, "speed_mean_cms", "Mean Speed",     "Speed (cm/s)",  _theme_color("accent"))
-plot_panel(ax_dist,  "distance_m",     "Total Distance", "Distance (m)",  _theme_color("secondary"))
-fig_loco.tight_layout()
-proj.io.figure(fig_loco, "session_avg_locomotion.png")
+fig, ((ax_speed, ax_dist), (ax_z, ax_pct)) = plt.subplots(2, 2, figsize=(7, 6), sharey=False)
 
+plot_panel(ax_speed, "speed_mean_cms", "Mean Speed", "Speed (cm/s)", _theme_color("accent"))
+plot_panel(ax_dist, "distance_m", "Total Distance", "Distance (m)", _theme_color("secondary"))
+plot_panel(ax_z, "pupil_z", "Pupil Diameter (Z-scored)", "Z-score", _theme_color("primary"))
+plot_panel(ax_pct, "pct_pupil_mean_mm", "Pupil Diameter (% Change from Baseline)", "% Change", _theme_color("primary"))
 
-# ─── Pupil figure ────────────────────────────────────────────────────────
+_days = session_table.reset_index()["day"]
+for axis in (ax_speed, ax_dist, ax_z, ax_pct):
+    ordinal_ticks(axis, _days, axis="x")  # ordinal day axis: spans day 1 → last
+    nice_ticks(axis, axis="y")
 
-fig_pupil, (ax_z, ax_pct) = plt.subplots(1, 2, figsize=(8, 3), sharey=False)
-plot_panel(ax_z,   "pupil_z",            "Pupil Diameter (Z-scored)",                 "Z-score",  _theme_color("primary"))
-plot_panel(ax_pct, "pct_pupil_mean_mm",  "Pupil Diameter (% Change from Baseline)",   "% Change", _theme_color("primary"))
-fig_pupil.tight_layout()
-proj.io.figure(fig_pupil, "session_avg_pupil.png")
-
+sex_handles = [
+    Line2D([0], [0], color=SEX_COLORS["M"], lw=2, marker="s", markersize=6, label="Male"),
+    Line2D([0], [0], color=SEX_COLORS["F"], lw=2, marker="s", markersize=6, label="Female"),
+]
+fig.legend(handles=sex_handles, loc="upper center", ncol=2, frameon=False)
+fig.tight_layout(rect=(0, 0, 1, 0.94))
+run.save_figure(fig, "session_avg_locomotion_pupil_stacked.png")
+run.finish()
 print("Done.")

@@ -9,8 +9,7 @@ from databench.project import Project
 
 dataset = resolve_dataset("etoh-hfsa")
 
-proj = Project(dataset=dataset, 
-               run_name="print-meta").filter(exclude={"Session": ["ses-00", "ses-11"], "Task": "task-movies"})
+proj = Project(dataset=dataset).filter(exclude={"Session": ["ses-00", "ses-11"], "Task": "task-movies"})
 
 pt_s = proj.df[("session_config", "PT_s")].explode().reset_index(name="PT_s")
 pt_s["PT_s"] = pd.to_numeric(pt_s["PT_s"], errors="coerce")

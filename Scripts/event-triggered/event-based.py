@@ -41,13 +41,9 @@ SESSION_TO_CONDITION = {
 
 # ─── Project setup ────────────────────────────────────────────────────────
 
-proj = Project(
-    dataset=DATASET,
-    run_name="MOp-MOs_spont",
-    tag="dev",
-)
-
+proj = Project(dataset=DATASET)
 group = proj.sessions(task=TASK)
+run = proj.run(name="MOp-MOs_spont", tag="dev")
 print(f"Selected {len(group)} sessions for task={TASK}")
 
 # ─── Detect locomotion events ────────────────────────────────────────────
@@ -84,17 +80,16 @@ event_types = PLOT_EVENT_TYPES if PLOT_EVENT_TYPES is not None else result.event
 for event_type in event_types:
     plotter = result.condition_plotter(event=event_type, rois=tuple(ROI_COLUMNS))
     fig = plotter(result)
-    proj.io.figure(fig, f"eta_{event_type}_rois.svg", sidecar=plotter.recipe(result))
+    run.save_figure(fig, f"eta_{event_type}_rois.svg")
 
 for name, df in result.tables.items():
-    proj.io.table(df, f"eta_{name}.csv")
+    run.save_table(df, f"eta_{name}.csv")
 
-report_path = proj.io.report(
-    result,
+report_path = run.finish(
     notes="Event-based ETA for mesomap ROIs aligned to locomotion onset/offset across conditions.",
 )
 
 print(f"Done — {len(result.events)} events across {result.events['Subject'].nunique()} subjects.")
 print(f"Report: {report_path}")
-print(f"Outputs in: {proj.io.run_dir}")
+print(f"Outputs in: {run.dir}")
 

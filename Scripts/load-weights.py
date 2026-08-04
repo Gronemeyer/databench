@@ -7,16 +7,23 @@ This script uses databench output handling and writes:
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
-from matplotlib.ticker import MaxNLocator
+from matplotlib.ticker import FuncFormatter
 import numpy as np
 import pandas as pd
 
-from databench import Project, resolve_dataset, set_theme
+# Make direct script execution resolve imports from this repository first.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-set_theme()
+from databench import Project, resolve_dataset, set_theme
+from databench.plotting.style.gsipe_v1 import figure_size, nice_ticks
+
+set_theme(style='gsipe_v1')
 
 # Parameters
 DATASET = resolve_dataset("etoh-hfsa")
@@ -199,10 +206,9 @@ def plot_subject_traces(
 ) -> Figure:
     """Plot raw weights, average changes, and poops in a 2x2 figure."""
     subject_labels = sorted(raw_weight_table["Subject"].dropna().astype(str).unique())
-    palette = plt.get_cmap("tab20")(np.linspace(0.0, 1.0, max(len(subject_labels), 1)))
-    color_by_subject = dict(zip(subject_labels, palette))
 
-    fig, axes = plt.subplots(2, 2, figsize=(16, 9), sharex=False)
+    # 2x2 panel: full text width, wider-than-tall panels.
+    fig, axes = plt.subplots(2, 2, figsize=figure_size("full", height=0.62), sharex=False)
     ax_raw, ax_avg = axes[0]
     ax_poops, ax_poop_avg = axes[1]
 
@@ -215,6 +221,25 @@ def plot_subject_traces(
         + [f"S{session_n}" for session_n in range(PLOT_SESSION_START, PLOT_SESSION_MAX + 1)]
     )
 
+    # Map timeline positions to H/S labels; a MaxNLocator picks a sparse
+    # subset of ticks (like the y-axis) and this formatter labels them.
+    session_labels = dict(zip(raw_ticks, raw_tick_labels))
+
+    def _session_tick(value, _pos):
+        return session_labels.get(int(round(value)), "")
+
+    # Sparse, endpoint-inclusive x ticks: a discrete session axis can't use
+    # the theme's outward-expanding nice_ticks (no session exists past the
+    # ends), so pick ~4 real session positions that include H1 and S10 — the
+    # axis still ends exactly on a labeled tick.
+    x_tick_idx = sorted(set(np.linspace(0, len(raw_ticks) - 1, 4).round().astype(int)))
+    x_ticks = [raw_ticks[i] for i in x_tick_idx]
+
+    def style_x(ax):
+        ax.xaxis.set_major_formatter(FuncFormatter(_session_tick))
+        ax.set_xticks(x_ticks)
+        ax.set_xlim(raw_ticks[0], raw_ticks[-1])
+
     for subject_label in subject_labels:
         subject_rows = weight_change_table[weight_subject_series == subject_label].sort_values("timeline_n")
         raw_subject_rows = raw_weight_table[raw_subject_series == subject_label].sort_values("timeline_n")
@@ -223,10 +248,6 @@ def plot_subject_traces(
             raw_subject_rows["timeline_n"],
             raw_subject_rows["weight_g"],
             "o-",
-            lw=1.5,
-            ms=4,
-            alpha=0.9,
-            color=color_by_subject[subject_label],
             label=subject_label,
         )
 
@@ -234,10 +255,6 @@ def plot_subject_traces(
             raw_subject_rows["timeline_n"],
             raw_subject_rows["poops"],
             "o-",
-            lw=1.5,
-            ms=4,
-            alpha=0.9,
-            color=color_by_subject[subject_label],
             drawstyle="steps-mid",
         )
 
@@ -246,8 +263,6 @@ def plot_subject_traces(
         mean_trace_table["mean_weight_change_g"],
         "o-",
         color="black",
-        lw=2.2,
-        ms=5,
         label="Mean",
         zorder=3,
     )
@@ -267,8 +282,6 @@ def plot_subject_traces(
         mean_poop_trace_table["mean_poop_change_count"],
         "o-",
         color="black",
-        lw=2.2,
-        ms=5,
         label="Mean",
         zorder=3,
     )
@@ -299,76 +312,48 @@ def plot_subject_traces(
     )
     poop_pad = max((poop_high - poop_low) * 0.1, 0.4)
 
-    ax_raw.set_title("Raw Weight: Habituation Through Session 10")
+    ax_raw.set_title("Raw weight (hab → ses-10)")
     ax_raw.set_xlabel("Session Timeline")
     ax_raw.set_ylabel("Weight (g)")
-    ax_raw.set_xticks(raw_ticks)
-    ax_raw.set_xticklabels(raw_tick_labels, rotation=0)
-    ax_raw.set_xlim(raw_ticks[0] - 0.5, raw_ticks[-1] + 0.5)
-    ax_raw.grid(alpha=0.3)
+    style_x(ax_raw)
+    nice_ticks(ax_raw, axis="y")
     ax_raw.axvline(0.0, color="black", lw=1.0, alpha=0.4)
 
-    ax_avg.set_title(
-        f"Average Weight Change from Hab-{BASELINE_HAB_MIN:02d}..{BASELINE_HAB_MAX:02d} Baseline"
-    )
+    ax_avg.set_title("Mean weight change vs baseline")
     ax_avg.set_xlabel("Session Timeline")
     ax_avg.set_ylabel("Weight Change (g)")
-    ax_avg.set_xticks(raw_ticks)
-    ax_avg.set_xticklabels(raw_tick_labels, rotation=0)
-    ax_avg.set_xlim(raw_ticks[0] - 0.5, raw_ticks[-1] + 0.5)
+    style_x(ax_avg)
     ax_avg.set_ylim(mean_low - mean_pad, mean_high + mean_pad)
-    ax_avg.grid(alpha=0.3)
+    nice_ticks(ax_avg, axis="y")
     ax_avg.axhline(0.0, color="black", lw=1.0, alpha=0.6)
     ax_avg.axvline(0.0, color="black", lw=1.0, alpha=0.4)
 
-    ax_poops.set_title("Poops: Habituation Through Session 10")
+    ax_poops.set_title("Poops (hab → ses-10)")
     ax_poops.set_xlabel("Session Timeline")
     ax_poops.set_ylabel("Count")
-    ax_poops.set_xticks(raw_ticks)
-    ax_poops.set_xticklabels(raw_tick_labels, rotation=0)
-    ax_poops.set_xlim(raw_ticks[0] - 0.5, raw_ticks[-1] + 0.5)
-    ax_poops.grid(alpha=0.3)
+    style_x(ax_poops)
     ax_poops.axvline(0.0, color="black", lw=1.0, alpha=0.4)
-    ax_poops.yaxis.set_major_locator(MaxNLocator(integer=True))
+    nice_ticks(ax_poops, axis="y", integer=True)
 
-    ax_poop_avg.set_title(
-        f"Average Poop Change from Hab-{BASELINE_HAB_MIN:02d}..{BASELINE_HAB_MAX:02d} Baseline"
-    )
+    ax_poop_avg.set_title("Mean poop change vs baseline")
     ax_poop_avg.set_xlabel("Session Timeline")
     ax_poop_avg.set_ylabel("Poop Change (count)")
-    ax_poop_avg.set_xticks(raw_ticks)
-    ax_poop_avg.set_xticklabels(raw_tick_labels, rotation=0)
-    ax_poop_avg.set_xlim(raw_ticks[0] - 0.5, raw_ticks[-1] + 0.5)
+    style_x(ax_poop_avg)
     ax_poop_avg.set_ylim(poop_low - poop_pad, poop_high + poop_pad)
-    ax_poop_avg.grid(alpha=0.3)
+    nice_ticks(ax_poop_avg, axis="y")
     ax_poop_avg.axhline(0.0, color="black", lw=1.0, alpha=0.6)
     ax_poop_avg.axvline(0.0, color="black", lw=1.0, alpha=0.4)
-    ax_poop_avg.yaxis.set_major_locator(MaxNLocator(integer=True))
-
-    for ax in (ax_raw, ax_avg, ax_poops, ax_poop_avg):
-        ax.tick_params(axis="x", labelsize=8)
-        ax.tick_params(axis="y", labelsize=8)
 
     handles, labels = ax_raw.get_legend_handles_labels()
     if handles:
-        ax_poops.legend(
-            handles,
-            labels,
-            title="Subject",
-            loc="upper left",
-            frameon=False,
-            fontsize=8,
-            title_fontsize=9,
-            borderaxespad=0.3,
-        )
-        fig.tight_layout(pad=1.1, w_pad=1.2, h_pad=1.4)
-    else:
-        fig.tight_layout(pad=1.1, w_pad=1.2, h_pad=1.4)
+        ax_poops.legend(handles, labels, title="Subject", loc="upper left")
 
+    # Layout is handled by the theme's constrained_layout default.
     return fig
 
 
-proj = Project(dataset=DATASET, run_name=RUN_NAME, tag=TAG)
+proj = Project(dataset=DATASET)
+run = proj.run(name=RUN_NAME, tag=TAG)
 
 weights_poops = load_hfsa_weights_poops(WEIGHTS_XLSX)
 longitudinal_all = prepare_longitudinal_table(weights_poops, proj)
@@ -390,11 +375,11 @@ missing_sessions = [
     if session_n not in observed_sessions
 ]
 
-proj.io.table(longitudinal, "weights_change_longitudinal.csv")
-proj.io.table(baseline_by_subject, "weights_hab_baseline.csv")
-proj.io.table(raw_weight_longitudinal, "weights_raw_hab_to_ses10.csv")
-proj.io.table(mean_trace, "weights_change_mean_sem.csv")
-proj.io.table(mean_poop_trace, "poops_change_mean_sem.csv")
+run.save_table(longitudinal, "weights_change_longitudinal.csv")
+run.save_table(baseline_by_subject, "weights_hab_baseline.csv")
+run.save_table(raw_weight_longitudinal, "weights_raw_hab_to_ses10.csv")
+run.save_table(mean_trace, "weights_change_mean_sem.csv")
+run.save_table(mean_poop_trace, "poops_change_mean_sem.csv")
 
 figure = plot_subject_traces(
     longitudinal,
@@ -402,13 +387,13 @@ figure = plot_subject_traces(
     mean_trace,
     mean_poop_trace,
 )
-plot_path = proj.io.figure(
+plot_path = run.save_figure(
     figure,
     "weights_poops_subject_traces.svg",
     formats=("png",),
 )
 
-report_path = proj.io.report(
+report_path = run.finish(
     notes=(
         "Per-subject habituation baseline computed as mean weight over hab-01..hab-05. "
         "Figure panels include raw weight trajectories (hab through ses-10), "
@@ -425,4 +410,4 @@ if missing_sessions:
     print(f"Missing sessions in sheet (ses days): {missing_sessions}")
 print(f"Figure: {plot_path}")
 print(f"Report: {report_path}")
-print(f"Run dir: {proj.io.run_dir}")
+print(f"Run dir: {run.dir}")

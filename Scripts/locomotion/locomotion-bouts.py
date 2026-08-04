@@ -19,7 +19,6 @@ import pandas as pd
 
 from databench import Project, resolve_dataset, set_theme
 from databench.analysis.locomotion import locomotion_bout_events
-from databench.types import BoutEventsTable
 from databench.utils import clean_xy
 
 set_theme()
@@ -99,9 +98,8 @@ def dataqueue_traces(sess):
 
 # ─── Project setup ────────────────────────────────────────────────────────
 
-proj = Project(
-    dataset=DATASET, output_root="outputs", run_name=RUN_NAME, tag=TAG,
-).filter(exclude={"session": "ses-11"})
+proj = Project(DATASET).filter(exclude={"session": "ses-11"})
+run = proj.run(name=RUN_NAME, tag=TAG)
 group = proj.sessions(task=TASK)
 print(f"Selected {len(group)} sessions for task={TASK}")
 
@@ -113,7 +111,7 @@ bout_rows:    list[dict] = []
 mask_rows:    list[dict] = []
 mask_qc:      list[dict] = []
 
-with proj.io.pdf("locomotion_bouts_report.pdf") as pdf:
+with run.pdf("locomotion_bouts_report.pdf") as pdf:
     for sess in group:
         time_s   = sess.time(SPEED_SOURCE)
         speed_mm = sess.signal(SPEED_SOURCE, SPEED_COL)
@@ -129,7 +127,7 @@ with proj.io.pdf("locomotion_bouts_report.pdf") as pdf:
         recording_s   = float(time_s[-1] - time_s[0] + sample_dt_s)
         recording_min = recording_s / 60.0 if recording_s > 0 else np.nan
 
-        bouts: BoutEventsTable = locomotion_bout_events(
+        bouts = locomotion_bout_events(
             time_s, speed_cms,
             min_speed_cms=MIN_SPEED_CMS,
             min_duration_s=MIN_DURATION_S,
@@ -263,7 +261,6 @@ with proj.io.pdf("locomotion_bouts_report.pdf") as pdf:
         ax.set_title(sess.label)
         ax.set_xlabel("Time (s)")
         ax.set_ylabel("Speed (cm/s)")
-        ax.grid(True, alpha=0.2)
         ax.legend(frameon=False)
         pdf.savefig(fig, bbox_inches="tight")
         plt.close(fig)
@@ -357,9 +354,7 @@ if not session_table.empty:
         ax.set_ylabel(ylabel)
         ax.set_xlabel("Session (days)")
         ax.set_title(column)
-        ax.grid(axis="y", alpha=0.3)
-        fig.tight_layout()
-        proj.io.figure(fig, f"locomotion_bouts_{column}_boxplot.png", formats=formats)
+        run.save_figure(fig, f"locomotion_bouts_{column}_boxplot.png", formats=formats)
 
 
 # ─── Bout speed: early vs late days, two comparison panels ──────────────
@@ -368,9 +363,8 @@ if not bout_table.empty and "day" in bout_table.columns:
     bins    = np.arange(0.0, 25.5, 0.5)
     has_any = False
 
-    fig, axes = plt.subplots(1, 2, figsize=(9.2, 3.6), facecolor="#d9d9d9", sharey=True)
+    fig, axes = plt.subplots(1, 2, figsize=(9.2, 3.6), sharey=True)
     for ax, (early_days, late_days) in zip(axes, DAY_COMPARISONS):
-        ax.set_facecolor("#d9d9d9")
         early = bout_table.loc[bout_table["day"].between(*early_days), "mean_speed_cms"].dropna()
         late  = bout_table.loc[bout_table["day"].between(*late_days),  "mean_speed_cms"].dropna()
 
@@ -392,16 +386,15 @@ if not bout_table.empty and "day" in bout_table.columns:
     axes[0].set_ylabel("Number of bouts (#)")
 
     if has_any:
-        fig.tight_layout()
-        proj.io.figure(fig, "locomotion_bouts_speed_hist_comparison_panels.png",
-                       formats=("svg",) if EXPORT_SVG else None)
+        run.save_figure(fig, "locomotion_bouts_speed_hist_comparison_panels.png",
+                        formats=("svg",) if EXPORT_SVG else None)
     else:
         plt.close(fig)
 
 
 # ─── Report ──────────────────────────────────────────────────────────────
 
-proj.io.report(
+run.finish(
     notes=(
         f"First-order locomotion bout features for ETOH R01 pre-condition dataset.\n"
         f"{len(session_table)} sessions, {len(bout_table)} total bouts detected.\n"

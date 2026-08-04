@@ -272,7 +272,6 @@ def _plot_panel(axes_pair, t_s, det, title, spec):
     ax1.axhline(det["low_th"], color="#F4A261", ls="--", lw=0.9, alpha=0.85,
                 label=f"low thr. ({LOW_PERCENTILE:.0f}th %ile)")
     ax1.set_title(title, fontsize=11, fontweight="bold", pad=5)
-    ax1.tick_params(labelsize=10)
 
     ax2.fill_between(t_clip, ev_mask_clip.astype(float), step="mid",
                      color=spec.color_mask, alpha=0.6, lw=0)
@@ -280,7 +279,6 @@ def _plot_panel(axes_pair, t_s, det, title, spec):
     ax2.set_yticks([0, 1])
     ax2.set_yticklabels(["off", "on"], fontsize=10)
     ax2.set_xlabel("Time (s)", fontsize=11)
-    ax2.tick_params(labelsize=10)
 
 
 def plot_single_session_comparison(
@@ -293,7 +291,7 @@ def plot_single_session_comparison(
     fig, axes = plt.subplots(
         2, 2, figsize=(14, 4.0),
         gridspec_kw={"height_ratios": [4, 1], "hspace": 0.08, "wspace": 0.02},
-        facecolor="white", layout="constrained",
+        layout="constrained",
     )
     # axes[row, col]: top row = traces, bottom row = event masks
     _plot_panel((axes[0, 0], axes[1, 0]), t_s_a, det_a, label_a, spec)
@@ -331,7 +329,7 @@ def plot_session_page(
     fig, (ax1, ax2) = plt.subplots(
         2, 1, figsize=(7, 3.2), sharex=True,
         gridspec_kw={"height_ratios": [4, 1], "hspace": 0.06},
-        facecolor="white", layout="constrained",
+        layout="constrained",
     )
     _plot_panel((ax1, ax2), t_s, det, title, spec)
     ax1.set_ylabel(spec.ylabel, fontsize=11)
@@ -346,7 +344,7 @@ def plot_session_page(
 
 def plot_group_summary(summary_df: pd.DataFrame, spec: SignalSpec) -> plt.Figure:
     """Bar chart of event counts and mean durations per subject (grant-ready)."""
-    fig, axes = plt.subplots(1, 2, figsize=(7, 3.5), facecolor="white")
+    fig, axes = plt.subplots(1, 2, figsize=(7, 3.5))
 
     palette = list(spec.palette)
     counts = summary_df.groupby("Subject")["n_events"].sum().sort_index()
@@ -355,28 +353,25 @@ def plot_group_summary(summary_df: pd.DataFrame, spec: SignalSpec) -> plt.Figure
     bars1 = axes[0].bar(counts.index, counts.values, color=colors, edgecolor="white", lw=0.5)
     axes[0].set_ylabel("Total events", fontsize=11)
     axes[0].set_title("Event count per subject", fontsize=12, fontweight="bold")
-    axes[0].tick_params(axis="x", rotation=45, labelsize=10)
-    axes[0].tick_params(axis="y", labelsize=10)
+    axes[0].tick_params(axis="x", rotation=45)
     axes[0].bar_label(bars1, fontsize=9, padding=2)
 
     mean_dur = summary_df.groupby("Subject")["mean_duration_s"].mean().sort_index()
     bars2 = axes[1].bar(mean_dur.index, mean_dur.values, color=colors, edgecolor="white", lw=0.5)
     axes[1].set_ylabel("Mean duration (s)", fontsize=11)
     axes[1].set_title("Mean event duration per subject", fontsize=12, fontweight="bold")
-    axes[1].tick_params(axis="x", rotation=45, labelsize=10)
-    axes[1].tick_params(axis="y", labelsize=10)
+    axes[1].tick_params(axis="x", rotation=45)
     axes[1].bar_label(bars2, fmt="%.1f", fontsize=9, padding=2)
 
     fig.suptitle(f"{spec.label} event detection — group summary",
                  fontsize=13, fontweight="bold", y=1.01)
-    fig.tight_layout()
     return fig
 
 
 # ─── Analysis runner ─────────────────────────────────────────────────────
 
 
-def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
+def run_signal(spec: SignalSpec, proj: Project, run, all_sessions) -> None:
     """Run single-session test + group analysis for one signal spec."""
     source = spec.source
     signal = spec.signal
@@ -388,12 +383,12 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
 
     # ── Discover actual signal name ──
     first_sess = all_sessions[0]
-    available_sources = first_sess._available_sources()
+    available_sources = first_sess.sources
     if source not in available_sources:
         print(f"  ✗ Source {source!r} not found. Available: {available_sources}")
         return
 
-    available_signals = first_sess._available_signals(source)
+    available_signals = first_sess.signals(source)
     if signal not in available_signals:
         if available_signals:
             signal = available_signals[0]
@@ -429,7 +424,7 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
         spec=spec,
         suptitle=f"{source}/{signal} — first {SAMPLE_DURATION_S}s comparison",
     )
-    proj.io.figure(fig_test, f"{tag}_single_session_test.png", dpi=200, tight=True)
+    run.save_figure(fig_test, f"{tag}_single_session_test.png", dpi=200)
 
     # ── Stage 2: All sessions ──
     print(f"\n── Group analysis ({tag}, {len(all_sessions)} sessions) ──")
@@ -437,7 +432,7 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
     summary_rows: list[dict] = []
     all_events: list[pd.DataFrame] = []
 
-    with proj.io.pdf(f"{tag}_event_detection.pdf") as pdf:
+    with run.pdf(f"{tag}_event_detection.pdf") as pdf:
         for sess in all_sessions:
             try:
                 t_s = sess.time(source, column=TIME_COLUMN)[1:]
@@ -492,14 +487,14 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
 
     # ── Save tables ──
     summary_df = pd.DataFrame(summary_rows)
-    proj.io.table(summary_df, f"{tag}_event_summary.csv")
+    run.save_table(summary_df, f"{tag}_event_summary.csv")
 
     if all_events:
         events_df = pd.concat(all_events, ignore_index=True)
     else:
         events_df = pd.DataFrame(columns=["Subject", "Session", "Task", "EventType", "event_time"])
 
-    proj.io.table(events_df, f"{tag}_events.csv")
+    run.save_table(events_df, f"{tag}_events.csv")
 
     n_total = len(events_df) // 2
     n_subjects = events_df["Subject"].nunique() if not events_df.empty else 0
@@ -508,7 +503,7 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
     # ── Group summary plot ──
     if not summary_df.empty and summary_df["n_events"].sum() > 0:
         fig_summary = plot_group_summary(summary_df, spec)
-        proj.io.figure(fig_summary, f"{tag}_group_summary.png", dpi=200, tight=True)
+        run.save_figure(fig_summary, f"{tag}_group_summary.png", dpi=200)
 
     return n_total, n_subjects
 
@@ -517,20 +512,15 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
 #  Main
 # ═══════════════════════════════════════════════════════════════════════════
 
-proj = Project(
-    dataset=DATASET,
-    analyst="databench",
-    run_name="event-detection",
-    tag="hfsa",
-)
-
+proj = Project(dataset=DATASET, analyst="databench")
 all_sessions = proj.sessions()
+run = proj.run(name="event-detection", tag="hfsa")
 print(f"Dataset: {DATASET.name} — {len(all_sessions)} sessions")
 
 results: dict[str, tuple] = {}
 
 for spec in SIGNALS:
-    result = run_signal(spec, proj, all_sessions)
+    result = run_signal(spec, proj, run, all_sessions)
     if result is not None:
         results[spec.label] = result
 
@@ -553,6 +543,6 @@ for spec in SIGNALS:
     else:
         notes_lines.append(f"  • {spec.source}/{spec.signal} ({spec.label}): skipped")
 
-proj.io.report(notes="\n".join(notes_lines))
+run.finish(notes="\n".join(notes_lines))
 
 print("\nDone.")

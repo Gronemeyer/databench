@@ -37,11 +37,7 @@ BASELINE = (-2.0, -1.0)
 
 # ─── Project setup ────────────────────────────────────────────────────────
 
-proj = Project(
-    dataset=DATASET,
-    run_name="eta-prepost",
-    tag="vis-primary-secondary",
-)
+proj = Project(dataset=DATASET)
 
 # Per-dataset metadata pulled from datasets.toml [datasets.etoh]
 SESSION_TO_CONDITION = proj.params["session_map"]
@@ -49,6 +45,7 @@ CONDITION_ORDER = tuple(proj.params["condition_order"])
 CONDITION_COLORS = proj.params["condition_colors"]
 
 group = proj.sessions(task=TASK)
+run = proj.run(name="eta-prepost", tag="vis-primary-secondary")
 
 # ─── Detect events & add conditions ──────────────────────────────────────
 
@@ -123,25 +120,22 @@ for etype in result.event_types:
         ax.axhline(0, color="gray", lw=0.8, ls="--")
         if ax is axes[0]:
             ax.set_ylabel("Post − Pre ΔF/F")
-        ax.grid(axis="y", alpha=0.3)
 
     fig.suptitle(f"ETA Pre/Post Diff — {etype}")
-    fig.tight_layout()
-    proj.io.figure(fig, f"eta_prepost_diff_{etype}.svg")
+    run.save_figure(fig, f"eta_prepost_diff_{etype}.svg")
 
 # ─── Save ─────────────────────────────────────────────────────────────────
 
-proj.io.table(diff_df, "eta_prepost_diff.csv")
+run.save_table(diff_df, "eta_prepost_diff.csv")
 for key, df in result.tables.items():
-    proj.io.table(df, f"eta_prepost_{key}.csv")
+    run.save_table(df, f"eta_prepost_{key}.csv")
 
 # Standard ETA plots
 for etype in result.event_types:
     fig = result.plot(event=etype, rois=list(ROI_COLUMNS))
-    proj.io.figure(fig, f"eta_{etype}_traces.svg")
+    run.save_figure(fig, f"eta_{etype}_traces.svg")
 
-proj.io.report(
-    result,
+run.finish(
     notes=(
         f"ETA pre/post difference comparison across conditions for locomotion events. "
         f"Pre window: {PRE_WINDOW}, Post window: {POST_WINDOW}."

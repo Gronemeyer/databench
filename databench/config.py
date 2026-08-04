@@ -293,30 +293,3 @@ def _resolve_dataset_alias_for_output(input_path: Path | None = None) -> str:
         return default_alias
 
     return "dataset"
-
-
-# -- Output context (new API) -----------------------------------------------
-
-@dataclass(frozen=True)
-class OutputContext:
-    """Lightweight value object carrying output directory information.
-
-    Built internally by :class:`~databench.project.Project`.
-    Not intended for direct user construction.
-    """
-
-    run_dir: Path
-    plots_dir: Path
-    stats_dir: Path
-    reports_dir: Path
-    config_dir: Path
-    analyst: str = ""
-    lab: str = ""
-    run_name: str = "databench"
-    tag: str = ""
-    script_name: str = field(default_factory=_detect_script_name)
-
-    def ensure_dirs(self) -> None:
-        """Create all output directories if they don't exist."""
-        for d in (self.run_dir, self.plots_dir, self.stats_dir, self.reports_dir, self.config_dir):
-            d.mkdir(parents=True, exist_ok=True)

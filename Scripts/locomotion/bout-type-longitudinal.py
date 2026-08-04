@@ -22,7 +22,10 @@ import pandas as pd
 from databench.project import Project
 from databench.config import resolve_dataset
 from databench.analysis.locomotion import locomotion_bout_events
-from databench.types import BoutEventsTable
+try:
+    from databench.types import BoutEventsTable
+except ImportError:
+    BoutEventsTable = None  # type: ignore
 from databench.utils import clean_xy, get_first, session_to_int
 
 # ── Parameters ──────────────────────────────────────────────────────────────
@@ -277,7 +280,7 @@ def plot_line_with_errorbars(
 def plot_bout_proportions(
     prop_df: pd.DataFrame,
     *,
-    project: Project | None = None,
+    run=None,
 ) -> tuple[plt.Figure, tuple[plt.Axes, plt.Axes]]:
     """Create both panels side-by-side (c and h)."""
     fig, (ax_c, ax_h) = plt.subplots(1, 2, figsize=(14, 5))
@@ -285,10 +288,8 @@ def plot_bout_proportions(
     plot_stacked_bar(prop_df, ax=ax_c, title="c")
     plot_line_with_errorbars(prop_df, ax=ax_h, title="h")
 
-    fig.tight_layout(w_pad=3)
-
-    if project is not None:
-        png_path = project.io.figure(
+    if run is not None:
+        png_path = run.save_figure(
             fig,
             f"{OUTPUT_PREFIX}_proportions.png",
             dpi=300,
@@ -305,10 +306,8 @@ if __name__ == "__main__":
 
     proj = Project(
         dataset=DATASET,
-        output_root=OUTPUT_ROOT,
-        run_name=RUN_NAME,
-        tag=TAG,
     ).filter(drop_rows=(("STREHAB07", "ses-11"),))
+    run = proj.run(name=RUN_NAME, tag=TAG)
 
     # Extract bout proportions from all sessions
     prop_df = extract_bout_proportions(proj.df)
@@ -322,10 +321,11 @@ if __name__ == "__main__":
           f"{int(prop_df['session_n'].nunique())} days.")
 
     # Save proportions table via Project output API
-    table_path = proj.save_table(prop_df, f"{OUTPUT_PREFIX}_proportions.csv")
+    table_path = run.save_table(prop_df, f"{OUTPUT_PREFIX}_proportions.csv")
     print(f"Saved table to {table_path}")
-    print(f"Project output dir: {proj.output_dir}")
+    print(f"Run dir: {run.dir}")
 
     # Create both plots
-    fig, (ax_c, ax_h) = plot_bout_proportions(prop_df, project=proj)
+    fig, (ax_c, ax_h) = plot_bout_proportions(prop_df, run=run)
+    run.finish()
     plt.show()

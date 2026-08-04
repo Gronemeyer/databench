@@ -26,6 +26,7 @@ from databench.analysis.pupil_baseline import (
     compute_session1_baselines,
 )
 from databench.plotting import set_theme
+from databench.plotting.style.gsipe_v1 import DEFAULT_CYCLE
 from databench.utils import session_to_int
 
 set_theme()
@@ -47,11 +48,9 @@ TAG                      = "session1-anchor"
 
 # ─── Project setup ────────────────────────────────────────────────────────
 
-proj = Project(
-    dataset=DATASET, run_name=RUN_NAME, tag=TAG,
-).filter(exclude={"session": ["ses-00", "ses-11"]})
-
+proj = Project(dataset=DATASET).filter(exclude={"session": ["ses-00", "ses-11"]})
 group = proj.sessions(task=TASK)
+run = proj.run(name=RUN_NAME, tag=TAG)
 print(f"Selected {len(group)} sessions for task={TASK!r}")
 
 # ─── Compute per-subject baselines from ses-01 quiescence ────────────────
@@ -69,7 +68,7 @@ baselines = compute_session1_baselines(
 )
 print(f"Computed baselines for {len(baselines)} subjects:")
 print(baselines.to_string(index=False))
-proj.io.table(baselines, "pupil_baselines_per_subject.csv")
+run.save_table(baselines, "pupil_baselines_per_subject.csv")
 
 # ─── Apply normalization across every session ─────────────────────────────
 
@@ -84,7 +83,7 @@ print(
     f"{long['Subject'].nunique()} subjects × "
     f"{long['Session'].nunique()} sessions."
 )
-proj.io.table(long, "pupil_baseline_normalized_long.csv")
+run.save_table(long, "pupil_baseline_normalized_long.csv")
 
 # ─── Plot per-subject pupil_norm trajectories across sessions ────────────
 
@@ -98,7 +97,7 @@ per_session = (
 
 fig, ax = plt.subplots(figsize=(8.0, 4.5))
 subjects = sorted(per_session["Subject"].unique())
-palette = plt.cm.tab10(np.linspace(0.0, 1.0, max(len(subjects), 1)))
+palette = [DEFAULT_CYCLE[i % len(DEFAULT_CYCLE)] for i in range(max(len(subjects), 1))]
 for color, subj in zip(palette, subjects):
     sub = per_session[per_session["Subject"] == subj]
     ax.plot(
@@ -122,13 +121,12 @@ ax.set_ylabel("Pupil (fraction of ses-01 quiescent baseline)")
 ax.set_title("Pupil habituation across sessions (session-1 anchor)",
              fontweight="bold")
 ax.legend(fontsize=8, ncol=2, frameon=False)
-fig.tight_layout()
 
-proj.io.figure(fig, "pupil_baseline_trajectories.svg", formats=("png",))
+run.save_figure(fig, "pupil_baseline_trajectories.svg", formats=("png",))
 
 # ─── Report ───────────────────────────────────────────────────────────────
 
-proj.io.report(
+run.finish(
     notes=(
         "Pupil baseline-normalization (session-1 anchor).\n"
         "\n"

@@ -9,11 +9,12 @@ description = "Minimal, reproducible analysis/plotting toolkit for multiindex da
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "loguru",
+    "matplotlib",
+    "mesokit-schema",
     "numpy",
     "pandas",
     "scipy",
-    "matplotlib",
-    "loguru",
 ]
 
 [tool.setuptools.packages.find]

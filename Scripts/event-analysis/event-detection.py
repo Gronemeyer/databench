@@ -980,7 +980,6 @@ def plot_group_summary(summary_df: pd.DataFrame, spec: SignalSpec) -> plt.Figure
     _style_axis(axes[1])
 
     fig.suptitle(f"{spec.label} event detection — group summary", fontweight="bold")
-    fig.tight_layout()
     return fig
 
 
@@ -1055,14 +1054,13 @@ def plot_cross_animal_comparison(
         f"{spec.label} — cross-animal event comparison (z-scored amplitudes)",
         fontweight="bold",
     )
-    fig.tight_layout()
     return fig
 
 
 # ─── Analysis runner ─────────────────────────────────────────────────────
 
 
-def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
+def run_signal(spec: SignalSpec, proj: Project, run, all_sessions) -> None:
     """Run single-session test + group analysis for one signal spec."""
     source = spec.source
     signal = spec.signal
@@ -1074,12 +1072,12 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
 
     # ── Discover actual signal name ──
     first_sess = all_sessions[0]
-    available_sources = first_sess._available_sources()
+    available_sources = first_sess.sources
     if source not in available_sources:
         print(f"  ✗ Source {source!r} not found. Available: {available_sources}")
         return
 
-    available_signals = first_sess._available_signals(source)
+    available_signals = first_sess.signals(source)
     if signal not in available_signals:
         if available_signals:
             signal = available_signals[0]
@@ -1124,8 +1122,10 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
         print(f"  Durations (s): min={min(durs):.2f}, max={max(durs):.2f}, "
               f"mean={np.mean(durs):.2f}")
 
-    stats_dir = proj.stats_dir
-    plots_dir = proj.plots_dir
+    stats_dir = run.tables_dir
+    plots_dir = run.plots_dir
+    stats_dir.mkdir(parents=True, exist_ok=True)
+    plots_dir.mkdir(parents=True, exist_ok=True)
 
     fig_test = plot_single_session(
         t_s, trace, det,
@@ -1145,7 +1145,7 @@ def run_signal(spec: SignalSpec, proj: Project, all_sessions) -> None:
     comparison_sessions = ("ses-01", "ses-10")
     comparison_data_by_subject: dict[str, dict[str, dict | None]] = {}
 
-    report_pdf = proj.reports_dir / f"{tag}_event_detection.pdf"
+    report_pdf = run.plots_dir / f"{tag}_event_detection.pdf"
     report_pdf.parent.mkdir(parents=True, exist_ok=True)
 
     with PdfPages(report_pdf) as pdf:
@@ -1361,12 +1361,7 @@ Examples:
 
 args = parse_args()
 
-proj = Project(
-    dataset=DATASET,
-    analyst="databench",
-    run_name="event-detection",
-    tag="hfsa",
-).filter(drop_rows=[
+proj = Project(DATASET, analyst="databench").filter(drop_rows=[
     {"Session": "ses-11"},
     {"Session": "ses-00"},
     {"Subject": "STREHAB14", "Session": "ses-01"},
@@ -1382,6 +1377,7 @@ elif args.task:
     proj = proj.filter(Task=args.task)
 
 all_sessions = proj.sessions()
+run = proj.run(name="event-detection", tag="hfsa")
 print(f"Dataset: {DATASET.name} — {len(all_sessions)} sessions")
 if args.subject or args.session:
     print(f"  Filtered: subject={args.subject or 'all'}, "
@@ -1390,7 +1386,7 @@ if args.subject or args.session:
 results: dict[str, tuple] = {}
 
 for spec in SIGNALS:
-    result = run_signal(spec, proj, all_sessions)
+    result = run_signal(spec, proj, run, all_sessions)
     if result is not None:
         results[spec.label] = result
 
@@ -1518,6 +1514,6 @@ notes_lines.extend([
     f"Total sessions analyzed: {len(all_sessions)}",
 ])
 
-proj.io.report(notes="\n".join(notes_lines))
+run.finish(notes="\n".join(notes_lines))
 
 print("\nDone.")

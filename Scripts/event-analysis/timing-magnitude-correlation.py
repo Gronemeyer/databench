@@ -144,7 +144,6 @@ def pooled_scatter_plot(
             axis.set_title(signal)
 
         axis.set_xlabel("onset_s")
-        axis.grid(alpha=0.2)
 
     axes[0].set_ylabel("peak_z_detrended")
     figure.suptitle("Event timing vs magnitude (ses-01..ses-10)")
@@ -152,12 +151,8 @@ def pooled_scatter_plot(
 
 
 def main() -> None:
-    proj = Project(
-        dataset=DATASET,
-        analyst="databench",
-        run_name="timing-magnitude-correlation",
-        tag=TAG,
-    )
+    proj = Project(dataset=DATASET, analyst="databench")
+    run = proj.run(name="timing-magnitude-correlation", tag=TAG)
 
     all_rows: list[dict[str, float | str | int]] = []
     pooled_events_by_signal: dict[str, pd.DataFrame] = {}
@@ -192,16 +187,16 @@ def main() -> None:
 
     pooled = correlations[correlations["Session"] == "all"].reset_index(drop=True)
 
-    proj.io.table(correlations, "timing_magnitude_correlations.csv")
-    proj.io.table(pooled, "timing_magnitude_correlations_pooled.csv")
+    run.save_table(correlations, "timing_magnitude_correlations.csv")
+    run.save_table(pooled, "timing_magnitude_correlations_pooled.csv")
 
     pooled_figure = pooled_scatter_plot(pooled_events_by_signal)
-    proj.io.figure(pooled_figure, "timing_vs_peak_z_detrended.png", tight=True)
+    run.save_figure(pooled_figure, "timing_vs_peak_z_detrended.png")
 
     print("\nPooled correlations (all ses-01..ses-10 events):")
     print(pooled.to_string(index=False))
 
-    proj.io.report(
+    run.finish(
         notes=(
             "Computed event timing-vs-magnitude correlations from pupil and "
             "mesofield event metrics for ses-01..ses-10."

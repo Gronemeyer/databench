@@ -39,12 +39,8 @@ BURST_PAD_S = 5.0
 
 # ─── Project + session ───────────────────────────────────────────────────
 
-proj = Project(
-    dataset=DATASET,
-    run_name=f"{SUBJECT}-{SESSION}-osc",
-    tag="L_VISp-spont",
-)
-
+proj = Project(dataset=DATASET)
+run = proj.run(name=f"{SUBJECT}-{SESSION}-osc", tag="L_VISp-spont")
 session = proj.session(subject=SUBJECT, session=SESSION, task=TASK)
 
 # ─── Align auxiliary traces ──────────────────────────────────────────────
@@ -81,10 +77,9 @@ overview = result.overview_plotter(
     smooth_speed_s=0.2,
 )
 overview_fig = overview(result)
-proj.io.figure(
+run.save_figure(
     overview_fig,
     f"{slug}_{ROI_NAME}_overview.svg",
-    sidecar=overview.recipe(result),
 )
 
 # ─── Plot burst details ─────────────────────────────────────────────────
@@ -99,18 +94,16 @@ bursts = result.burst_plotter(
 burst_figs = bursts(result)
 burst_recipe = bursts.recipe(result)
 for rank, fig in enumerate(burst_figs, start=1):
-    proj.io.figure(
+    run.save_figure(
         fig,
         f"{slug}_{ROI_NAME}_burst_{rank:02d}.svg",
-        sidecar={**burst_recipe, "rank": rank},
     )
 
 # ─── Save events & report ───────────────────────────────────────────────
 
-proj.io.table(result.events, f"{slug}_{ROI_NAME}_bursts.csv")
+run.save_table(result.events, f"{slug}_{ROI_NAME}_bursts.csv")
 
-report_path = proj.io.report(
-    result,
+report_path = run.finish(
     notes=(
         f"Oscillation detection ({BAND[0]}–{BAND[1]} Hz Hilbert envelope, "
         f"threshold={THRESHOLD}) in {ROI_SOURCE}/{ROI_NAME} for "

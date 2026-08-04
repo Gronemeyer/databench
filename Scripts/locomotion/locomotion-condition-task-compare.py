@@ -219,7 +219,6 @@ def plot_condition_task(
                                edgecolors="white", linewidths=0.4, alpha=0.9, zorder=3)
             ax.set_xticks(x)
             ax.set_xticklabels(conds, rotation=25, ha="right")
-            ax.grid(axis="y", alpha=0.25)
             if ti == 0:
                 ax.set_ylabel(labels.get(metric, metric))
             else:
@@ -321,12 +320,8 @@ SESSION_TO_CONDITION = {
     "ses-04": "ethanol_high",
 }
 
-proj = Project(
-    dataset=DATASET,
-    output_root=OUTPUT_ROOT,
-    run_name=RUN_NAME,
-    tag=TAG,
-)
+proj = Project(dataset=DATASET)
+run = proj.run(name=RUN_NAME, tag=TAG)
 
 # Combine sessions from both tasks
 frames = []
@@ -347,22 +342,21 @@ tables = locomotion_condition_task_analysis(long, bout_events, speed_scale_to_cm
 
 # Plot
 fig = plot_condition_task(tables["subject_stats"], task_order=TASKS)
-proj.io.figure(fig, f"{OUTPUT_PREFIX}_summary.svg")
+run.save_figure(fig, f"{OUTPUT_PREFIX}_summary.svg")
 
 # Save
-proj.io.tables(
-    {name: df for name, df in tables.items() if isinstance(df, pd.DataFrame) and not df.empty},
-    prefix=f"{OUTPUT_PREFIX}_",
-)
+for name, df in tables.items():
+    if isinstance(df, pd.DataFrame) and not df.empty:
+        run.save_table(df, f"{OUTPUT_PREFIX}_{name}.csv")
 
 if len(TASKS) == 1:
     lme_tables = fit_condition_lme(tables["session_stats"], task=TASKS[0])
     if lme_tables is not None:
         coef_df, trend_df = lme_tables
-        proj.io.table(coef_df, f"{OUTPUT_PREFIX}_lme_condition_coefficients.csv", index=True)
-        proj.io.table(trend_df, f"{OUTPUT_PREFIX}_lme_dose_trend_coefficients.csv", index=True)
+        run.save_table(coef_df, f"{OUTPUT_PREFIX}_lme_condition_coefficients.csv")
+        run.save_table(trend_df, f"{OUTPUT_PREFIX}_lme_dose_trend_coefficients.csv")
 
-proj.io.report(
+run.finish(
     notes=(
         "Locomotion bout/stats comparison across condition labels. "
         f"Tasks: {', '.join(TASKS)}. "

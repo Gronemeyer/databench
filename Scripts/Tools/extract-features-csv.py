@@ -49,13 +49,9 @@ EXTRACT_FEATURES = {
 
 # ─── Project setup ────────────────────────────────────────────────────────
 
-proj = Project(
-    dataset=DATASET,
-    run_name="feature_extraction",
-    tag="ETOH_R01",
-)
-
+proj = Project(dataset=DATASET)
 group = proj.sessions(subject=SUBJECT, task=TASK)
+run = proj.run(name="feature_extraction", tag="ETOH_R01")
 print(f"Selected {len(group)} sessions")
 
 # ─── Extract and save ────────────────────────────────────────────────────
@@ -97,12 +93,12 @@ for out_name, candidates in EXTRACT_FEATURES.items():
         print(f"  No data found for {out_name}. Tried: {cand_str}")
         continue
 
-    csv_path = proj.io.table(pd.DataFrame(rows), f"{out_name}.csv")
+    csv_path = run.save_table(pd.DataFrame(rows), f"{out_name}.csv")
     print(f"  Saved {out_name} → {csv_path}  ({len(rows)} samples)")
 
 # ─── Report ───────────────────────────────────────────────────────────────
 
-proj.io.report(
+run.finish(
     notes="Batch feature extraction to CSV for locomotion, pupil, and ROI signals.",
 )
 print("Done.")
