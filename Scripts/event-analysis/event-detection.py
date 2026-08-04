@@ -980,7 +980,6 @@ def plot_group_summary(summary_df: pd.DataFrame, spec: SignalSpec) -> plt.Figure
     _style_axis(axes[1])
 
     fig.suptitle(f"{spec.label} event detection — group summary", fontweight="bold")
-    fig.tight_layout()
     return fig
 
 
@@ -1055,7 +1054,6 @@ def plot_cross_animal_comparison(
         f"{spec.label} — cross-animal event comparison (z-scored amplitudes)",
         fontweight="bold",
     )
-    fig.tight_layout()
     return fig
 
 

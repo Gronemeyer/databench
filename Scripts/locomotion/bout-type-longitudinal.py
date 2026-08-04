@@ -288,8 +288,6 @@ def plot_bout_proportions(
     plot_stacked_bar(prop_df, ax=ax_c, title="c")
     plot_line_with_errorbars(prop_df, ax=ax_h, title="h")
 
-    fig.tight_layout(w_pad=3)
-
     if run is not None:
         png_path = run.save_figure(
             fig,

@@ -272,7 +272,6 @@ def _plot_panel(axes_pair, t_s, det, title, spec):
     ax1.axhline(det["low_th"], color="#F4A261", ls="--", lw=0.9, alpha=0.85,
                 label=f"low thr. ({LOW_PERCENTILE:.0f}th %ile)")
     ax1.set_title(title, fontsize=11, fontweight="bold", pad=5)
-    ax1.tick_params(labelsize=10)
 
     ax2.fill_between(t_clip, ev_mask_clip.astype(float), step="mid",
                      color=spec.color_mask, alpha=0.6, lw=0)
@@ -280,7 +279,6 @@ def _plot_panel(axes_pair, t_s, det, title, spec):
     ax2.set_yticks([0, 1])
     ax2.set_yticklabels(["off", "on"], fontsize=10)
     ax2.set_xlabel("Time (s)", fontsize=11)
-    ax2.tick_params(labelsize=10)
 
 
 def plot_single_session_comparison(
@@ -293,7 +291,7 @@ def plot_single_session_comparison(
     fig, axes = plt.subplots(
         2, 2, figsize=(14, 4.0),
         gridspec_kw={"height_ratios": [4, 1], "hspace": 0.08, "wspace": 0.02},
-        facecolor="white", layout="constrained",
+        layout="constrained",
     )
     # axes[row, col]: top row = traces, bottom row = event masks
     _plot_panel((axes[0, 0], axes[1, 0]), t_s_a, det_a, label_a, spec)
@@ -331,7 +329,7 @@ def plot_session_page(
     fig, (ax1, ax2) = plt.subplots(
         2, 1, figsize=(7, 3.2), sharex=True,
         gridspec_kw={"height_ratios": [4, 1], "hspace": 0.06},
-        facecolor="white", layout="constrained",
+        layout="constrained",
     )
     _plot_panel((ax1, ax2), t_s, det, title, spec)
     ax1.set_ylabel(spec.ylabel, fontsize=11)
@@ -346,7 +344,7 @@ def plot_session_page(
 
 def plot_group_summary(summary_df: pd.DataFrame, spec: SignalSpec) -> plt.Figure:
     """Bar chart of event counts and mean durations per subject (grant-ready)."""
-    fig, axes = plt.subplots(1, 2, figsize=(7, 3.5), facecolor="white")
+    fig, axes = plt.subplots(1, 2, figsize=(7, 3.5))
 
     palette = list(spec.palette)
     counts = summary_df.groupby("Subject")["n_events"].sum().sort_index()
@@ -355,21 +353,18 @@ def plot_group_summary(summary_df: pd.DataFrame, spec: SignalSpec) -> plt.Figure
     bars1 = axes[0].bar(counts.index, counts.values, color=colors, edgecolor="white", lw=0.5)
     axes[0].set_ylabel("Total events", fontsize=11)
     axes[0].set_title("Event count per subject", fontsize=12, fontweight="bold")
-    axes[0].tick_params(axis="x", rotation=45, labelsize=10)
-    axes[0].tick_params(axis="y", labelsize=10)
+    axes[0].tick_params(axis="x", rotation=45)
     axes[0].bar_label(bars1, fontsize=9, padding=2)
 
     mean_dur = summary_df.groupby("Subject")["mean_duration_s"].mean().sort_index()
     bars2 = axes[1].bar(mean_dur.index, mean_dur.values, color=colors, edgecolor="white", lw=0.5)
     axes[1].set_ylabel("Mean duration (s)", fontsize=11)
     axes[1].set_title("Mean event duration per subject", fontsize=12, fontweight="bold")
-    axes[1].tick_params(axis="x", rotation=45, labelsize=10)
-    axes[1].tick_params(axis="y", labelsize=10)
+    axes[1].tick_params(axis="x", rotation=45)
     axes[1].bar_label(bars2, fmt="%.1f", fontsize=9, padding=2)
 
     fig.suptitle(f"{spec.label} event detection — group summary",
                  fontsize=13, fontweight="bold", y=1.01)
-    fig.tight_layout()
     return fig
 
 

@@ -219,7 +219,6 @@ def plot_condition_task(
                                edgecolors="white", linewidths=0.4, alpha=0.9, zorder=3)
             ax.set_xticks(x)
             ax.set_xticklabels(conds, rotation=25, ha="right")
-            ax.grid(axis="y", alpha=0.25)
             if ti == 0:
                 ax.set_ylabel(labels.get(metric, metric))
             else:

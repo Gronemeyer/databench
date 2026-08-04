@@ -120,10 +120,8 @@ for etype in result.event_types:
         ax.axhline(0, color="gray", lw=0.8, ls="--")
         if ax is axes[0]:
             ax.set_ylabel("Post − Pre ΔF/F")
-        ax.grid(axis="y", alpha=0.3)
 
     fig.suptitle(f"ETA Pre/Post Diff — {etype}")
-    fig.tight_layout()
     run.save_figure(fig, f"eta_prepost_diff_{etype}.svg")
 
 # ─── Save ─────────────────────────────────────────────────────────────────

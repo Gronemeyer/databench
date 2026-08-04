@@ -134,7 +134,6 @@ for etype in result.event_types:
         axes_flat[j].set_visible(False)
 
     fig.suptitle(f"Longitudinal ETA heatmap — {etype}")
-    fig.tight_layout()
     run.save_figure(fig, f"eta_{etype}_longitudinal_heatmap.svg")
 
 # ─── 3. Longitudinal metric plot ─────────────────────────────────────────
@@ -180,13 +179,11 @@ for etype in result.event_types:
         ax.set_xlabel("Session")
         if i % ncols == 0:
             ax.set_ylabel(f"Mean ΔF/F [{METRIC_WINDOW[0]}, {METRIC_WINDOW[1]}]s")
-        ax.grid(alpha=0.3)
 
     for j in range(i + 1, len(axes_flat)):
         axes_flat[j].set_visible(False)
 
     fig.suptitle(f"Longitudinal metric — {etype}")
-    fig.tight_layout()
     run.save_figure(fig, f"eta_{etype}_longitudinal_metric.svg")
 
 # ─── Save ─────────────────────────────────────────────────────────────────

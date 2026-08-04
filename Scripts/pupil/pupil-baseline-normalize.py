@@ -26,6 +26,7 @@ from databench.analysis.pupil_baseline import (
     compute_session1_baselines,
 )
 from databench.plotting import set_theme
+from databench.plotting.style.gsipe_v1 import DEFAULT_CYCLE
 from databench.utils import session_to_int
 
 set_theme()
@@ -96,7 +97,7 @@ per_session = (
 
 fig, ax = plt.subplots(figsize=(8.0, 4.5))
 subjects = sorted(per_session["Subject"].unique())
-palette = plt.cm.tab10(np.linspace(0.0, 1.0, max(len(subjects), 1)))
+palette = [DEFAULT_CYCLE[i % len(DEFAULT_CYCLE)] for i in range(max(len(subjects), 1))]
 for color, subj in zip(palette, subjects):
     sub = per_session[per_session["Subject"] == subj]
     ax.plot(
@@ -120,7 +121,6 @@ ax.set_ylabel("Pupil (fraction of ses-01 quiescent baseline)")
 ax.set_title("Pupil habituation across sessions (session-1 anchor)",
              fontweight="bold")
 ax.legend(fontsize=8, ncol=2, frameon=False)
-fig.tight_layout()
 
 run.save_figure(fig, "pupil_baseline_trajectories.svg", formats=("png",))
 

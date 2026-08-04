@@ -40,9 +40,8 @@ def section(title: str) -> None:
 set_theme()                       # global plot style; theme = get_theme()
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# 1. Project construction — alias string OR path
-# ═════════════════════════════════════════════════════════════════════════
+# ─── Project construction ───────────────────────────────────────────────────────────
+
 section("Project construction")
 
 proj = Project("hfsa")
@@ -59,9 +58,8 @@ print(f"tables_dir : {run.tables_dir}")
 print(f"dataset_params keys: {sorted(dataset_params('hfsa'))}")
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# 2. Schema-first discovery
-# ═════════════════════════════════════════════════════════════════════════
+# ─── Schema-first discovery ───────────────────────────────────────────────────────────
+
 section("Project.describe + schema introspection")
 
 proj.describe()                   # the canonical "what's in here?" call
@@ -73,9 +71,8 @@ print(f"role(pupil/pupil_diameter_mm) = {schema.role_of('pupil', 'pupil_diameter
 print(f"unit(pupil/pupil_diameter_mm) = {schema.unit_of('pupil', 'pupil_diameter_mm')}")
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# 3. Filtering at the Project level
-# ═════════════════════════════════════════════════════════════════════════
+# ─── Filtering at the Project level ───────────────────────────────────────────────────────────
+
 section("Project.filter (chainable, in-place)")
 
 # include/exclude/drop_rows accept dicts, tuples, lists, or mixed collections:
@@ -88,9 +85,8 @@ print(f"after filter: sessions={proj.all_sessions}")
 print(f"after filter: tasks={proj.tasks}")
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# 4. Single-session and multi-session selection
-# ═════════════════════════════════════════════════════════════════════════
+# ─── Single-session and multi-session selection ────────────────────────────────────────────────
+
 section("Project.session / Project.sessions / first_session")
 
 # One row (raises if zero or multiple match):
@@ -108,9 +104,7 @@ sample = proj.first_session()
 print(f"first_session().label = {sample.label}")
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# 5. Session introspection (no analysis yet)
-# ═════════════════════════════════════════════════════════════════════════
+# ─── Session introspection  ────────────────────────────────────────────────
 section("Session: sources / signals / describe")
 
 print(f"sess.sources                  = {sess.sources}")
@@ -119,9 +113,8 @@ print(f"sess.signals('treadmill')[:4] = {sess.signals('treadmill')[:4]}")
 #sess.describe()                   # multi-line summary
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# 6. Raw signal/time access (alias-aware)
-# ═════════════════════════════════════════════════════════════════════════
+# ─── Raw signal/time access (alias-aware) ───────────────────────────────────────────────
+
 section("Session.signal / Session.time")
 
 t_pupil  = sess.time("pupil")                       # aliased to pupil_dlc
@@ -137,9 +130,8 @@ print(f"treadmill: t.shape={t_tread.shape}, y.shape={speed_mm.shape}")
 # → SignalNotFoundError: ... Did you mean 'pupil_dlc', 'pupil_metadata'?
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# 7. Cross-source alignment with merge_asof
-# ═════════════════════════════════════════════════════════════════════════
+# ─── Cross-source alignment with merge_asof ────────────────────────────────────────────────
+
 section("Session.align -> AlignedData")
 
 ad = sess.align(
@@ -161,9 +153,8 @@ group_ad = group.align(
 print(f"\ngroup.align(...).df.shape = {group_ad.df.shape}")
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# 8. SessionGroup.to_frame — long-form extractor
-# ═════════════════════════════════════════════════════════════════════════
+# ─── SessionGroup.to_frame — long-form extractor ────────────────────────────────────────────────
+
 section("SessionGroup.to_frame (custom extractor)")
 
 
@@ -186,9 +177,8 @@ features = group.to_frame(per_session_features)
 print(features.head(5).to_string(index=False))
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# 9. databench.utils — array & label helpers
-# ═════════════════════════════════════════════════════════════════════════
+# ─── databench.utils — array & label helpers ────────────────────────────────────────────────
+
 section("databench.utils helpers")
 
 t_clean, y_clean = clean_xy(t_pupil, pup)          # drop NaN, sort by t
@@ -216,9 +206,7 @@ small = drop_rows(proj.df, {"session": "ses-02"})
 print(f"drop_rows({{'session':'ses-02'}}): {len(proj.df)} -> {len(small)} rows")
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# 10. DataTabler (lower level — usually accessed via Project.filter)
-# ═════════════════════════════════════════════════════════════════════════
+# ─── DataTabler (lower level — usually accessed via Project.filter) ────────────────────────────────────────────────
 section("Project.tabler — index-aware DataFrame helper")
 
 tabler = proj.tabler
@@ -227,9 +215,8 @@ print(f"  rows   : {len(tabler.df)}")
 print(f"  index  : {tabler.df.index.names}")
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# 11. Plotting — themes, figures, reusable plotters
-# ═════════════════════════════════════════════════════════════════════════
+# ─── Plotting — themes, figures, reusable plotters ────────────────────────────────────────────────
+
 section("Plotting surface: themes, factories, plot_metric_by_session")
 
 theme = get_theme()
@@ -258,9 +245,8 @@ ax.legend(fontsize=8, ncol=2, frameon=False)
 run.save_figure(fig, "04_plot_metric_by_session.png")
 
 
-# ═════════════════════════════════════════════════════════════════════════
-# 12. Run — unified persistence (save_figure / save_table / save_json / pdf / finish)
-# ═════════════════════════════════════════════════════════════════════════
+# ─── Run — unified persistence (save_figure / save_table / save_json / pdf / finish) ────────────────────────────────────────────────
+
 section("run.* persistence surface")
 
 # Tables (suffix decides format: csv / parquet / json)

@@ -322,7 +322,6 @@ def plot_lmm_summary(
         f"metric ~ session  |  random intercept + slope per animal",
         fontweight="bold",
     )
-    fig.tight_layout()
     return fig
 
 
@@ -410,7 +409,6 @@ def plot_event_basics(
     # Hide unused axes if grid has extra slots
     for i in range(n_metrics, len(flat_axes)):
         flat_axes[i].set_visible(False)
-    fig.tight_layout()
     return fig
 
 

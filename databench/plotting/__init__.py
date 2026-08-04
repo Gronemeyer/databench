@@ -19,12 +19,12 @@ What's in this module
 
 Submodules (``databench.plotting.<name>``) contain analysis-specific
 plotters: ``oscillation``, ``traces``, ``treadmill``, ``overview``,
-``mesomap``.  The default theme is ``cold_field_v5``.
+``mesomap``.  The default theme is ``gsipe_v1``.
 
 Quick start
 -----------
 >>> from databench.plotting import set_theme, new_figure, style_axes
->>> set_theme()                           # light mode, cold_field_v5
+>>> set_theme()                           # light mode, gsipe_v1
 >>> fig, ax = new_figure()                # themed figure + axes
 >>> ax.plot(x, y)
 >>> style_axes(ax)                        # clean spines / ticks
@@ -43,20 +43,20 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from databench.plotting.style.cold_field_v5 import Theme, clean_ax
+from databench.plotting.style.gsipe_v1 import Theme, clean_ax
 
 # ── Module-level theme state ───────────────────────────────────────────────
 
 _active_theme: Optional[Theme] = None
 
 
-def set_theme(mode: str = "light", *, style: str = "cold_field_v5") -> Theme:
+def set_theme(mode: str = "light", *, style: str = "gsipe_v1") -> Theme:
     """Activate a plotting theme globally and return it.
 
     Parameters
     ----------
     mode : ``"light"`` or ``"dark"``
-    style : registered style name (default ``"cold_field_v5"``).
+    style : registered style name (default ``"gsipe_v1"``).
     """
     from databench.plotting.style import use
     global _active_theme

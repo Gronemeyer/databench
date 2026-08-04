@@ -21,7 +21,7 @@ from databench.types import EventsTable
 from databench.plotting import set_theme
 from databench.utils import clean_xy
 
-set_theme()
+set_theme(style="gsipe_v1")
 
 # ─── Parameters ───────────────────────────────────────────────────────────
 
@@ -116,7 +116,6 @@ ax.set_aspect("equal", adjustable="box")
 ax.set_xlabel("Pupil z-score at running start")
 ax.set_ylabel("Pupil z-score at running end")
 ax.set_title("Pupil diameter (z-scored per session)", fontweight="bold")
-fig.tight_layout()
 
 run.save_figure(fig, "pupil_diameter_running_scatter.svg")
 

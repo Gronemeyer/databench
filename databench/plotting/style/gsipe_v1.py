@@ -327,6 +327,51 @@ def nice_ticks(ax, *, nbins: int = 4, axis: str = "both",
         _do(ax.yaxis, ax.get_ylim, ax.set_ylim)
 
 
+def ordinal_ticks(ax, values, *, axis: str = "x", max_ticks: int = 5) -> None:
+    """Integer ticks for an *ordinal* axis (session day, trial, block, …).
+
+    Unlike :func:`nice_ticks` — which expands the view *outward* to the
+    next round tick and so can run past the data (day 1–10 → a tick at
+    12) — an ordinal axis has no values between the integers and no
+    meaning beyond its last category.  This pins the view to
+    ``[min, max]`` and places integer ticks that **always include both
+    endpoints**, so the axis starts on the first day and ends on the last.
+
+    The step is the smallest integer keeping the tick count ≤ *max_ticks*
+    (default 5, matching the theme's 3–5-ticks-per-axis guideline); the
+    final tick is forced onto the last value even when the step would
+    overshoot it.
+
+    Parameters
+    ----------
+    values : iterable
+        The ordinal data plotted on this axis (NaNs ignored).
+    axis : ``"x"``, ``"y"`` or ``"both"``
+    max_ticks : int
+        Upper bound on the number of ticks.
+    """
+    import math
+
+    vals = sorted({int(round(v)) for v in values if v == v})  # drop NaN
+    if not vals:
+        return
+    lo, hi = vals[0], vals[-1]
+    if hi == lo:
+        ticks = [lo]
+    else:
+        step = max(1, math.ceil((hi - lo) / max(1, max_ticks - 1)))
+        ticks = list(range(lo, hi + 1, step))
+        if ticks[-1] != hi:
+            ticks.append(hi)
+
+    if axis in ("x", "both"):
+        ax.set_xlim(lo, hi)
+        ax.set_xticks(ticks)
+    if axis in ("y", "both"):
+        ax.set_ylim(lo, hi)
+        ax.set_yticks(ticks)
+
+
 def clean_ax(ax, offset: int = 0) -> None:
     """Ensure top/right spines are hidden (theme default) and optionally
     offset the remaining left/bottom spines outward by *offset* points.
@@ -340,7 +385,7 @@ def clean_ax(ax, offset: int = 0) -> None:
 
 __all__ = [
     "Theme", "PALETTE", "SWATCHES", "DEFAULT_CYCLE",
-    "swatch", "nice_ticks", "clean_ax",
+    "swatch", "nice_ticks", "ordinal_ticks", "clean_ax",
     "figure_size", "DEFAULT_FIGSIZE",
     "PAGE_IN", "MARGIN_IN", "CONTENT_W", "CONTENT_H",
 ]

@@ -122,7 +122,6 @@ with run.pdf("locomotion_bouts_report.pdf") as pdf:
         ax.set_title(sess.label)
         ax.set_xlabel("Time (s)")
         ax.set_ylabel("Speed (cm/s)")
-        ax.grid(True, alpha=0.2)
         ax.legend(frameon=False)
         pdf.savefig(fig, bbox_inches="tight")
         plt.close(fig)
@@ -173,8 +172,6 @@ if not session_table.empty:
         ax.set_ylabel(ylabel)
         ax.set_xlabel("Session (days)")
         ax.set_title(column)
-        ax.grid(axis="y", alpha=0.3)
-        fig.tight_layout()
         run.save_figure(fig, f"locomotion_bouts_{column}_boxplot.png", formats=formats)
 
 
@@ -184,9 +181,8 @@ if not bout_table.empty and "day" in bout_table.columns:
     bins    = np.arange(0.0, 25.5, 0.5)
     has_any = False
 
-    fig, axes = plt.subplots(1, 2, figsize=(9.2, 3.6), facecolor="#d9d9d9", sharey=True)
+    fig, axes = plt.subplots(1, 2, figsize=(9.2, 3.6), sharey=True)
     for ax, (early_days, late_days) in zip(axes, DAY_COMPARISONS):
-        ax.set_facecolor("#d9d9d9")
         early = bout_table.loc[bout_table["day"].between(*early_days), "mean_speed_cms"].dropna()
         late  = bout_table.loc[bout_table["day"].between(*late_days),  "mean_speed_cms"].dropna()
 
@@ -208,7 +204,6 @@ if not bout_table.empty and "day" in bout_table.columns:
     axes[0].set_ylabel("Number of bouts (#)")
 
     if has_any:
-        fig.tight_layout()
         run.save_figure(fig, "locomotion_bouts_speed_hist_comparison_panels.png",
                         formats=("svg",) if EXPORT_SVG else None)
     else:

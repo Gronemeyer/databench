@@ -144,7 +144,6 @@ def pooled_scatter_plot(
             axis.set_title(signal)
 
         axis.set_xlabel("onset_s")
-        axis.grid(alpha=0.2)
 
     axes[0].set_ylabel("peak_z_detrended")
     figure.suptitle("Event timing vs magnitude (ses-01..ses-10)")

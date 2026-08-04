@@ -20,6 +20,7 @@ from scipy.signal import welch
 from databench import Project, resolve_dataset
 from databench.analysis.oscillation import OscillationDetector
 from databench.plotting import plot_metric_by_session, set_theme
+from databench.plotting.style.gsipe_v1 import DEFAULT_CYCLE
 
 set_theme()
 
@@ -119,7 +120,7 @@ summary_df = group.to_frame(session_summary)
 events_df  = pd.concat(event_frames, ignore_index=True) if event_frames else pd.DataFrame()
 subjects   = sorted(summary_df["Subject"].unique())
 
-palette        = plt.cm.tab10(np.linspace(0, 1, max(len(subjects), 1)))
+palette        = [DEFAULT_CYCLE[i % len(DEFAULT_CYCLE)] for i in range(max(len(subjects), 1))]
 subject_colors = dict(zip(subjects, palette))
 
 print(f"\nTotal events: {len(events_df)} across {subjects}")
@@ -175,8 +176,6 @@ for metric, ylabel, title, fname in LONGITUDINAL_PANELS:
     ax.set_ylabel(ylabel)
     ax.set_title(f"{title}\n{ROI_NAME} | {BAND[0]}–{BAND[1]} Hz | {TASK}")
     ax.legend(loc="best", frameon=False)
-    ax.grid(alpha=0.3)
-    fig.tight_layout()
     run.save_figure(fig, fname)
 
 
@@ -203,7 +202,6 @@ def hist_kde(metric: str, xlabel: str, fname: str) -> None:
         ax.set_title(f"{xlabel} — {kind}")
         ax.legend(frameon=False)
     fig.suptitle(f"{ROI_NAME} | {BAND[0]}–{BAND[1]} Hz | {TASK}", y=1.02)
-    fig.tight_layout()
     run.save_figure(fig, fname)
 
 hist_kde("duration_s", "Duration (s)",            "duration_distribution.svg")
@@ -228,7 +226,6 @@ def boxplot_with_jitter(metric: str, ylabel: str, ax: plt.Axes) -> None:
         ax.scatter(np.full_like(vals, i, dtype=float) + jitter, vals,
                    s=8, alpha=0.3, color=subject_colors[subj], zorder=3)
     ax.set_ylabel(ylabel)
-    ax.grid(axis="y", alpha=0.3)
 
 if not events_df.empty:
     fig, (ax_dur, ax_pe) = plt.subplots(1, 2, figsize=(12, 5))
@@ -237,14 +234,13 @@ if not events_df.empty:
     ax_dur.set_title("Event duration by animal")
     ax_pe.set_title("Peak envelope by animal")
     fig.suptitle(f"{ROI_NAME} | {BAND[0]}–{BAND[1]} Hz | {TASK}", y=1.01)
-    fig.tight_layout()
     run.save_figure(fig, "event_characteristics_boxplots.svg")
 
 
 # ─── Spatial: by-ROI longitudinal + per-animal heatmaps ──────────────────
 
 if not spatial_df.empty:
-    roi_palette = plt.cm.Set2(np.linspace(0, 1, len(ALL_ROIS)))
+    roi_palette = [DEFAULT_CYCLE[i % len(DEFAULT_CYCLE)] for i in range(len(ALL_ROIS))]
     roi_colors  = dict(zip(ALL_ROIS, roi_palette))
 
     SPATIAL_PANELS = [
@@ -263,8 +259,6 @@ if not spatial_df.empty:
         ax.set_ylabel(ylabel)
         ax.set_title(f"{title}\n{BAND[0]}–{BAND[1]} Hz | {TASK} | group mean ± SEM")
         ax.legend(frameon=False, ncol=2)
-        ax.grid(alpha=0.3)
-        fig.tight_layout()
         run.save_figure(fig, fname)
 
     for subj in subjects:
@@ -283,7 +277,6 @@ if not spatial_df.empty:
         ax.set_xlabel("Session")
         ax.set_title(f"{subj} — burst rate by ROI across sessions")
         fig.colorbar(im, ax=ax, label="events / min", fraction=0.03, pad=0.04)
-        fig.tight_layout()
         run.save_figure(fig, f"spatial_heatmap_{subj}.svg")
 
 
