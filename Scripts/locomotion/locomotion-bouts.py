@@ -11,6 +11,8 @@ Usage
 """
 from __future__ import annotations
 
+import re
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -23,7 +25,7 @@ set_theme()
 
 # ─── Parameters ───────────────────────────────────────────────────────────
 
-DATASET             = resolve_dataset("hfsa")
+DATASET             = resolve_dataset("etoh-hfsa")
 TASK                = "task-widefield"
 SPEED_SOURCE        = "treadmill"
 SPEED_COL           = "speed_mm"
@@ -31,6 +33,11 @@ SPEED_SCALE_TO_CMS  = 10.0
 MIN_SPEED_CMS       = 0.5
 MIN_DURATION_S      = 2.0
 MERGE_GAP_S         = 0.5
+# The mask table is built from the dataqueue, where camera frames and
+# treadmill packets are stamped on one shared clock.
+QUEUE_SOURCE        = "time"
+FRAME_DEVICE        = "Dhyana"      # Camera whose packets index the movie
+QUEUE_SPEED_DEVICE  = "treadmill"
 RUN_NAME            = "locomotion-bouts"
 TAG                 = "canonical"
 EXPORT_SVG          = True
@@ -51,6 +58,44 @@ FEATURE_LABELS = {
     "locomotion_bout_duration_s":     "Bout duration (s)",
 }
 
+# ─── Dataqueue access ─────────────────────────────────────────────────────
+
+_SPEED_RE = re.compile(r"speed=([-\d.]+)\s*mm/s")
+
+
+def dataqueue_traces(sess):
+    """Camera frame times and treadmill speed on the shared dataqueue clock.
+
+    Returns ``(frame_t, speed_t, speed_cms)`` in seconds relative to the
+    first camera frame, or ``None`` when the session has no usable queue.
+    ``frame_t[i]`` is the timestamp of movie frame ``i``; speed is parsed
+    from the encoder packet payloads carried in the same queue.
+    """
+    try:
+        device = np.asarray(sess.signal(QUEUE_SOURCE, "device_id"))
+        t_queue = np.asarray(sess.signal(QUEUE_SOURCE, "time_elapsed_s"), dtype=float)
+        payload = np.asarray(sess.signal(QUEUE_SOURCE, "payload"))
+    except Exception:
+        return None
+
+    frame_t = t_queue[device == FRAME_DEVICE]
+    is_speed = device == QUEUE_SPEED_DEVICE
+    if frame_t.size < 2 or not is_speed.any():
+        return None
+
+    # Frame 0 is the clock origin, matching the movie's own indexing.
+    origin = float(frame_t[0])
+    speed_t = t_queue[is_speed] - origin
+
+    speed_mm = np.full(speed_t.size, np.nan)
+    for i, entry in enumerate(payload[is_speed]):
+        found = _SPEED_RE.search(str(entry))
+        if found:
+            speed_mm[i] = float(found.group(1))
+
+    return frame_t - origin, speed_t, speed_mm / SPEED_SCALE_TO_CMS
+
+
 # ─── Project setup ────────────────────────────────────────────────────────
 
 proj = Project(DATASET).filter(exclude={"session": "ses-11"})
@@ -63,6 +108,8 @@ print(f"Selected {len(group)} sessions for task={TASK}")
 
 session_rows: list[dict] = []
 bout_rows:    list[dict] = []
+mask_rows:    list[dict] = []
+mask_qc:      list[dict] = []
 
 with run.pdf("locomotion_bouts_report.pdf") as pdf:
     for sess in group:
@@ -97,6 +144,98 @@ with run.pdf("locomotion_bouts_report.pdf") as pdf:
                 "mean_speed_cms": bout["mean_speed_cms"],
                 "distance_m":     bout["distance_m"],
             })
+
+        # ── Running/quiescent mask rows, indexed by camera frame ─────────
+        # Detected on the dataqueue's own treadmill packets so bout times and
+        # frame times share one clock
+        queue = dataqueue_traces(sess)
+        if queue is not None:
+            frame_t, q_time, q_speed = queue
+            q_time, q_speed = clean_xy(q_time, q_speed)
+            n_frames = frame_t.size
+
+            q_bouts = locomotion_bout_events(
+                q_time, q_speed,
+                min_speed_cms=MIN_SPEED_CMS,
+                min_duration_s=MIN_DURATION_S,
+                merge_gap_s=MERGE_GAP_S,
+            ) if q_time.size >= 3 else pd.DataFrame()
+
+            # (onset_frame, offset_frame, mean_speed_cms); a bout spanning no
+            # complete frame is dropped.
+            run_frames: list[tuple[int, int, float]] = []
+            for _, bout in q_bouts.iterrows():
+                f0 = int(np.searchsorted(frame_t, bout["start_s"], side="left"))
+                f1 = int(np.searchsorted(frame_t, bout["end_s"],   side="right")) - 1
+                if f0 <= f1 and f0 < n_frames:
+                    run_frames.append((f0, min(f1, n_frames - 1),
+                                       float(bout["mean_speed_cms"])))
+
+            # Complement of the running frames within [0, n_frames - 1].
+            quiet_frames: list[tuple[int, int, float | None]] = []
+            cursor = 0
+            for f0, f1, _ in run_frames:
+                if f0 - 1 > cursor:          # skip degenerate single-frame gaps
+                    quiet_frames.append((cursor, f0 - 1, None))
+                cursor = f1 + 1
+            if cursor < n_frames - 1:
+                quiet_frames.append((cursor, n_frames - 1, None))
+
+            # Running rows carry the detected bout speed; quiescent rows are
+            # averaged over the same queue trace across their frame window.
+            for state, pairs in (("running", run_frames), ("quiescent", quiet_frames)):
+                for f0, f1, speed in pairs:
+                    t0, t1 = float(frame_t[f0]), float(frame_t[f1])
+                    if speed is None:
+                        window = (q_time >= t0) & (q_time <= t1)
+                        speed = (float(np.nanmean(np.abs(q_speed[window])))
+                                 if window.any() else np.nan)
+                    mask_rows.append({
+                        "Subject": sess.subject, "Session": sess.session, "Task": sess.task,
+                        "state":          state,
+                        "onset_frame":    f0,
+                        "offset_frame":   f1,
+                        "onset_t":        t0,
+                        "offset_t":       t1,
+                        "duration_s":     t1 - t0,
+                        "mean_speed_cms": float(speed),
+                    })
+
+            covered = sum(f1 - f0 + 1 for f0, f1, _ in run_frames + quiet_frames)
+            mask_qc.append({
+                "label":         sess.label,
+                "n_frames":      n_frames,
+                "frame_coverage": covered / n_frames if n_frames else np.nan,
+                "running_frac":  sum(f1 - f0 + 1 for f0, f1, _ in run_frames) / n_frames
+                                 if n_frames else np.nan,
+                "n_running":     len(run_frames),
+                "n_treadmill_bouts": len(bouts),
+            })
+
+            # Verification page
+            fig, (ax_t, ax_f) = plt.subplots(2, 1, figsize=(10, 5.4))
+            ax_t.plot(q_time, q_speed, color="#2ca02c", lw=0.9)
+            ax_t.axhline(MIN_SPEED_CMS, color="#888888", ls="--", lw=0.8)
+            for f0, f1, _ in run_frames:
+                ax_t.axvspan(frame_t[f0], frame_t[f1], color="#2ca02c", alpha=0.25)
+            ax_t.set_xlabel("Dataqueue time (s)")
+            ax_t.set_ylabel("Speed (cm/s)")
+            ax_t.set_title(f"{sess.label} — mask spans vs queue speed")
+
+            # Same data on the frame axis each mask row is expressed in.
+            speed_frame = np.searchsorted(frame_t, q_time)
+            ax_f.plot(np.clip(speed_frame, 0, n_frames - 1), q_speed,
+                      color="#4c72b0", lw=0.9)
+            for f0, f1, _ in run_frames:
+                ax_f.axvspan(f0, f1, color="#4c72b0", alpha=0.25)
+            ax_f.set_xlim(0, n_frames - 1)
+            ax_f.set_xlabel(f"{FRAME_DEVICE} frame index")
+            ax_f.set_ylabel("Speed (cm/s)")
+            ax_f.set_title(f"{len(run_frames)} running / {len(quiet_frames)} quiescent "
+                           f"epochs over {n_frames} frames")
+            fig.tight_layout()
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
 
         n_bouts = len(bouts)
         session_rows.append({
@@ -142,13 +281,56 @@ with run.pdf("locomotion_bouts_report.pdf") as pdf:
             plt.close(fig)
 
 session_table = pd.DataFrame(session_rows)
-print(f"Computed {len(session_table)} sessions, {len(bout_table)} total bouts")
+mask_table    = pd.DataFrame(mask_rows)
+qc_table      = pd.DataFrame(mask_qc)
+print(f"Computed {len(session_table)} sessions, {len(bout_table)} total bouts, "
+      f"{len(mask_table)} mask epochs")
+
+# ─── Mask verification: coverage must be exactly 1.0 everywhere ──────────
+
+if not qc_table.empty:
+    gaps = qc_table.loc[~np.isclose(qc_table["frame_coverage"], 1.0)]
+    print(f"Mask covers {qc_table['n_frames'].sum()} frames across "
+          f"{len(qc_table)} sessions; running fraction "
+          f"{qc_table['running_frac'].mean():.1%} mean "
+          f"({qc_table['running_frac'].min():.1%}–{qc_table['running_frac'].max():.1%})")
+    if gaps.empty:
+        print("  frame coverage OK: every frame is labelled exactly once")
+    else:
+        print(f"  WARNING: {len(gaps)} session(s) with incomplete coverage:")
+        print(gaps[["label", "n_frames", "frame_coverage"]].to_string(index=False))
+
+    mismatch = qc_table["n_running"] != qc_table["n_treadmill_bouts"]
+    print(f"  queue-clock bouts vs treadmill-source bouts differ in "
+          f"{int(mismatch.sum())}/{len(qc_table)} sessions")
+
+    fig, (ax_c, ax_n) = plt.subplots(1, 2, figsize=(11, 4))
+    y = np.arange(len(qc_table))
+    ax_c.barh(y, qc_table["running_frac"], color="#2ca02c", alpha=0.8)
+    ax_c.barh(y, qc_table["frame_coverage"], color="none", edgecolor="#333333", lw=0.8)
+    ax_c.set_yticks(y)
+    ax_c.set_yticklabels(qc_table["label"], fontsize=6)
+    ax_c.set_xlabel("Fraction of frames (bar = running, outline = total coverage)")
+    ax_c.set_xlim(0, 1.05)
+    ax_c.set_title("Mask coverage per session")
+
+    ax_n.scatter(qc_table["n_treadmill_bouts"], qc_table["n_running"],
+                 color="#4c72b0", alpha=0.8)
+    lim = max(qc_table["n_treadmill_bouts"].max(), qc_table["n_running"].max()) + 1
+    ax_n.plot([0, lim], [0, lim], color="#888888", ls="--", lw=0.8)
+    ax_n.set_xlabel(f"Bouts on {SPEED_SOURCE} source clock")
+    ax_n.set_ylabel("Bouts on dataqueue clock (mask)")
+    ax_n.set_title("Bout count agreement")
+    fig.tight_layout()
+    proj.io.figure(fig, "locomotion_mask_verification.png",
+                   formats=("svg",) if EXPORT_SVG else None)
 
 
 # ─── Save tables ─────────────────────────────────────────────────────────
 
-run.save_table(session_table, "locomotion_bouts_session_table.csv")
-run.save_table(bout_table,    "locomotion_bouts_bout_table.csv")
+proj.io.table(session_table, "locomotion_bouts_session_table.csv")
+proj.io.table(bout_table,    "locomotion_bouts_bout_table.csv")
+proj.io.table(mask_table,    "locomotion_mask_table.csv")
 
 
 # ─── Per-feature boxplots across sessions ───────────────────────────────
@@ -217,7 +399,10 @@ run.finish(
         f"First-order locomotion bout features for ETOH R01 pre-condition dataset.\n"
         f"{len(session_table)} sessions, {len(bout_table)} total bouts detected.\n"
         f"Bout criteria: min_speed={MIN_SPEED_CMS} cm/s, "
-        f"min_duration={MIN_DURATION_S}s, merge_gap={MERGE_GAP_S}s."
+        f"min_duration={MIN_DURATION_S}s, merge_gap={MERGE_GAP_S}s.\n"
+        f"locomotion_mask_table.csv labels every {FRAME_DEVICE} frame "
+        f"running/quiescent; bouts are re-detected on the dataqueue clock so "
+        f"frame indices and times share the camera's own time base."
     ),
 )
 print("Done.")
