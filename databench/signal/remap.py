@@ -111,6 +111,12 @@ def remap_to_timebase(
     if gap_threshold_s is not None:
         t_src = np.asarray(source_time, dtype=float)
         t_ref = np.asarray(reference_time, dtype=float)
+        if t_src.size == 0:
+            # No source samples at all: every reference point is in a gap.
+            # Without this guard the clip below yields index -1 into an
+            # empty array.  remap_previous_sample already returns
+            # fill-shaped zeros for this case.
+            return np.full_like(t_ref, fill_value, dtype=float)
         ins = np.searchsorted(t_src, t_ref)
         ins = np.clip(ins, 0, len(t_src) - 1)
         d_r = np.abs(t_src[ins] - t_ref)

@@ -25,6 +25,7 @@ from typing import Any, cast
 import pandas as pd
 
 from databench.config import (
+    Corrections,
     Schema,
     _resolve_dataset_alias_for_output,
     _user_config,
@@ -96,9 +97,6 @@ class Project:
         self.output_root = Path(output_root)
         self.alias = _resolve_dataset_alias_for_output(self.dataset_path)
 
-        self._df = load_dataset(self.dataset_path)
-        self._tabler = DataTabler(self._df)
-
         user = _user_config()
         self.analyst = analyst or user.get("analyst", "")
         self.lab = lab or user.get("lab", "")
@@ -108,6 +106,34 @@ class Project:
         except (KeyError, FileNotFoundError):
             self.params = {}
         self._schema = Schema.from_dataset_entry(self.params)
+        self._corrections = Corrections.from_dataset_entry(self.params)
+
+        df = load_dataset(self.dataset_path)
+        self._df = self._apply_task_aliases(df, self._corrections)
+        self._tabler = DataTabler(self._df)
+
+    @staticmethod
+    def _apply_task_aliases(df: pd.DataFrame, corrections: Corrections) -> pd.DataFrame:
+        """Rewrite mistyped task strings on the ``Task`` index level.
+
+        Applied once at load so that selection, grouping, and output naming
+        all see the canonical task string.  The mapping itself reaches
+        ``provenance.json`` through the dataset params, so the repair stays
+        auditable.
+        """
+        if not corrections.task_aliases or "Task" not in (df.index.names or []):
+            return df
+        # Rebuild the index from arrays rather than set_levels: an alias can
+        # map two distinct task strings onto one, which collapses the level.
+        arrays = [
+            df.index.get_level_values(name).map(corrections.canonical_task)
+            if name == "Task"
+            else df.index.get_level_values(name)
+            for name in df.index.names
+        ]
+        df = df.copy()
+        df.index = pd.MultiIndex.from_arrays(arrays, names=df.index.names)
+        return df
 
     @staticmethod
     def _resolve_path(dataset: str | Path) -> Path:
@@ -137,6 +163,41 @@ class Project:
     @property
     def schema(self) -> Schema:
         return self._schema
+
+    @property
+    def corrections(self) -> Corrections:
+        """Task aliases, task labels, and condition declarations for this dataset."""
+        return self._corrections
+
+    @property
+    def condition_order(self) -> tuple[str, ...]:
+        """Declared condition ordering, or ``()`` when the dataset declares none."""
+        return self._corrections.condition_order
+
+    @property
+    def condition_colors(self) -> dict[str, str]:
+        """Declared condition → colour mapping, or ``{}``."""
+        return dict(self._corrections.condition_colors)
+
+    def conditions(self) -> pd.DataFrame:
+        """One row per recording: Subject, Session, Task, task_label, condition.
+
+        Resolves each recording's condition through
+        :meth:`Corrections.condition_for`, so declared repairs and the value
+        the session itself carries are combined in one place rather than in
+        every script.
+        """
+        rows = [
+            {
+                "Subject": sess.subject,
+                "Session": sess.session,
+                "Task": sess.task,
+                "task_label": sess.task_label,
+                "condition": sess.condition,
+            }
+            for sess in self.sessions()
+        ]
+        return pd.DataFrame(rows)
 
     def filter(
         self,
@@ -181,7 +242,7 @@ class Project:
                 f"{len(matched)} rows match subject={subject!r}, session={session!r}, "
                 f"task={task!r}. Use project.sessions() for multi-session selection."
             )
-        return Session(row=matched.iloc[0], index=matched.index[0], schema=self._schema)
+        return Session(row=matched.iloc[0], index=matched.index[0], schema=self._schema, corrections=self._corrections)
 
     def sessions(
         self,
@@ -213,7 +274,7 @@ class Project:
                 f"  Available sessions: {self.all_sessions}"
             )
         return SessionGroup(
-            [Session(row=matched.loc[i], index=i, schema=self._schema) for i in matched.index]
+            [Session(row=matched.loc[i], index=i, schema=self._schema, corrections=self._corrections) for i in matched.index]
         )
 
     def first_session(self) -> "Session":
@@ -222,7 +283,7 @@ class Project:
         if len(self.df) == 0:
             raise NoSessionsFoundError("Project has zero rows after filtering.")
         i = self.df.index[0]
-        return Session(row=self.df.loc[i], index=i, schema=self._schema)
+        return Session(row=self.df.loc[i], index=i, schema=self._schema, corrections=self._corrections)
 
     # ── discovery ────────────────────────────────────────────────────────
 

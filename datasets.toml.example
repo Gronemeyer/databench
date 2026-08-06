@@ -52,3 +52,32 @@ pupil = "pupil_dlc"     # scripts using source="pupil" resolve to "pupil_dlc"
 "pupil_dlc.pupil_diameter_mm"  = { role = "timeseries", unit = "mm"   }
 "treadmill.speed_mm"           = { role = "timeseries", unit = "mm/s" }
 "treadmill.time_elapsed_s"     = { role = "time",       unit = "s"    }
+
+# ── Corrections and labels (optional) ───────────────────────────────────
+#
+# Acquisition repairs and display labels belong to the dataset, not to the
+# script that happens to hit them first.  Declaring them here keeps every
+# script in agreement and puts the repair in provenance.json.
+#
+#   proj.corrections          -> the Corrections object
+#   proj.condition_order      -> ("Baseline", "Saline", ...)
+#   proj.condition_colors     -> { "Baseline": "#bbabab", ... }
+#   proj.conditions()         -> table of Subject/Session/Task/task_label/condition
+#   sess.task_label           -> "early"
+#   sess.condition            -> resolved condition for that recording
+
+[datasets.hfsa.task_aliases]
+# Mistyped task string → canonical.  Project rewrites the Task index level
+# at load, so scripts never see the typo.
+"task-widefeild" = "task-widefield"
+
+[datasets.hfsa.task_labels]
+# Canonical task string → short label for axes and filenames.
+"task-widefield" = "widefield"
+
+[datasets.hfsa.conditions]
+# Conditions the protocol assigns rather than the recording carrying them.
+# "ses-NN"           applies to every subject and only fills a gap.
+# "SUBJECT/ses-NN"   is an explicit repair and overrides the recorded value.
+"ses-01" = "Baseline"
+"STREHAB02/ses-01" = "Baseline"

@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from databench.config import Schema
+from databench.config import Corrections, Schema
 from databench.utils.labels import parse_session_day
 
 
@@ -106,15 +106,22 @@ class Session:
         row: pd.Series,
         index: tuple,
         schema: Schema | None = None,
+        corrections: Corrections | None = None,
     ) -> None:
         self._row = row
         self._index = index
         self._schema = schema if schema is not None else Schema()
+        self._corrections = corrections if corrections is not None else Corrections()
 
     @property
     def schema(self) -> Schema:
         """The dataset schema (source aliases + per-column role/unit)."""
         return self._schema
+
+    @property
+    def corrections(self) -> Corrections:
+        """Task aliases, task labels, and condition declarations for this dataset."""
+        return self._corrections
 
     # ── Identity ───────────────────────────────────────────────────────────
 
@@ -134,6 +141,34 @@ class Session:
     def day(self) -> int | None:
         """Integer day parsed from a ``ses-NN`` session label, or ``None``."""
         return parse_session_day(self.session, default=None)
+
+    @property
+    def task_label(self) -> str:
+        """Short display label for this session's task, from ``datasets.toml``.
+
+        Falls back to the task string when the dataset declares no label.
+        """
+        return self._corrections.task_label(self.task)
+
+    @property
+    def condition(self) -> str:
+        """Condition for this recording, or ``""`` when none can be resolved.
+
+        Combines the value the recording carries in
+        ``session_config.condition`` with the declarations in
+        ``datasets.toml`` (see :class:`~databench.config.Corrections`), so a
+        script reads one property instead of repeating a fallback table.
+        """
+        try:
+            recorded = self.signal("session_config", "condition")
+        except SignalNotFoundError:
+            recorded = None
+        if recorded is not None:
+            flat = np.asarray(recorded).ravel()
+            recorded = str(flat[0]) if flat.size else None
+        return self._corrections.condition_for(
+            self.subject, self.session, recorded=recorded,
+        )
 
     @property
     def label(self) -> str:

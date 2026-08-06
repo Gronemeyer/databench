@@ -248,6 +248,137 @@ class Schema:
         return sorted(names)
 
 
+@dataclass(frozen=True)
+class Corrections:
+    """Acquisition repairs and display labels declared in ``datasets.toml``.
+
+    These are facts about a *dataset*, not about an analysis: a task string
+    that was mistyped at acquisition, the short label a task is drawn with,
+    or a condition that a session carries by protocol but that never made it
+    into ``session_config``.  Declaring them once next to the dataset path
+    keeps every script that opens the dataset in agreement, and keeps the
+    repair visible in ``provenance.json`` instead of copied into script
+    headers.
+
+    Read from the ``[datasets.<alias>]`` table::
+
+        [datasets.etoh2]
+        path = "..."
+        condition_order = ["Baseline", "Saline", "Low", "High"]
+
+        [datasets.etoh2.task_aliases]
+        "task-eothlate" = "task-etohlate"
+
+        [datasets.etoh2.task_labels]
+        "task-etohearly" = "early"
+        "task-etohlate"  = "late"
+
+        [datasets.etoh2.conditions]
+        "ses-11"      = "Baseline"   # every subject at ses-11
+        "JG02/ses-11" = "Baseline"   # one subject only; wins over the row's own value
+
+    Attributes
+    ----------
+    task_aliases
+        Mistyped task string → canonical task string.  :class:`Project`
+        applies these to the ``Task`` index level at load, so downstream
+        code never sees the typo.
+    task_labels
+        Canonical task string → short label for axes and filenames.
+    conditions
+        ``(subject_or_None, session)`` → condition.  A subject-scoped entry
+        is an explicit repair and overrides the row's own condition value;
+        a session-scoped entry is a protocol default and only fills a gap.
+    condition_order
+        Canonical ordering for grouping and plotting.
+    condition_colors
+        Condition → colour, for consistent figures across scripts.
+    """
+
+    task_aliases: Mapping[str, str] = field(default_factory=dict)
+    task_labels: Mapping[str, str] = field(default_factory=dict)
+    conditions: Mapping[tuple[Optional[str], str], str] = field(default_factory=dict)
+    condition_order: tuple[str, ...] = ()
+    condition_colors: Mapping[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def from_dataset_entry(cls, entry: Mapping[str, Any]) -> "Corrections":
+        """Build a Corrections from a parsed ``[datasets.<alias>]`` table."""
+        def _str_map(key: str) -> dict[str, str]:
+            raw = entry.get(key)
+            if not isinstance(raw, dict):
+                return {}
+            return {str(k): str(v) for k, v in raw.items()}
+
+        conditions: dict[tuple[Optional[str], str], str] = {}
+        raw_conditions = entry.get("conditions")
+        if isinstance(raw_conditions, dict):
+            for key, value in raw_conditions.items():
+                key = str(key)
+                if "/" in key:
+                    subject, session = key.split("/", 1)
+                    conditions[(subject, session)] = str(value)
+                else:
+                    conditions[(None, key)] = str(value)
+
+        raw_order = entry.get("condition_order")
+        order = (
+            tuple(str(c) for c in raw_order)
+            if isinstance(raw_order, (list, tuple))
+            else ()
+        )
+
+        return cls(
+            task_aliases=_str_map("task_aliases"),
+            task_labels=_str_map("task_labels"),
+            conditions=conditions,
+            condition_order=order,
+            condition_colors=_str_map("condition_colors"),
+        )
+
+    def canonical_task(self, task: str) -> str:
+        """Apply task-alias rewriting; return *task* unchanged when no alias."""
+        return self.task_aliases.get(task, task)
+
+    def task_label(self, task: str) -> str:
+        """Short display label for *task*, falling back to the task string."""
+        canonical = self.canonical_task(task)
+        return self.task_labels.get(canonical, canonical)
+
+    def condition_for(
+        self,
+        subject: str,
+        session: str,
+        *,
+        recorded: str | None = None,
+    ) -> str:
+        """Resolve the condition for one recording.
+
+        *recorded* is the value the session itself carries (typically
+        ``session_config.condition``).  A subject-scoped declaration wins
+        over it, because such an entry exists precisely to correct the
+        recorded value; a session-scoped declaration only applies when the
+        recording carries nothing usable.
+        """
+        scoped = self.conditions.get((subject, session))
+        if scoped is not None:
+            return scoped
+        if recorded is not None and str(recorded).strip().lower() not in (
+            "", "nan", "none",
+        ):
+            return str(recorded)
+        return self.conditions.get((None, session), "")
+
+    def __bool__(self) -> bool:
+        return bool(
+            self.task_aliases
+            or self.task_labels
+            or self.conditions
+            or self.condition_order
+            or self.condition_colors
+        )
+
+
 def _resolve_dataset_alias_for_output(input_path: Path | None = None) -> str:
     """Best-effort dataset alias for output folder naming.
 
