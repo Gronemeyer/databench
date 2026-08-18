@@ -19,6 +19,7 @@ from databench.signal.preproc import (  # noqa: F401
 
 from databench.signal.remap import (  # noqa: F401 — public re-exports
     GAP_THRESHOLD_S,
+    break_at_gaps,
     remap_previous_sample,
     remap_to_timebase,
     prepare_sparse_trace,

@@ -10,6 +10,8 @@ What's in this module
 * :func:`set_theme` / :func:`get_theme` — global visual theme.
 * :func:`new_figure` — themed figure factory.
 * :func:`style_axes` / :func:`style_figure` — spine and layout polish.
+* :func:`font_size` — point size for a named text role (``"annotation"``,
+  ``"panel_label"``, …), for the text a script draws itself.
 * :func:`plot_metric_by_session` — per-subject lines + group mean ± SEM
   for any longitudinal ``(Subject, x, y)`` table.
 * :func:`quickplot` — one-line "just plot this signal" for a single
@@ -43,7 +45,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from databench.plotting.style.gsipe_v1 import Theme, clean_ax
+from databench.plotting.style.gsipe_v1 import (
+    Theme,
+    clean_ax,
+    FONT_SIZES,
+    font_size,
+)
 
 # ── Module-level theme state ───────────────────────────────────────────────
 

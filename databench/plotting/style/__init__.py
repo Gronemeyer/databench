@@ -32,6 +32,12 @@ from databench.plotting.style.trace_config import (  # noqa: F401
     CONDITION_ORDER,
 )
 
+# Re-export the type scale — the sizes scripts pass to ``ax.text``
+from databench.plotting.style.gsipe_v1 import (  # noqa: F401
+    FONT_SIZES,
+    font_size,
+)
+
 # Every style module must expose a ``Theme`` class with an ``apply()`` method.
 _REGISTRY: dict[str, str] = {
     "cold_field_v5": ".cold_field_v5",

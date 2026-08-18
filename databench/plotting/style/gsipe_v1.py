@@ -14,7 +14,10 @@ Design targets (publication standard)
   block (6.5 x 9 in) via :func:`figure_size`, *not* to the full page —
   so they drop into a letter-size document and scale cleanly.
 * White background; **all** text / axes / ticks true black ``#000000``.
-* Type scale: suptitle 18, axes title 10, axis labels 8, ticks 8 pt.
+* Type scale: one table, :data:`FONT_SIZES`, read through :func:`font_size`
+  — suptitle 11, axes title 10, labels / ticks / legend 8, in-axes
+  annotation 7, panel letters 10 pt.  Scripts read those names instead of
+  writing point sizes into ``ax.text`` calls.
 * 0.75 pt axes border and tick width; 0.25 pt marker edges.
 * Ticks point *out*; use :func:`nice_ticks` to keep 3-5 ticks per axis
   and force each axis to **end on a tick**.
@@ -144,6 +147,41 @@ DEFAULT_FIGSIZE = figure_size("full")
 
 
 # ════════════════════════════════════════════════════════
+#  TYPE SCALE
+# ════════════════════════════════════════════════════════
+# One scale for every figure the theme produces, in points.  rcParams cover
+# the text matplotlib draws for you (titles, axis labels, ticks, legends);
+# the remaining roles cover the text a script draws itself with ``ax.text``
+# — trace labels, scale-bar captions, panel letters — which otherwise get an
+# invented point size per script and drift apart figure to figure.
+#
+# The scale is anchored at 8 pt body text, the smallest size that stays
+# legible in print at the figure sizes :func:`figure_size` produces, with one
+# step down for in-axes annotation and two steps up for titles.  Sizes are
+# absolute, not figure-relative: a smaller figure holds fewer panels, it does
+# not get smaller type.
+
+FONT_SIZES: Dict[str, float] = {
+    "suptitle":    11.0,   # figure title
+    "title":       10.0,   # axes title
+    "label":        8.0,   # axis labels
+    "tick":         8.0,   # tick labels
+    "legend":       8.0,   # legend entries
+    "annotation":   7.0,   # in-axes text: trace labels, scale bars, callouts
+    "panel_label": 10.0,   # panel letters (A, B, C …), drawn bold
+}
+
+
+def font_size(role: str) -> float:
+    """Point size for a named text *role* — see :data:`FONT_SIZES`."""
+    if role not in FONT_SIZES:
+        raise KeyError(
+            f"Unknown text role {role!r}. Available: {sorted(FONT_SIZES)}"
+        )
+    return FONT_SIZES[role]
+
+
+# ════════════════════════════════════════════════════════
 #  THEME
 # ════════════════════════════════════════════════════════
 
@@ -228,14 +266,15 @@ class Theme:
             "axes.titlecolor":       _BLACK,
             "axes.prop_cycle":       cycler(color=DEFAULT_CYCLE),
 
-            # ── font sizes ────────────────────────────────────
-            "figure.titlesize":      18,
-            "axes.titlesize":        10,
-            "axes.labelsize":        8,
-            "xtick.labelsize":       8,
-            "ytick.labelsize":       8,
-            "legend.fontsize":       8,
-            "font.size":             8,
+            # ── font sizes (from FONT_SIZES — edit the scale, not here) ──
+            "figure.titlesize":      FONT_SIZES["suptitle"],
+            "figure.labelsize":      FONT_SIZES["label"],   # supxlabel/supylabel
+            "axes.titlesize":        FONT_SIZES["title"],
+            "axes.labelsize":        FONT_SIZES["label"],
+            "xtick.labelsize":       FONT_SIZES["tick"],
+            "ytick.labelsize":       FONT_SIZES["tick"],
+            "legend.fontsize":       FONT_SIZES["legend"],
+            "font.size":             FONT_SIZES["label"],
 
             # ── lines & strokes ───────────────────────────────
             "axes.linewidth":        0.75,
@@ -386,6 +425,6 @@ def clean_ax(ax, offset: int = 0) -> None:
 __all__ = [
     "Theme", "PALETTE", "SWATCHES", "DEFAULT_CYCLE",
     "swatch", "nice_ticks", "ordinal_ticks", "clean_ax",
-    "figure_size", "DEFAULT_FIGSIZE",
+    "figure_size", "DEFAULT_FIGSIZE", "FONT_SIZES", "font_size",
     "PAGE_IN", "MARGIN_IN", "CONTENT_W", "CONTENT_H",
 ]

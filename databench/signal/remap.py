@@ -126,6 +126,53 @@ def remap_to_timebase(
     return out
 
 
+def break_at_gaps(
+    t: np.ndarray,
+    values: np.ndarray,
+    *,
+    gap_threshold_s: float = GAP_THRESHOLD_S,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Split a trace at recording gaps by inserting NaN.
+
+    The counterpart to :func:`prepare_sparse_trace` for the case where a gap
+    should be *shown* rather than filled: a line plotted from the returned
+    arrays breaks at every gap instead of drawing a straight segment across
+    it.  Both arrays grow by one element per gap.
+
+    Parameters
+    ----------
+    t : array
+        Timestamps in seconds, monotonically increasing.
+    values : array
+        Signal values.  Truncated with *t* to their shortest common length.
+    gap_threshold_s : float
+        Intervals longer than this are gaps.
+
+    Returns
+    -------
+    (np.ndarray, np.ndarray)
+        ``(t_out, values_out)`` with a NaN inserted after the last sample
+        before each gap.
+
+    Examples
+    --------
+    >>> t = np.array([0.0, 0.1, 5.0, 5.1])
+    >>> t_out, y_out = break_at_gaps(t, np.ones(4), gap_threshold_s=1.0)
+    >>> t_out.size
+    5
+    """
+    t = np.asarray(t, dtype=float)
+    values = np.asarray(values, dtype=float)
+    n = min(t.size, values.size)
+    t, values = t[:n], values[:n]
+    if n < 2:
+        return t, values
+    cut = np.flatnonzero(np.diff(t) > gap_threshold_s) + 1
+    if cut.size == 0:
+        return t, values
+    return np.insert(t, cut, np.nan), np.insert(values, cut, np.nan)
+
+
 def prepare_sparse_trace(
     aligned_time: np.ndarray,
     values: np.ndarray,
