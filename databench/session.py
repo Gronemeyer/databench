@@ -322,11 +322,12 @@ class Session:
         if not isinstance(self._row.index, pd.MultiIndex):
             return list(self._row.index)
         t_val = self._row.get((canonical, time_column))
-        t_len = len(np.asarray(t_val)) if t_val is not None else 0
         if t_val is None:
             t_len = 0
         else:
             t_arr = np.asarray(t_val)
+            # A scalar (0-d) entry — e.g. a NaN where a time array is missing —
+            # carries no length; treat it as an absent time base.
             t_len = t_arr.size if t_arr.ndim >= 1 else 0
         min_len = max(1, int(t_len * 0.5))
         names: list[str] = []

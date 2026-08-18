@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 
 def _build_run_dir(output_root: Path, alias: str, script: str, tag: str) -> Path:
-    stamp = datetime.now().strftime("%y%m%d_%H%M%S")
+    stamp = datetime.now().strftime("%y%m%d")
     if tag:
         stamp = f"{stamp}_{tag}"
     return output_root / alias / script / stamp
