@@ -47,7 +47,8 @@ def eta_baselined(
     time_column: str = "time_elapsed_s",
     window: tuple[float, float] = (-2.0, 2.0),
     dt: float = 0.05,
-    baseline: tuple[float, float] = (-2.0, -1.0),
+    baseline: Optional[tuple[float, float]] = (-2.0, -1.0),
+    baseline_times: Optional[np.ndarray] = None,
     bout_intervals: Optional[np.ndarray] = None,
     exclude_events_in_bouts: bool = True,
     baseline_exclude_bouts: bool = False,
@@ -61,7 +62,7 @@ def eta_baselined(
     df : DataFrame
         Long-format table with *time_column* and all *roi_columns*.
     event_times : array
-        1-D array of event timestamps.
+        1-D array of event timestamps.  Epochs are cut around these.
     roi_columns : sequence of str
         Columns to extract per-event epochs from.
     time_column : str
@@ -70,8 +71,20 @@ def eta_baselined(
         Peri-event window in seconds.
     dt : float
         Interpolation step size in seconds.
-    baseline : (float, float)
-        Baseline window for subtraction.
+    baseline : (float, float) or None
+        Baseline window for subtraction.  ``None`` subtracts nothing and
+        returns the epoch in the signal's own units \u2014 use it for a signal
+        that already has a meaningful zero (speed, licks, pupil in mm),
+        where subtracting a per-event mean would move that zero.
+    baseline_times : array, optional
+        Times the *baseline* window is measured from, one per event.  By
+        default the baseline is taken around the event itself; pass this to
+        take it around a different event of the same trial, e.g. epochs cut
+        around bout **offset** but referenced to the quiescence before that
+        bout's **onset**, so onset- and offset-aligned epochs share one zero.
+        Baseline samples are read from the signal directly and may fall
+        outside *window*.  ``baseline_exclude_bouts`` applies only to the
+        default, in-window baseline.
 
     Returns
     -------
@@ -80,6 +93,15 @@ def eta_baselined(
     """
     df = df.sort_values(time_column)
     time_values = df[time_column].to_numpy()
+
+    event_times = np.asarray(event_times)
+    if baseline_times is not None:
+        baseline_times = np.asarray(baseline_times)
+        if len(baseline_times) != len(event_times):
+            raise ValueError(
+                f"baseline_times has {len(baseline_times)} entries for "
+                f"{len(event_times)} events; they are paired one to one."
+            )
 
     # Optionally filter events inside bout intervals
     if exclude_events_in_bouts and bout_intervals is not None and len(bout_intervals) > 0:
@@ -90,6 +112,8 @@ def eta_baselined(
                     keep[i] = False
                     break
         event_times = event_times[keep]
+        if baseline_times is not None:
+            baseline_times = baseline_times[keep]
 
     output_frames: list[pd.DataFrame] = []
     for event_id, event_time in enumerate(event_times):
@@ -103,25 +127,40 @@ def eta_baselined(
             if rel_t is None:
                 continue
 
-            baseline_mask_full = (rel_t >= baseline[0]) & (rel_t <= baseline[1])
-            baseline_mask = baseline_mask_full.copy()
-
-            if baseline_exclude_bouts and bout_intervals is not None and len(bout_intervals) > 0:
-                abs_t = event_time + rel_t
-                in_bout = np.zeros(abs_t.shape, dtype=bool)
-                for onset_t, offset_t in bout_intervals:
-                    in_bout |= (abs_t >= float(onset_t)) & (abs_t <= float(offset_t))
-                baseline_mask = baseline_mask & ~in_bout
-
-                clean_count = int(np.sum(baseline_mask & np.isfinite(roi_epoch)))
-                if clean_count < min_clean_baseline_points and fallback_to_full_baseline:
-                    baseline_mask = baseline_mask_full
-
-            bl_samples = roi_epoch[baseline_mask]
-            if baseline_mask.any() and np.any(np.isfinite(bl_samples)):
-                baseline_value = np.nanmean(bl_samples)
+            if baseline is None:
+                baseline_value = 0.0
+            elif baseline_times is not None:
+                # Baseline read around its own event, so it can sit outside
+                # the epoch window entirely.
+                _, bl_epoch = extract_epoch_interpolated(
+                    time_values, roi_values, baseline_times[event_id],
+                    window=baseline, dt=dt,
+                )
+                baseline_value = (
+                    np.nanmean(bl_epoch)
+                    if bl_epoch is not None and np.any(np.isfinite(bl_epoch))
+                    else np.nan
+                )
             else:
-                baseline_value = np.nan
+                baseline_mask_full = (rel_t >= baseline[0]) & (rel_t <= baseline[1])
+                baseline_mask = baseline_mask_full.copy()
+
+                if baseline_exclude_bouts and bout_intervals is not None and len(bout_intervals) > 0:
+                    abs_t = event_time + rel_t
+                    in_bout = np.zeros(abs_t.shape, dtype=bool)
+                    for onset_t, offset_t in bout_intervals:
+                        in_bout |= (abs_t >= float(onset_t)) & (abs_t <= float(offset_t))
+                    baseline_mask = baseline_mask & ~in_bout
+
+                    clean_count = int(np.sum(baseline_mask & np.isfinite(roi_epoch)))
+                    if clean_count < min_clean_baseline_points and fallback_to_full_baseline:
+                        baseline_mask = baseline_mask_full
+
+                bl_samples = roi_epoch[baseline_mask]
+                if baseline_mask.any() and np.any(np.isfinite(bl_samples)):
+                    baseline_value = np.nanmean(bl_samples)
+                else:
+                    baseline_value = np.nan
             roi_epoch = roi_epoch - baseline_value
 
             output_frames.append(
@@ -141,6 +180,79 @@ def eta_baselined(
 
 
 # ── ETA plotting (moved from _plotting.eta) ────────────────────────────────
+
+def _mean_sem_line(ax, frame: pd.DataFrame, color: str, label: str | None = None,
+                   *, lw: float = 1.0, alpha: float = 0.2) -> None:
+    """Draw one mean line with its ± SEM band from a tidy ETA frame."""
+    g = frame.sort_values("rel_time")
+    if g.empty:
+        return
+    ax.plot(g["rel_time"], g["mean"], color=color, lw=lw, label=label)
+    ax.fill_between(g["rel_time"], g["mean"] - g["sem"], g["mean"] + g["sem"],
+                    color=color, alpha=alpha, lw=0)
+
+
+def plot_eta_traces(
+    group_means: pd.DataFrame,
+    ax,
+    *,
+    event: str,
+    rois: Sequence[str],
+    condition: str | None = None,
+    colors: Mapping[str, str] | None = None,
+    labels: Mapping[str, str] | None = None,
+    lw: float = 1.0,
+    zero_line: bool = True,
+) -> "plt.Axes":
+    """Draw mean ± SEM ETA traces for *rois* into an existing *ax*, one line per ROI.
+
+    The axes-level counterpart of :func:`plot_eta_by_condition`, for composing
+    ETA panels into a larger figure.  *group_means* is the tidy table
+    :class:`EtaAnalysis` produces — columns ``EventType``, ``ROI``,
+    ``rel_time``, ``mean``, ``sem``, and optionally ``Condition``.
+
+    Parameters
+    ----------
+    group_means : DataFrame
+        Tidy mean ± SEM table.  Rows are selected by *event*, and by
+        *condition* when the table carries a ``Condition`` column.
+    ax : matplotlib Axes
+        Axes to draw into.
+    event : str
+        ``EventType`` to plot.
+    rois : sequence of str
+        ROI names to draw, in drawing order.
+    condition : str, optional
+        Restrict to one ``Condition``.
+    colors, labels : mapping, optional
+        Per-ROI colour and legend label, keyed by ROI name.  ROIs absent from
+        *colors* fall back to the active theme's palette.
+    lw : float
+        Line width for the mean.
+    zero_line : bool
+        Draw a dotted vertical line at ``rel_time`` 0.
+
+    Returns
+    -------
+    matplotlib Axes
+    """
+    from databench.plotting import get_theme, style_axes
+
+    rows = group_means[group_means["EventType"] == event]
+    if condition is not None and "Condition" in rows.columns:
+        rows = rows[rows["Condition"] == condition]
+
+    palette = get_theme().colors
+    for i, roi in enumerate(rois):
+        color = (colors or {}).get(roi, palette[i % len(palette)])
+        _mean_sem_line(ax, rows[rows["ROI"] == roi], color,
+                       (labels or {}).get(roi, roi), lw=lw)
+
+    if zero_line:
+        ax.axvline(0.0, color=get_theme().fg, lw=0.6, ls=":")
+    style_axes(ax)
+    return ax
+
 
 def plot_eta_by_condition(
     group_means: pd.DataFrame,
@@ -185,17 +297,9 @@ def plot_eta_by_condition(
     for ax, roi in zip(axes, rois):
         roi_data = d[d["ROI"] == roi]
         for cond in conditions:
-            g = roi_data[roi_data["Condition"] == cond].sort_values("rel_time")
-            if g.empty:
-                continue
-            color = condition_colors.get(cond, "#333333")
-            ax.plot(g["rel_time"], g["mean"], label=cond, color=color)
-            ax.fill_between(
-                g["rel_time"],
-                g["mean"] - g["sem"],
-                g["mean"] + g["sem"],
-                alpha=0.2, color=color,
-            )
+            _mean_sem_line(ax, roi_data[roi_data["Condition"] == cond],
+                           condition_colors.get(cond, "#333333"), cond,
+                           lw=plt.rcParams["lines.linewidth"])
         ax.axvline(0, color="k", lw=1)
         ax.axhline(0, color="k", lw=0.5, alpha=0.5)
         ax.set_title(roi)
@@ -558,6 +662,17 @@ class EtaResult:
             task=task,
         )
         return fig
+
+    def plot_traces(self, ax, *, event: str = "onset",
+                    rois: list[str] | None = None, **kwargs):
+        """Draw mean ± SEM traces for this result into *ax*.
+
+        Thin wrapper over :func:`plot_eta_traces`, for composing an ETA panel
+        into a larger figure.
+        """
+        return plot_eta_traces(self.group_means, ax, event=event,
+                               rois=list(rois) if rois else self.roi_columns,
+                               **kwargs)
 
     @property
     def tables(self) -> dict[str, pd.DataFrame]:
