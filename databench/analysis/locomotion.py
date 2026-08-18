@@ -54,7 +54,12 @@ if TYPE_CHECKING:
 
 SOURCE_COLOR = "#2ca02c"
 
+DIRECTIONS = ("forward", "absolute", "backward")
+"""Accepted values of the *direction* argument on every detector here."""
+
 __all__ = [
+    "DIRECTIONS",
+    "direction_mask",
     "locomotion_bout_events",
     "locomotion_bouts",
     "locomotion_events",
@@ -63,19 +68,60 @@ __all__ = [
 ]
 
 
+# ── Direction ──────────────────────────────────────────────────────────────
+
+def direction_mask(
+    speed_cms: np.ndarray,
+    min_speed_cms: float,
+    direction: str = "forward",
+) -> np.ndarray:
+    """Boolean mask of samples counting as locomotion in *direction*.
+
+    The encoder reports signed speed, so the sign convention has to be an
+    explicit choice rather than an accident of the comparison operator:
+
+    ``"forward"``
+        ``speed_cms >= min_speed_cms`` — forward travel only (default).
+    ``"absolute"``
+        ``abs(speed_cms) >= min_speed_cms`` — travel in either direction.
+    ``"backward"``
+        ``speed_cms <= -min_speed_cms`` — reverse travel only.
+    """
+    speed_cms = np.asarray(speed_cms, dtype=float)
+    if direction == "forward":
+        return speed_cms >= min_speed_cms
+    if direction == "absolute":
+        return np.abs(speed_cms) >= min_speed_cms
+    if direction == "backward":
+        return speed_cms <= -min_speed_cms
+    raise ValueError(
+        f"Unknown direction {direction!r}. Expected one of {DIRECTIONS}."
+    )
+
+
 # ── Private helpers ────────────────────────────────────────────────────────
 
 def _bout_stats(
     t: np.ndarray,
     speed_cms: np.ndarray,
     epochs: pd.DataFrame,
+    *,
+    direction: str = "forward",
 ) -> None:
-    """Add ``mean_speed_cms`` and ``distance_m`` columns to an EpochTable *in place*."""
+    """Add ``mean_speed_cms`` and ``distance_m`` columns to an EpochTable *in place*.
+
+    ``mean_speed_cms`` follows the sign convention the bouts were detected
+    under: magnitudes for ``direction="absolute"``, signed values otherwise —
+    so a backward bout reports a negative mean speed and a negative distance.
+    """
     mean_speeds: list[float] = []
     distances_m: list[float] = []
     for _, row in epochs.iterrows():
         s, e = int(row[START_IDX]), int(row[END_IDX])
-        mean_speeds.append(float(np.nanmean(np.abs(speed_cms[s : e + 1]))))
+        window = speed_cms[s : e + 1]
+        if direction == "absolute":
+            window = np.abs(window)
+        mean_speeds.append(float(np.nanmean(window)))
         time_steps = np.diff(t[s : e + 1])
         dist_cm = float(np.nansum(speed_cms[s + 1 : e + 1] * time_steps))
         distances_m.append(dist_cm / 100.0)
@@ -92,12 +138,14 @@ def locomotion_bouts(
     min_speed_cms: float = 0.5,
     min_duration_s: float = 1.0,
     merge_gap_s: float = 0.5,
+    direction: str = "forward",
 ) -> list[tuple[int, int]]:
     """Detect locomotion bouts and return index pairs.
 
     Convenience wrapper over :func:`locomotion_bout_events` for procedural
     scripts that only need ``[(start_idx, end_idx), ...]`` rather than a
-    full EpochTable.
+    full EpochTable.  *direction* is passed through — see
+    :func:`direction_mask`.
     """
     epochs = locomotion_bout_events(
         t,
@@ -105,6 +153,7 @@ def locomotion_bouts(
         min_speed_cms=min_speed_cms,
         min_duration_s=min_duration_s,
         merge_gap_s=merge_gap_s,
+        direction=direction,
     )
     if epochs.empty:
         return []
@@ -166,6 +215,7 @@ def locomotion_bout_events(
     min_speed_cms: float = 0.5,
     min_duration_s: float = 1.0,
     merge_gap_s: float = 0.5,
+    direction: str = "forward",
     context: Mapping[str, Any] | None = None,
     group_cols: tuple[str, ...] = ("Subject", "Session", "Task"),
     time_col: str = "time_elapsed_s",
@@ -177,6 +227,10 @@ def locomotion_bout_events(
     Accepts either raw arrays ``(t, speed_cms)`` or a grouped DataFrame.
     Always returns a DataFrame with the standard epoch columns plus
     ``mean_speed_cms`` and ``distance_m``.
+
+    *direction* selects the sign convention for the speed threshold —
+    ``"forward"`` (default), ``"absolute"``, or ``"backward"``; see
+    :func:`direction_mask`.
     """
     if isinstance(t, pd.DataFrame):
         tables: list[pd.DataFrame] = []
@@ -201,6 +255,7 @@ def locomotion_bout_events(
                 min_speed_cms=min_speed_cms,
                 min_duration_s=min_duration_s,
                 merge_gap_s=merge_gap_s,
+                direction=direction,
                 context=local_context,
             )
             if bout_table.empty:
@@ -212,7 +267,7 @@ def locomotion_bout_events(
         return pd.concat(tables, ignore_index=True)
 
     # ── Array path ─────────────────────────────────────────────────────
-    mask = speed_cms >= min_speed_cms
+    mask = direction_mask(speed_cms, min_speed_cms, direction)
     epochs = detect_epochs(
         mask, t,
         event_type="locomotion_bout",
@@ -221,7 +276,7 @@ def locomotion_bout_events(
         metadata=dict(context) if context else None,
     )
     if not epochs.empty:
-        _bout_stats(t, speed_cms, epochs)
+        _bout_stats(t, speed_cms, epochs, direction=direction)
     else:
         epochs["mean_speed_cms"] = []
         epochs["distance_m"] = []
@@ -240,6 +295,7 @@ def locomotion_events(
     min_speed_cms: float = 0.5,
     min_duration_s: float = 1.0,
     merge_gap_s: float = 0.5,
+    direction: str = "forward",
     event_types: tuple[str, ...] = ("onset", "offset"),
     condition_map: dict[str, str] | None = None,
 ) -> EventsTable:
@@ -266,6 +322,9 @@ def locomotion_events(
         Minimum bout duration (seconds).
     merge_gap_s : float
         Merge bouts closer than this (seconds).
+    direction : str
+        Sign convention for the speed threshold — ``"forward"`` (default),
+        ``"absolute"``, or ``"backward"``.  See :func:`direction_mask`.
     event_types : tuple of str
         Which transitions to include (``"onset"`` and/or ``"offset"``).
     condition_map : dict, optional
@@ -295,6 +354,7 @@ def locomotion_events(
             min_speed_cms=min_speed_cms,
             min_duration_s=min_duration_s,
             merge_gap_s=merge_gap_s,
+            direction=direction,
         )
 
         if epochs.empty:
@@ -350,6 +410,7 @@ class LocomotionBoutEventsExtractor:
     min_speed_cms: float = 0.5
     min_duration_s: float = 1.0
     merge_gap_s: float = 0.5
+    direction: str = "forward"
     group_cols: tuple[str, ...] = ("Subject", "Session", "Task")
     time_col: str = "time_elapsed_s"
     speed_col: str = "speed_mm"
@@ -361,6 +422,7 @@ class LocomotionBoutEventsExtractor:
             min_speed_cms=self.min_speed_cms,
             min_duration_s=self.min_duration_s,
             merge_gap_s=self.merge_gap_s,
+            direction=self.direction,
             group_cols=self.group_cols,
             time_col=self.time_col,
             speed_col=self.speed_col,
