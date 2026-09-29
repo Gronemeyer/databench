@@ -171,6 +171,15 @@ class Session:
         )
 
     @property
+    def sex(self) -> str:
+        """Sex recorded in ``session_config.sex``, or ``""`` when absent."""
+        try:
+            recorded = np.asarray(self.signal("session_config", "sex")).ravel()
+        except SignalNotFoundError:
+            return ""
+        return str(recorded[0]) if recorded.size else ""
+
+    @property
     def label(self) -> str:
         return f"Subject={self.subject} | Session={self.session} | Task={self.task}"
 
