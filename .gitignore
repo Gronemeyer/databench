@@ -7,7 +7,7 @@ __pycache__/
 /databench.egg-info
 /databench/__pycache__
 /databench/_version.py
-*.csv
+#*.csv
 /.DS_Store
 *.log
 datasets.toml
@@ -15,3 +15,11 @@ datasets.toml
 
 # Ignore any .py files in the same root as the gitignore file, but not in subdirectories
 /*.py
+
+# Analysis scripts live in their own repo, checked out here
+/analysis_scripts/
+
+# HTML outputs (the viewer's page template is package data)
+*.html
+!/databench/viewer/index.html
+/etoh-figure1
