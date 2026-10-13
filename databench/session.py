@@ -14,7 +14,34 @@ import numpy as np
 import pandas as pd
 
 from databench.config import Corrections, Schema
+from databench.store import cell_shape, resolve
 from databench.utils.labels import parse_session_day
+
+
+class _CellRow:
+    """One dataset row whose archive cells load when read.
+
+    Supports the two Series operations sessions use — ``.get(key)`` and
+    ``.index`` — and adds :meth:`shape`, which answers from the archive
+    manifest without loading.  Rows from a pickled dataset pass through
+    unchanged.
+    """
+
+    __slots__ = ("_row",)
+
+    def __init__(self, row: pd.Series) -> None:
+        self._row = row
+
+    @property
+    def index(self) -> pd.Index:
+        return self._row.index
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        return resolve(self._row.get(key, default))
+
+    def shape(self, key: Any) -> tuple:
+        """Shape of the cell at *key* (``()`` when absent), read without loading."""
+        return cell_shape(self._row.get(key))
 
 
 def _fuzzy_suggest(needle: str, haystack: list[str], n: int = 3) -> str:
@@ -108,7 +135,7 @@ class Session:
         schema: Schema | None = None,
         corrections: Corrections | None = None,
     ) -> None:
-        self._row = row
+        self._row = row if isinstance(row, _CellRow) else _CellRow(row)
         self._index = index
         self._schema = schema if schema is not None else Schema()
         self._corrections = corrections if corrections is not None else Corrections()
@@ -281,11 +308,9 @@ class Session:
         if isinstance(self._row.index, pd.MultiIndex):
             for src, name in self._row.index:
                 if src == canonical and name != column:
-                    val = self._row.get((src, name))
-                    if val is not None:
-                        arr = np.asarray(val)
-                        if arr.ndim >= 1:
-                            max_sig_len = max(max_sig_len, arr.size)
+                    shape = self._row.shape((src, name))
+                    if len(shape) >= 1:
+                        max_sig_len = max(max_sig_len, int(np.prod(shape)))
 
         candidates: list[tuple[str, str]] = [
             (canonical, column),
@@ -330,21 +355,17 @@ class Session:
         canonical = self._schema.resolve_source(source)
         if not isinstance(self._row.index, pd.MultiIndex):
             return list(self._row.index)
-        t_val = self._row.get((canonical, time_column))
-        if t_val is None:
-            t_len = 0
-        else:
-            t_arr = np.asarray(t_val)
-            # A scalar (0-d) entry — e.g. a NaN where a time array is missing —
-            # carries no length; treat it as an absent time base.
-            t_len = t_arr.size if t_arr.ndim >= 1 else 0
+        # Shapes only: an archive answers these without loading any array.
+        # A scalar (0-d) time entry — e.g. a NaN where a time array is
+        # missing — carries no length; treat it as an absent time base.
+        t_shape = self._row.shape((canonical, time_column))
+        t_len = int(np.prod(t_shape)) if len(t_shape) >= 1 else 0
         min_len = max(1, int(t_len * 0.5))
         names: list[str] = []
         for src, name in self._row.index:
             if src == canonical and name != time_column:
-                val = self._row.get((src, name))
-                arr = np.asarray(val)
-                if arr.ndim >= 1 and arr.size >= min_len:
+                shape = self._row.shape((src, name))
+                if len(shape) >= 1 and np.prod(shape) >= min_len:
                     names.append(name)
         return sorted(names)
 

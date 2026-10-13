@@ -105,13 +105,47 @@ def _env_info() -> dict[str, str]:
 
 # ── dataset ──────────────────────────────────────────────────────────────
 
+_SHA_CACHE: dict[tuple[str, int, int], str] = {}
+
+
 def file_sha256(path: Path, *, chunk: int = 1 << 20) -> str:
-    """Streamed SHA-256 of a file — verifies a shared run used the same data."""
+    """Streamed SHA-256 of a file — verifies a shared run used the same data.
+
+    Memoised per process on ``(path, size, mtime)`` so a batch of scripts
+    sharing one dataset hashes it once.
+    """
+    stat = path.stat()
+    key = (str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+    if key in _SHA_CACHE:
+        return _SHA_CACHE[key]
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for block in iter(lambda: f.read(chunk), b""):
             h.update(block)
-    return h.hexdigest()
+    _SHA_CACHE[key] = h.hexdigest()
+    return _SHA_CACHE[key]
+
+
+def dataset_sha256(path: Path) -> str:
+    """Content fingerprint of a dataset file.
+
+    An ``.npz`` archive is fingerprinted by its member table — each member's
+    name, size and CRC-32 (:func:`databench.store.archive_sha256`) — so a
+    run does not read the whole archive; any other file is hashed in full.
+    """
+    from databench.store import archive_sha256, is_archive
+    return archive_sha256(path) if is_archive(path) else file_sha256(path)
+
+
+def _archive_origin(path: Path) -> dict[str, Any]:
+    """``{"converted_from": {name, sha256}}`` for an archive, else ``{}``.
+
+    Links runs on an archive to earlier runs on the pickle it was built from.
+    """
+    from databench.store import is_archive, read_manifest
+    if not is_archive(path):
+        return {}
+    return {"converted_from": read_manifest(path).get("source", {})}
 
 
 # ── params ───────────────────────────────────────────────────────────────
@@ -151,8 +185,9 @@ def capture(project: "Project", run: "Run") -> dict[str, Any]:
         "dataset": {
             "alias": project.alias,
             "path": str(project.dataset_path),
-            "sha256": file_sha256(project.dataset_path),
+            "sha256": dataset_sha256(project.dataset_path),
             "rows": int(len(project.df)),
+            **_archive_origin(project.dataset_path),
         },
         "code": {
             **_git_info(script),

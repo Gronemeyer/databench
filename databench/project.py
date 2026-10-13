@@ -32,16 +32,57 @@ from databench.config import (
     dataset_params,
     resolve_dataset,
 )
+from databench.store import is_archive, read_archive
 from databench.tabler import DataTabler
 
-_DATASET_SUFFIXES = (".pkl", ".pickle", ".h5", ".hdf", ".hdf5", ".parquet", ".csv")
+_DATASET_SUFFIXES = (".npz", ".pkl", ".pickle", ".h5", ".hdf", ".hdf5", ".parquet", ".csv")
 
 
-def load_dataset(path: Path) -> pd.DataFrame:
-    """Load a dataset from disk (.pkl, .h5, .parquet, .csv)."""
+_LOADED: dict[tuple[str, int, int], pd.DataFrame] = {}
+"""Process-wide cache of loaded datasets, keyed by path, size and mtime.
+
+Several scripts run back to back in one interpreter (see
+``analysis_scripts/osc-event-onset/run-all.py``) each construct their own
+:class:`Project`.  Without this cache every one of them re-reads the same
+multi-gigabyte pickle (for an ``.npz`` archive, only its index frame).
+The frame is treated as read-only: :class:`Project` wraps it in its own
+:class:`~databench.tabler.DataTabler`, and
+:meth:`Project.filter` rebinds that tabler to a narrowed frame rather than
+changing the cached one.  Rewriting the file changes its size or mtime and
+so produces a fresh read.
+"""
+
+
+def clear_dataset_cache() -> None:
+    """Drop every cached dataset frame."""
+    _LOADED.clear()
+
+
+def load_dataset(path: Path, *, cache: bool = True) -> pd.DataFrame:
+    """Load a dataset from disk (.npz archive, .pkl, .h5, .parquet, .csv).
+
+    An ``.npz`` dataset archive (see :mod:`databench.store`) reads only its
+    index frame here; large cells load when a session asks for them.  With
+    *cache* the frame is memoised on ``(path, size, mtime)`` for the
+    lifetime of the process, so a second :class:`Project` on the same file
+    reuses it.
+    """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Dataset file not found: {path}")
+    stat = path.stat()
+    key = (str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+    if cache and key in _LOADED:
+        return _LOADED[key]
+    df = _read_dataset(path)
+    if cache:
+        _LOADED[key] = df
+    return df
+
+
+def _read_dataset(path: Path) -> pd.DataFrame:
+    if is_archive(path):
+        return read_archive(path)
     if path.suffix in {".pkl", ".pickle"}:
         return pd.read_pickle(path)
     if path.suffix in {".h5", ".hdf", ".hdf5"}:
@@ -51,7 +92,7 @@ def load_dataset(path: Path) -> pd.DataFrame:
     if path.suffix == ".csv":
         return pd.read_csv(path)
     raise ValueError(
-        f"Unsupported file format: {path.suffix!r}. Use .pkl, .h5, .parquet, or .csv."
+        f"Unsupported file format: {path.suffix!r}. Use .npz, .pkl, .h5, .parquet, or .csv."
     )
 
 
@@ -83,6 +124,12 @@ class Project:
         Root for run directories (default ``"outputs"``).
     analyst, lab : str
         Recorded in provenance; filled from ``databench.toml`` / env when blank.
+    eager : bool
+        Read the dataset during construction.  The default defers the read
+        until the data is first needed, so ``alias``, ``output_root``,
+        ``condition_order`` and :meth:`run` are available without it.  The
+        frame itself is cached per process, so several projects on one file
+        share a single read.
     """
 
     def __init__(
@@ -92,6 +139,7 @@ class Project:
         output_root: str | Path = "outputs",
         analyst: str = "",
         lab: str = "",
+        eager: bool = False,
     ) -> None:
         self.dataset_path = self._resolve_path(dataset)
         self.output_root = Path(output_root)
@@ -108,9 +156,25 @@ class Project:
         self._schema = Schema.from_dataset_entry(self.params)
         self._corrections = Corrections.from_dataset_entry(self.params)
 
-        df = load_dataset(self.dataset_path)
-        self._df = self._apply_task_aliases(df, self._corrections)
-        self._tabler = DataTabler(self._df)
+        self._df: pd.DataFrame | None = None
+        self._tabler_cache: DataTabler | None = None
+        if eager:
+            self._load()
+
+    # ── loading ──────────────────────────────────────────────────────────
+
+    def _load(self) -> DataTabler:
+        """Read the dataset (once per process) and build this project's tabler."""
+        if self._tabler_cache is None:
+            df = load_dataset(self.dataset_path)
+            self._df = self._apply_task_aliases(df, self._corrections)
+            self._tabler_cache = DataTabler(self._df)
+        return self._tabler_cache
+
+    @property
+    def loaded(self) -> bool:
+        """Whether the dataset frame has been read yet."""
+        return self._tabler_cache is not None
 
     @staticmethod
     def _apply_task_aliases(df: pd.DataFrame, corrections: Corrections) -> pd.DataFrame:
@@ -150,15 +214,29 @@ class Project:
         from databench.run import Run
         return Run(self, name=name, tag=tag)
 
+    def latest_run_dir(self, name: str, *, tag: str = "") -> Path:
+        """Newest existing run directory under ``outputs/<alias>/<name>/``.
+
+        Matches ``<YYMMDD>[_<tag>]`` directories written by :class:`~databench.run.Run`;
+        with a *tag*, only directories ending in ``_<tag>`` are considered. Directory
+        names sort correctly by date since the run's date stamp is zero-padded.
+        """
+        script_dir = self.output_root / self.alias / name
+        pattern = f"*_{tag}" if tag else "*"
+        candidates = sorted(p for p in script_dir.glob(pattern) if p.is_dir())
+        if not candidates:
+            raise FileNotFoundError(f"No run directories matching {pattern!r} in {script_dir}")
+        return candidates[-1]
+
     # ── data ─────────────────────────────────────────────────────────────
 
     @property
     def df(self) -> pd.DataFrame:
-        return self._tabler.df
+        return self._load().df
 
     @property
     def tabler(self) -> DataTabler:
-        return self._tabler
+        return self._load()
 
     @property
     def schema(self) -> Schema:
@@ -213,8 +291,9 @@ class Project:
         ``drop_rows`` and positional ``exclude`` take MultiIndex tuples.
         Keyword args are include-style: ``proj.filter(Task="task-spont")``.
         """
-        self._tabler.filter(drop_rows=drop_rows, include=include, exclude=exclude, **kwargs)
-        self._df = self._tabler.df
+        tabler = self._load()
+        tabler.filter(drop_rows=drop_rows, include=include, exclude=exclude, **kwargs)
+        self._df = tabler.df
         return self
 
     # ── selection ────────────────────────────────────────────────────────
@@ -300,7 +379,8 @@ class Project:
         return sorted(self.df.index.get_level_values("Task").unique())
 
     def __repr__(self) -> str:
-        return f"Project(dataset={self.dataset_path.name!r}, alias={self.alias!r}, rows={len(self.df)})"
+        rows = len(self.df) if self.loaded else "unread"
+        return f"Project(dataset={self.dataset_path.name!r}, alias={self.alias!r}, rows={rows})"
 
     def describe(self) -> str:
         """Print the dataset shape and (declared or introspected) sources."""
