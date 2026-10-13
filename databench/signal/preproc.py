@@ -12,6 +12,8 @@ from scipy import signal as sp_signal
 from scipy.ndimage import median_filter
 from scipy.signal import savgol_filter
 
+from databench.signal.epoching import segments_from_mask
+
 
 # ── Defaults ───────────────────────────────────────────────────────────────
 
@@ -176,6 +178,19 @@ def remove_outliers_iqr(
 
 # ── Detrending & normalization ─────────────────────────────────────────────
 
+def zscore_1d(x: np.ndarray) -> np.ndarray:
+    """``(x - mean) / sd`` ignoring NaNs; all-NaN when the trace is flat.
+
+    The per-recording normalisation used for pupil diameter, whose
+    millimetre scale differs between camera sessions.
+    """
+    x = np.asarray(x, dtype=float)
+    sd = np.nanstd(x)
+    if not np.isfinite(sd) or sd == 0:
+        return np.full_like(x, np.nan)
+    return (x - np.nanmean(x)) / sd
+
+
 def detrend_zscore_1d(x: np.ndarray) -> np.ndarray:
     """Linear detrend followed by z-score normalization.
 
@@ -194,3 +209,46 @@ def detrend_zscore_1d(x: np.ndarray) -> np.ndarray:
     if std_dev == 0:
         std_dev = 1.0
     return (detrended - detrended.mean()) / std_dev
+
+
+# ── Artefacts ──────────────────────────────────────────────────────────────
+
+def clean_step_artifacts(
+    t: np.ndarray,
+    y: np.ndarray,
+    *,
+    max_step: float,
+    bounds: Tuple[float, float] | None = None,
+    max_fill_s: float = 0.5,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Flag frame-to-frame jumps and out-of-bounds values; repair short runs.
+
+    A sample is flagged when it is non-finite, when ``|y[i] - y[i-1]|`` or
+    ``|y[i+1] - y[i]|`` exceeds *max_step*, or when it lies outside
+    ``bounds = (low, high)`` (``y <= low`` or ``y > high``).  Runs of flagged
+    samples lasting at most *max_fill_s* are linearly interpolated from the
+    samples either side; longer runs, and runs touching either end, become NaN.
+
+    Returns ``(cleaned, flagged)``.
+    """
+    t = np.asarray(t, dtype=float)
+    y = np.asarray(y, dtype=float)
+    flagged = ~np.isfinite(y)
+    if bounds is not None:
+        with np.errstate(invalid="ignore"):
+            flagged |= (y <= bounds[0]) | (y > bounds[1])
+    with np.errstate(invalid="ignore"):
+        jump = np.abs(np.diff(y)) > max_step
+    flagged[1:] |= jump
+    flagged[:-1] |= jump
+
+    cleaned = np.where(flagged, np.nan, y)
+    if y.size < 2:
+        return cleaned, flagged
+    dt = float(np.nanmedian(np.diff(t)))
+    for start, end in segments_from_mask(flagged):
+        if start == 0 or end == y.size - 1 or t[end] - t[start] + dt > max_fill_s:
+            continue
+        cleaned[start:end + 1] = np.interp(t[start:end + 1], [t[start - 1], t[end + 1]],
+                                           [y[start - 1], y[end + 1]])
+    return cleaned, flagged

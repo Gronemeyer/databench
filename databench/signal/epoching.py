@@ -16,6 +16,7 @@ Key public API:
 
 * :func:`detect_epochs` — threshold-based epoch detection from a boolean mask.
 * :func:`epochs_around_events` — build epoch intervals around point events.
+* :func:`epoch_overlap` — how one EpochTable sits inside the rows of another.
 * :func:`make_events` — build a point-event table for ETA pipelines.
 * :func:`epoch_indices` / :func:`extract_epoch_interpolated` — peri-event
   signal extraction on a uniform time grid.
@@ -134,6 +135,27 @@ def apply_min_duration_by_time(
     ]
 
 
+def split_segments_at_gaps(
+    segments: Iterable[Tuple[int, int]],
+    t: np.ndarray,
+    max_gap_s: float,
+) -> list[Tuple[int, int]]:
+    """Split segments wherever consecutive samples are more than *max_gap_s* apart.
+
+    A mask built on an event-driven stream (a treadmill encoder that only
+    reports while the belt turns) has no samples across a silence, so two
+    runs of ``True`` on either side of a long pause look contiguous by index.
+    Splitting at the time gap keeps a segment from spanning the pause.
+    """
+    t = np.asarray(t, dtype=float)
+    out: list[Tuple[int, int]] = []
+    for s, e in segments:
+        cuts = s + 1 + np.flatnonzero(np.diff(t[s:e + 1]) > max_gap_s)
+        edges = [s, *cuts.tolist(), e + 1]
+        out.extend((a, b - 1) for a, b in zip(edges[:-1], edges[1:]))
+    return out
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # EpochTable builders
 # ═══════════════════════════════════════════════════════════════════════════
@@ -175,11 +197,13 @@ def detect_epochs(
     event_type: str,
     min_duration_s: float = 0.0,
     merge_gap_s: float = 0.0,
+    max_sample_gap_s: float | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> pd.DataFrame:
     """Detect epochs from a boolean mask and return a standard EpochTable.
 
-    Pipeline: ``segments_from_mask`` → ``merge_gaps_by_time`` →
+    Pipeline: ``segments_from_mask`` → ``split_segments_at_gaps`` (when
+    *max_sample_gap_s* is set) → ``merge_gaps_by_time`` →
     ``apply_min_duration_by_time`` → EpochTable DataFrame.
 
     Parameters
@@ -195,6 +219,10 @@ def detect_epochs(
         Minimum epoch duration; shorter epochs are dropped.
     merge_gap_s : float
         Maximum inter-epoch gap to fuse.
+    max_sample_gap_s : float, optional
+        Split a run of ``True`` samples wherever consecutive samples are
+        further apart than this — for event-driven streams whose silences
+        carry no samples.  ``None`` keeps runs whole.
     metadata : dict, optional
         Scalar key/value pairs broadcast to every row (e.g.
         ``{"Subject": "GS28", "Session": "ses-01"}``).
@@ -206,6 +234,8 @@ def detect_epochs(
         ``event_type``, ``start_idx``, ``end_idx``, plus any *metadata*.
     """
     segs = segments_from_mask(mask)
+    if max_sample_gap_s is not None:
+        segs = split_segments_at_gaps(segs, t, max_sample_gap_s)
     if merge_gap_s > 0:
         segs = merge_gaps_by_time(segs, t, merge_gap_s)
     if min_duration_s > 0:
@@ -277,6 +307,48 @@ def epochs_around_events(
 # ═══════════════════════════════════════════════════════════════════════════
 # Point-event table  (formerly events.py)
 # ═══════════════════════════════════════════════════════════════════════════
+
+def in_epochs(t: np.ndarray, epochs: pd.DataFrame) -> np.ndarray:
+    """True where *t* falls inside any ``[start_s, end_s)`` row of *epochs*."""
+    t = np.asarray(t, dtype=float)
+    mask = np.zeros(t.shape, dtype=bool)
+    for start, end in zip(epochs[START_S].to_numpy(dtype=float), epochs[END_S].to_numpy(dtype=float)):
+        mask |= (t >= start) & (t < end)
+    return mask
+
+
+def epoch_overlap(intervals: pd.DataFrame, epochs: pd.DataFrame) -> pd.DataFrame:
+    """How the rows of *epochs* sit inside each row of *intervals*.
+
+    Both tables carry ``start_s`` / ``end_s`` on the same clock (one
+    recording).  Returns one row per interval, on the interval index:
+
+    ``n_overlapping``
+        Epochs that share any time with the interval.
+    ``overlap_s``
+        Seconds of the interval covered by those epochs.
+    ``open_at_start``
+        An epoch was already running when the interval began.
+    ``first_start_s``
+        Earliest epoch start strictly inside the interval, or NaN.
+
+    Typical use: quiescent periods against oscillation bursts, to find
+    whether and when an oscillation began during each period.
+    """
+    a0 = intervals[START_S].to_numpy(dtype=float)[:, None]
+    a1 = intervals[END_S].to_numpy(dtype=float)[:, None]
+    b0 = epochs[START_S].to_numpy(dtype=float)[None, :]
+    b1 = epochs[END_S].to_numpy(dtype=float)[None, :]
+    shared = np.clip(np.minimum(a1, b1) - np.maximum(a0, b0), 0.0, None)
+    starts_inside = (b0 > a0) & (b0 < a1)
+    first = np.where(starts_inside, b0, np.inf).min(axis=1, initial=np.inf)
+    return pd.DataFrame({
+        "n_overlapping": ((b1 > a0) & (b0 < a1)).sum(axis=1),
+        "overlap_s": shared.sum(axis=1),
+        "open_at_start": ((b0 <= a0) & (b1 > a0)).any(axis=1),
+        "first_start_s": np.where(np.isfinite(first), first, np.nan),
+    }, index=intervals.index)
+
 
 def make_events(
     event_times: dict[str, np.ndarray | list[float] | Sequence[float]],

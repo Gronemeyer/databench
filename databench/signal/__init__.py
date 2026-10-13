@@ -15,6 +15,14 @@ from databench.signal.preproc import (  # noqa: F401
     smooth_median,
     remove_outliers_iqr,
     detrend_zscore_1d,
+    zscore_1d,
+)
+
+from databench.signal.spectral import (  # noqa: F401
+    aperiodic_peak,
+    epoch_spectra,
+    mean_spectrum,
+    morlet_power,
 )
 
 from databench.signal.remap import (  # noqa: F401 — public re-exports
@@ -42,9 +50,11 @@ from databench.signal.epoching import (  # noqa: F401 — public re-exports
     apply_min_duration,
     merge_gaps_by_time,
     apply_min_duration_by_time,
+    split_segments_at_gaps,
     # EpochTable builders
     detect_epochs,
     epochs_around_events,
+    epoch_overlap,
     # Point-event table
     make_events,
     # Peri-event extraction
