@@ -17,7 +17,19 @@ Which function do I want?
 | ``[(start_idx, end_idx), ...]``| returns index pairs only.                          |
 +--------------------------------+----------------------------------------------------+
 | Index pairs, want the inverse  | :func:`quiescent_bouts` — non-locomotion intervals |
-| (quiet periods)                | between bouts.                                     |
+| (quiet periods) on a regularly | between bouts, as sample-index pairs.              |
+| sampled clock                  |                                                    |
++--------------------------------+----------------------------------------------------+
+| A bout table and a recording   | :func:`quiescent_periods` — non-locomotion         |
+| span; an encoder that is silent| intervals in seconds, clipped to the span, each    |
+| while the belt is still        | marked by what ended it (a bout, or the span).     |
++--------------------------------+----------------------------------------------------+
+| A bout table, want short/long  | :func:`classify_bouts` — one of :data:`BOUT_TYPES` |
+| x slow/fast labels             | per bout, from its duration and mean speed.        |
++--------------------------------+----------------------------------------------------+
+| A :class:`Session`, want its   | :func:`treadmill_speed` — finite samples, empty    |
+| speed with silent recordings   | when the encoder streamed but reported nothing,    |
+| kept (still, not missing)      | None when it never streamed.                       |
 +--------------------------------+----------------------------------------------------+
 | A :class:`SessionGroup` and    | :func:`locomotion_events` — scans every session    |
 | need events for ETA            | and returns an :data:`~databench.types.EventsTable`|
@@ -44,8 +56,13 @@ from databench.signal.epoching import (
     make_events,
     REQUIRED_COLUMNS,
     detect_epochs,
-    START_IDX,
+    DURATION_S,
     END_IDX,
+    END_S,
+    EPOCH_ID,
+    EVENT_TYPE,
+    START_IDX,
+    START_S,
 )
 
 if TYPE_CHECKING:
@@ -57,13 +74,20 @@ SOURCE_COLOR = "#2ca02c"
 DIRECTIONS = ("forward", "absolute", "backward")
 """Accepted values of the *direction* argument on every detector here."""
 
+BOUT_TYPES = ("Long & fast", "Short & fast", "Short & slow", "Long & slow")
+"""Labels returned by :func:`classify_bouts`."""
+
 __all__ = [
+    "BOUT_TYPES",
     "DIRECTIONS",
+    "classify_bouts",
     "direction_mask",
     "locomotion_bout_events",
     "locomotion_bouts",
     "locomotion_events",
     "quiescent_bouts",
+    "quiescent_periods",
+    "treadmill_speed",
     "LocomotionBoutEventsExtractor",
 ]
 
@@ -108,24 +132,33 @@ def _bout_stats(
     *,
     direction: str = "forward",
 ) -> None:
-    """Add ``mean_speed_cms`` and ``distance_m`` columns to an EpochTable *in place*.
+    """Add per-bout speed and distance columns to an EpochTable *in place*.
 
-    ``mean_speed_cms`` follows the sign convention the bouts were detected
-    under: magnitudes for ``direction="absolute"``, signed values otherwise —
-    so a backward bout reports a negative mean speed and a negative distance.
+    ``mean_speed_cms`` and ``peak_speed_cms`` follow the sign convention the
+    bouts were detected under: magnitudes for ``direction="absolute"``,
+    signed values otherwise — so a backward bout reports a negative mean, its
+    most negative sample as the peak, and a negative distance.
+    ``time_to_peak_s`` is measured from the bout start.
     """
     mean_speeds: list[float] = []
+    peak_speeds: list[float] = []
+    times_to_peak: list[float] = []
     distances_m: list[float] = []
     for _, row in epochs.iterrows():
         s, e = int(row[START_IDX]), int(row[END_IDX])
         window = speed_cms[s : e + 1]
         if direction == "absolute":
             window = np.abs(window)
+        peak = int(np.nanargmin(window) if direction == "backward" else np.nanargmax(window))
         mean_speeds.append(float(np.nanmean(window)))
+        peak_speeds.append(float(window[peak]))
+        times_to_peak.append(float(t[s + peak] - t[s]))
         time_steps = np.diff(t[s : e + 1])
         dist_cm = float(np.nansum(speed_cms[s + 1 : e + 1] * time_steps))
         distances_m.append(dist_cm / 100.0)
     epochs["mean_speed_cms"] = mean_speeds
+    epochs["peak_speed_cms"] = peak_speeds
+    epochs["time_to_peak_s"] = times_to_peak
     epochs["distance_m"] = distances_m
 
 
@@ -139,13 +172,13 @@ def locomotion_bouts(
     min_duration_s: float = 1.0,
     merge_gap_s: float = 0.5,
     direction: str = "forward",
+    max_sample_gap_s: float | None = None,
 ) -> list[tuple[int, int]]:
     """Detect locomotion bouts and return index pairs.
 
     Convenience wrapper over :func:`locomotion_bout_events` for procedural
     scripts that only need ``[(start_idx, end_idx), ...]`` rather than a
-    full EpochTable.  *direction* is passed through — see
-    :func:`direction_mask`.
+    full EpochTable.  *direction* and *max_sample_gap_s* are passed through.
     """
     epochs = locomotion_bout_events(
         t,
@@ -154,6 +187,7 @@ def locomotion_bouts(
         min_duration_s=min_duration_s,
         merge_gap_s=merge_gap_s,
         direction=direction,
+        max_sample_gap_s=max_sample_gap_s,
     )
     if epochs.empty:
         return []
@@ -206,6 +240,103 @@ def quiescent_bouts(
     ]
 
 
+def quiescent_periods(
+    bouts: pd.DataFrame,
+    span: tuple[float, float],
+    *,
+    min_duration_s: float = 0.0,
+) -> pd.DataFrame:
+    """Non-locomotion intervals in seconds, clipped to *span*.
+
+    The time-based counterpart of :func:`quiescent_bouts`.  A quiescent
+    period runs from the end of one bout to the start of the next, so a
+    stretch in which an event-driven encoder reported nothing is still a
+    period — the index form drops it, because there are no samples to index.
+
+    Parameters
+    ----------
+    bouts : DataFrame or array of shape (n, 2)
+        Locomotion bouts in seconds — a table with ``start_s`` / ``end_s``
+        (``epoch_id`` optional, as returned by :func:`locomotion_bout_events`),
+        or plain ``[[start, end], ...]`` pairs.
+    span : (float, float)
+        Seconds over which quiescence is defined — typically the overlap of
+        the treadmill clock with whatever signal the periods are paired with.
+    min_duration_s : float
+        Drop periods shorter than this.
+
+    Returns
+    -------
+    pd.DataFrame
+        One row per period: ``epoch_id``, ``start_s``, ``end_s``,
+        ``duration_s``, ``event_type`` (``"quiescence"``), and
+
+        ``next_bout``
+            ``epoch_id`` (or row position) of the bout that ended the
+            period; missing when the span ended it.
+        ``censored``
+            ``True`` when the span, not a bout, ended the period — the
+            walking outcome is unobserved rather than absent.
+        ``opens_recording``
+            ``True`` when the period begins at the span start, so its true
+            onset is earlier than ``start_s``.
+    """
+    if not isinstance(bouts, pd.DataFrame):
+        bouts = pd.DataFrame(np.asarray(bouts, dtype=float).reshape(-1, 2), columns=[START_S, END_S])
+    ids = bouts[EPOCH_ID] if EPOCH_ID in bouts else pd.Series(range(len(bouts)), index=bouts.index)
+    order = np.argsort(bouts[START_S].to_numpy(dtype=float), kind="stable")
+    lo, hi = float(span[0]), float(span[1])
+    rows: list[dict] = []
+    cursor, opens = lo, True
+    for i in order:
+        start, end = float(bouts[START_S].iloc[i]), float(bouts[END_S].iloc[i])
+        if start > cursor:
+            rows.append({START_S: cursor, END_S: min(start, hi),
+                         "next_bout": int(ids.iloc[i]), "opens_recording": opens})
+        cursor, opens = max(cursor, end), False
+        if cursor >= hi:
+            break
+    if cursor < hi:
+        rows.append({START_S: cursor, END_S: hi, "next_bout": pd.NA, "opens_recording": opens})
+
+    table = pd.DataFrame(rows, columns=[START_S, END_S, "next_bout", "opens_recording"])
+    table[DURATION_S] = table[END_S] - table[START_S]
+    table = table[table[DURATION_S] >= min_duration_s].reset_index(drop=True)
+    table.insert(0, EPOCH_ID, range(len(table)))
+    table[EVENT_TYPE] = "quiescence"
+    table["next_bout"] = table["next_bout"].astype("Int64")
+    table["censored"] = table["next_bout"].isna()
+    table["opens_recording"] = table["opens_recording"].astype(bool)
+    return table[[EPOCH_ID, START_S, END_S, DURATION_S, EVENT_TYPE,
+                  "next_bout", "censored", "opens_recording"]]
+
+
+def classify_bouts(
+    bouts: pd.DataFrame,
+    *,
+    duration_cutoff_s: float = 3.0,
+    speed_cutoff_cms: float = 8.0,
+) -> pd.Series:
+    """Label each bout by duration and mean speed, as one of :data:`BOUT_TYPES`.
+
+    *bouts* carries ``duration_s`` and ``mean_speed_cms``, as returned by
+    :func:`locomotion_bout_events`.  A bout is *long* when
+    ``duration_s >= duration_cutoff_s`` and *fast* when
+    ``abs(mean_speed_cms) >= speed_cutoff_cms``, so backward bouts are
+    classified by their magnitude.
+
+    Returns
+    -------
+    pd.Series
+        ``bout_type`` labels on the index of *bouts*.
+    """
+    long = bouts[DURATION_S].to_numpy(dtype=float) >= duration_cutoff_s
+    fast = np.abs(bouts["mean_speed_cms"].to_numpy(dtype=float)) >= speed_cutoff_cms
+    labels = np.where(long, np.where(fast, BOUT_TYPES[0], BOUT_TYPES[3]),
+                      np.where(fast, BOUT_TYPES[1], BOUT_TYPES[2]))
+    return pd.Series(labels, index=bouts.index, name="bout_type", dtype=object)
+
+
 # ── Bout detection ─────────────────────────────────────────────────────────
 
 def locomotion_bout_events(
@@ -216,6 +347,7 @@ def locomotion_bout_events(
     min_duration_s: float = 1.0,
     merge_gap_s: float = 0.5,
     direction: str = "forward",
+    max_sample_gap_s: float | None = None,
     context: Mapping[str, Any] | None = None,
     group_cols: tuple[str, ...] = ("Subject", "Session", "Task"),
     time_col: str = "time_elapsed_s",
@@ -230,7 +362,9 @@ def locomotion_bout_events(
 
     *direction* selects the sign convention for the speed threshold —
     ``"forward"`` (default), ``"absolute"``, or ``"backward"``; see
-    :func:`direction_mask`.
+    :func:`direction_mask`.  *max_sample_gap_s* splits a run of samples at
+    any inter-sample interval longer than it, so a bout cannot span a
+    silence of an event-driven encoder.
     """
     if isinstance(t, pd.DataFrame):
         tables: list[pd.DataFrame] = []
@@ -256,6 +390,7 @@ def locomotion_bout_events(
                 min_duration_s=min_duration_s,
                 merge_gap_s=merge_gap_s,
                 direction=direction,
+                max_sample_gap_s=max_sample_gap_s,
                 context=local_context,
             )
             if bout_table.empty:
@@ -273,17 +408,57 @@ def locomotion_bout_events(
         event_type="locomotion_bout",
         min_duration_s=min_duration_s,
         merge_gap_s=merge_gap_s,
+        max_sample_gap_s=max_sample_gap_s,
         metadata=dict(context) if context else None,
     )
     if not epochs.empty:
         _bout_stats(t, speed_cms, epochs, direction=direction)
     else:
-        epochs["mean_speed_cms"] = []
-        epochs["distance_m"] = []
+        for column in ("mean_speed_cms", "peak_speed_cms", "time_to_peak_s", "distance_m"):
+            epochs[column] = []
     return epochs
 
 
 # ── Session-level event generation ─────────────────────────────────────────
+
+def treadmill_speed(
+    session: "Session",
+    span: tuple[float, float] | None = None,
+    *,
+    source: str = "treadmill",
+    time_col: str = "time_elapsed_s",
+    speed_col: str = "speed_mm",
+    speed_scale_to_cms: float = 10.0,
+    dataqueue_source: str = "dataqueue",
+    device_id: str = "treadmill",
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Finite treadmill samples ``(t, speed_cms)`` within *span*, or None.
+
+    An event-driven encoder reports only while the belt turns, so a recording
+    with no samples is still rather than missing when the encoder streamed:
+    its ``dataqueue`` holds packets from *device_id* (the encoder sends a burst
+    when acquisition starts).  Such a recording returns two empty arrays,
+    which :func:`locomotion_bout_events` turns into zero bouts.  None means the
+    dataqueue holds no packets from the device, so the recording is missing.
+    """
+    t = np.asarray(session.time(source, time_col), dtype=float)
+    speed = np.asarray(session.signal(source, speed_col), dtype=float)
+    n = min(t.size, speed.size)
+    t, speed = t[:n], speed[:n]
+    keep = np.isfinite(t) & np.isfinite(speed)
+    if span is not None:
+        keep &= (t >= span[0]) & (t <= span[1])
+    if keep.any():
+        order = np.argsort(t[keep], kind="stable")
+        return t[keep][order], speed[keep][order] / speed_scale_to_cms
+    try:
+        devices = np.asarray(session.signal(dataqueue_source, "device_id")).astype(str)
+    except KeyError:
+        return None
+    if not np.any(devices == device_id):
+        return None
+    return np.empty(0), np.empty(0)
+
 
 def locomotion_events(
     sessions: "SessionGroup | list[Session]",

@@ -1,6 +1,20 @@
-"""Oscillation detector and result — public analysis API.
+"""Oscillation burst detection — public analysis API.
 
-Usage::
+Two tiers, as in :mod:`databench.analysis.locomotion`:
+
+* :func:`oscillation_bursts` / :func:`burst_events` — pure-array core.  A
+  colleague with a time vector and a trace calls these directly; no
+  ``Project`` or ``Session`` is involved.  :func:`bosc_episodes` is the
+  threshold-free alternative: power above the trace's own 1/f background::
+
+      from databench.analysis.oscillation import oscillation_bursts
+      bursts = oscillation_bursts(t, dff, fs=50.0, band_hz=(2.0, 5.0))
+
+* :class:`OscillationDetector` (one ``Session``) and
+  :func:`oscillation_events` (a ``SessionGroup``, as an ETA events table) —
+  thin wrappers that pull the arrays out of a session and call the core.
+
+Session usage::
 
     from databench.analysis.oscillation import OscillationDetector
 
@@ -19,14 +33,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Tuple
+from typing import TYPE_CHECKING, Tuple
 
 import numpy as np
 import pandas as pd
+from scipy.signal import hilbert
+from scipy.stats import chi2
 
 from databench.utils.logger import get_logger, log_run
 from databench.signal.bandpass import bandpass_envelope, robust_threshold
-from databench.signal.epoching import detect_epochs, START_IDX, END_IDX
+from databench.signal.spectral import morlet_power
+from databench.signal.epoching import (
+    END_IDX, END_S, REQUIRED_COLUMNS, START_IDX, START_S, detect_epochs, make_events,
+)
+
+if TYPE_CHECKING:
+    from databench.session import Session, SessionGroup
+    from databench.types import EventsTable
 
 _log = get_logger(__name__)
 
@@ -114,8 +137,9 @@ class OscillationDetector:
                 f"({n} < {min_len} samples): "
                 f"{session.subject}/{session.session}/{session.task} — skipping"
             )
+            nothing = np.full_like(x, np.nan, dtype=float)
             return OscillationResult(
-                events=pd.DataFrame(),
+                events=burst_events(t, nothing, nothing, np.nan, fs=self.fs),
                 time=t, raw_signal=x,
                 filtered_signal=np.full_like(x, np.nan),
                 envelope=np.full_like(x, np.nan),
@@ -138,19 +162,10 @@ class OscillationDetector:
         else:
             thr, _, _ = robust_threshold(env, self.threshold_k)
 
-        # Detect bursts via unified epoch pipeline
-        mask = env > thr
-        events = detect_epochs(
-            mask, t,
-            event_type="oscillation_burst",
-            min_duration_s=self.min_duration_s,
-            merge_gap_s=self.merge_gap_s,
+        events = burst_events(
+            t, filtered, env, thr, fs=self.fs,
+            min_duration_s=self.min_duration_s, merge_gap_s=self.merge_gap_s,
         )
-        # Oscillation-specific: peak envelope within each burst
-        events["peak_env"] = [
-            float(env[int(s):int(e) + 1].max())
-            for s, e in zip(events[START_IDX], events[END_IDX])
-        ] if not events.empty else []
 
         # Derive sample-index pairs for plotting compatibility
         bursts = list(zip(
@@ -200,6 +215,195 @@ class OscillationDetector:
             raise ValueError(f"merge_gap_s must be ≥ 0, got {self.merge_gap_s}")
 
 
+# ── Pure-array core ────────────────────────────────────────────────────────
+
+def _instantaneous_frequency(filtered: np.ndarray, fs: float) -> np.ndarray:
+    """Hz between consecutive samples, from the unwrapped analytic phase."""
+    phase = np.unwrap(np.angle(hilbert(filtered)))
+    return np.diff(phase) * fs / (2 * np.pi)
+
+
+def burst_events(
+    t: np.ndarray,
+    filtered: np.ndarray,
+    envelope: np.ndarray,
+    threshold: float,
+    *,
+    fs: float,
+    min_duration_s: float = 0.5,
+    merge_gap_s: float = 0.25,
+) -> pd.DataFrame:
+    """Bursts where *envelope* exceeds *threshold*, as an EpochTable.
+
+    Takes an already band-passed signal and its envelope — use
+    :func:`oscillation_bursts` to start from the raw trace.  Adds to the
+    standard epoch columns:
+
+    ``peak_env``
+        Envelope maximum within the burst.
+    ``frequency_hz``
+        Median instantaneous frequency of *filtered* within the burst.
+    ``confirmed_s``
+        First above-threshold sample at which the burst has lasted
+        *min_duration_s* — the earliest moment it could be known to be a
+        burst.  ``start_s`` is set with hindsight; use ``confirmed_s`` when a
+        state defined by the burst must not look ahead in time (for example,
+        the rate of an event that ends the bursts).
+    """
+    t = np.asarray(t, dtype=float)
+    events = detect_epochs(
+        np.asarray(envelope) > threshold, t, event_type="oscillation_burst",
+        min_duration_s=min_duration_s, merge_gap_s=merge_gap_s,
+    )
+    frequency = _instantaneous_frequency(np.asarray(filtered, dtype=float), fs)
+    pairs = list(zip(events[START_IDX].astype(int), events[END_IDX].astype(int)))
+    events["peak_env"] = [float(np.max(envelope[s:e + 1])) for s, e in pairs]
+    events["frequency_hz"] = [float(np.nanmedian(frequency[s:e])) if e > s else np.nan for s, e in pairs]
+    above = np.asarray(envelope) > threshold
+    events["confirmed_s"] = [_confirmation_time(t, above, s, e, min_duration_s) for s, e in pairs]
+    return events
+
+
+def _confirmation_time(t, above, start, end, min_duration_s) -> float:
+    """Time of the first above-threshold sample in ``[start, end]`` at least *min_duration_s* after *start*."""
+    dt = float(np.nanmedian(np.diff(t))) if t.size > 1 else 0.0
+    idx = start + np.flatnonzero(above[start:end + 1] & (t[start:end + 1] - t[start] + dt >= min_duration_s))
+    return float(t[idx[0]]) if idx.size else float(t[end])
+
+
+def oscillation_bursts(
+    t: np.ndarray,
+    x: np.ndarray,
+    *,
+    fs: float,
+    band_hz: Tuple[float, float] = (3.1, 4.3),
+    filter_order: int = 4,
+    threshold: float | None = None,
+    threshold_k: float = 4.0,
+    min_duration_s: float = 0.5,
+    merge_gap_s: float = 0.25,
+) -> pd.DataFrame:
+    """Detect band-limited bursts in a raw 1-D trace.
+
+    Butterworth band-pass (:func:`~databench.signal.bandpass.bandpass_envelope`),
+    Hilbert envelope, then a fixed *threshold* or ``median + threshold_k ×
+    robust_std`` (:func:`~databench.signal.bandpass.robust_threshold`), then
+    :func:`burst_events`.  The same pipeline as :class:`OscillationDetector`,
+    on plain arrays.
+    """
+    x = np.asarray(x, dtype=float)
+    filtered, envelope = bandpass_envelope(x, fs, band_hz, filter_order)
+    thr = threshold if threshold is not None else robust_threshold(envelope, threshold_k)[0]
+    return burst_events(t, filtered, envelope, thr, fs=fs,
+                        min_duration_s=min_duration_s, merge_gap_s=merge_gap_s)
+
+
+def bosc_episodes(
+    t: np.ndarray,
+    x: np.ndarray,
+    *,
+    fs: float,
+    band_hz: Tuple[float, float],
+    fit_hz: Tuple[float, float] = (1.0, 12.0),
+    reference: np.ndarray | None = None,
+    freqs_per_octave: int = 8,
+    percentile: float = 0.95,
+    min_cycles: float = 3.0,
+    width: float = 6.0,
+) -> dict:
+    """Oscillatory episodes in *band_hz* by the BOSC rule (Caplan et al. 2001; Whitten et al. 2011).
+
+    Morlet power (:func:`~databench.signal.spectral.morlet_power`) at
+    log-spaced frequencies across *fit_hz*.  The background is a straight-line
+    fit of log mean power on log frequency, over the *reference* samples
+    (default: all) and the *fit_hz* frequencies outside *band_hz*.  Under a
+    background-only signal, wavelet power at one frequency is distributed as
+    background × χ²(2) / 2, so the power threshold is background ×
+    ``chi2.ppf(percentile, 2) / 2``.  A frequency is detected where power
+    stays above its threshold for at least *min_cycles* cycles; a sample is
+    oscillating when any *band_hz* frequency is detected.
+
+    Returns a dict:
+
+    ``freqs``, ``mean_power``, ``background``, ``threshold``
+        Per frequency across *fit_hz*.
+    ``band_freqs``, ``band_ratio``, ``detected``
+        The *band_hz* frequencies, power ÷ background (rows × samples), and
+        the detection mask.
+    ``oscillating``
+        Boolean per sample.
+    ``episodes``
+        EpochTable of contiguous oscillating runs, with ``frequency_hz`` (the
+        band frequency detected for the most samples, weighted by power ÷
+        background) and ``confirmed_s`` (``start_s`` + *min_cycles* cycles at
+        that frequency, capped at ``end_s``: the earliest moment the episode
+        could be known).
+    """
+    t = np.asarray(t, dtype=float)
+    n_octaves = np.log2(fit_hz[1] / fit_hz[0])
+    freqs = fit_hz[0] * 2.0 ** (np.arange(int(round(n_octaves * freqs_per_octave)) + 1) / freqs_per_octave)
+    power = morlet_power(x, fs, freqs, width=width)
+    reference = np.ones(t.size, dtype=bool) if reference is None else np.asarray(reference, dtype=bool)
+    mean_power = power[:, reference].mean(axis=1) if reference.any() else power.mean(axis=1)
+    in_band = (freqs >= band_hz[0]) & (freqs <= band_hz[1])
+    slope, intercept = np.polyfit(np.log(freqs[~in_band]), np.log(mean_power[~in_band]), 1)
+    background = np.exp(intercept + slope * np.log(freqs))
+    threshold = background * chi2.ppf(percentile, 2) / 2
+    band_freqs = freqs[in_band]
+    ratio = power[in_band] / background[in_band, None]
+    detected = np.zeros(ratio.shape, dtype=bool)
+    for row, freq in enumerate(band_freqs):
+        runs = detect_epochs(power[in_band][row] > threshold[in_band][row], t, event_type="cycle_run",
+                             min_duration_s=min_cycles / freq)
+        for start, end in zip(runs[START_IDX].astype(int), runs[END_IDX].astype(int)):
+            detected[row, start:end + 1] = True
+    oscillating = detected.any(axis=0)
+    episodes = detect_epochs(oscillating, t, event_type="oscillation_episode")
+    pairs = list(zip(episodes[START_IDX].astype(int), episodes[END_IDX].astype(int)))
+    episodes["frequency_hz"] = [float(band_freqs[np.argmax((detected[:, a:b + 1] * ratio[:, a:b + 1]).sum(axis=1))])
+                                for a, b in pairs]
+    episodes["confirmed_s"] = np.minimum(episodes[START_S] + min_cycles / episodes["frequency_hz"], episodes[END_S])
+    return {"freqs": freqs, "mean_power": mean_power, "background": background, "threshold": threshold,
+            "band_freqs": band_freqs, "band_ratio": ratio, "detected": detected,
+            "oscillating": oscillating, "episodes": episodes}
+
+
+# ── Session wrappers ───────────────────────────────────────────────────────
+
+
+def oscillation_events(
+    sessions: "SessionGroup | list[Session]",
+    detector: OscillationDetector,
+    *,
+    event_types: tuple[str, ...] = ("onset", "offset"),
+) -> "EventsTable":
+    """Burst onsets and offsets across sessions, as a point-event table.
+
+    The oscillation counterpart of
+    :func:`~databench.analysis.locomotion.locomotion_events`: a SessionGroup
+    wrapper that runs *detector* on each session and returns ``Subject``, ``Session``, ``Task``,
+    ``EventType`` and ``event_time`` rows ready for
+    :meth:`~databench.analysis.eta.EtaAnalysis.run`.  ``"onset"`` is a burst
+    ``start_s`` and ``"offset"`` its ``end_s``.
+    """
+    columns = {"onset": START_S, "offset": END_S}
+    unknown = set(event_types) - set(columns)
+    if unknown:
+        raise ValueError(f"Unknown oscillation event type(s) {sorted(unknown)}. Expected {sorted(columns)}.")
+    tables = []
+    for sess in sessions:
+        events = detector.run(sess).events
+        if events.empty:
+            continue
+        tables.append(make_events(
+            {etype: events[columns[etype]].to_numpy() for etype in event_types},
+            subject=sess.subject, session=sess.session, task=sess.task,
+        ))
+    if not tables:
+        return pd.DataFrame(columns=list(REQUIRED_COLUMNS))
+    return pd.concat(tables, ignore_index=True)
+
+
 # ── OscillationResult ──────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
@@ -210,7 +414,8 @@ class OscillationResult:
     ----------
     events : pd.DataFrame
         Burst events table with columns: ``start_s``, ``end_s``,
-        ``duration_s``, ``peak_env``.
+        ``duration_s``, ``peak_env``, ``frequency_hz`` (median instantaneous
+        frequency of the filtered signal within the burst).
     time : np.ndarray
         Time array.
     raw_signal : np.ndarray
