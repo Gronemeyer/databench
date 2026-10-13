@@ -32,13 +32,14 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 # ── version ──────────────────────────────────────────────────────────────
 
 def _databench_version() -> str:
-    """Resolve the running databench version (build tag → git → metadata)."""
-    try:
-        from databench._version import __version__  # type: ignore[import-not-found]
-        return __version__
-    except Exception:
-        pass
-    described = _git(["describe", "--tags", "--always", "--dirty"])
+    """The running databench version, derived from git tags.
+
+    A checkout answers with ``git describe`` (``v0.3.0``, or
+    ``v0.3.0-2-g1a2b3c4-dirty`` past the tag), so an editable install never
+    reports the version it was installed at.  An installed copy without git
+    answers from its package metadata.
+    """
+    described = _git(["describe", "--tags", "--match", "v*", "--dirty"])
     if described:
         return described
     try:

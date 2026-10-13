@@ -40,8 +40,28 @@ Select a dataset at runtime via the `DATABENCH_DATASET` env var, or pass an
 alias to `Project(...)` / `resolve_dataset()`:
 
 ```bash
-DATABENCH_DATASET=etoh python Scripts/oscillations/oscillation-detector.py
+DATABENCH_DATASET=etoh python analysis_scripts/oscillations/oscillation-detector.py
 ```
+
+### Lazy dataset archives (`.npz`)
+
+A dataset pickle is read in full on every run. Convert it once to an `.npz`
+dataset archive and a run reads only what it uses:
+
+```bash
+python analysis_scripts/Tools/convert-dataset.py etoh2      # alias or path; writes beside the .pkl
+```
+
+Then point the alias's `path` at the `.npz`. Scripts need no change:
+`Project` reads only a small index frame on open, and `sess.signal(...)`
+/ `sess.align(...)` load each array as a zero-copy view of the file. The
+converter compares every cell with the pickle before it reports success.
+Cells in `proj.df` that live in the archive appear as `LazyCell` objects;
+`np.asarray(cell)` loads one. Provenance records a fingerprint of the
+archive's member table plus the SHA-256 of the pickle it came from. The
+archive is a plain zip of `.npy` files, so
+`np.load(path, allow_pickle=True)["GS26/ses-01/task-spont/mesomap/L_VISp"]`
+works without databench. Format details: `databench/store.py`.
 
 ---
 
@@ -68,9 +88,9 @@ Project → session(s) → align() → Detector.run() → Result → plot → ru
 detector/analysis/plotter objects are **frozen dataclasses** — immutable
 configs that produce a result (or figure) when you call `.run()` or call them.
 
-A new analysis script begins from `Scripts/_template.py`. All knobs are
+A new analysis script begins from `analysis_scripts/_template.py`. All knobs are
 UPPER_CASE module globals at the top — `run.finish()` snapshots them into the
-run's `provenance.json` so the run is reproducible. `Scripts/how-to.py` is a
+run's `provenance.json` so the run is reproducible. `analysis_scripts/how-to.py` is a
 runnable tour of the full API.
 
 ---
@@ -102,13 +122,15 @@ SignalNotFoundError: Signal 'FAKE' not found in source 'mesomap'.
 
 ---
 
-## Example Scripts
+## Analysis Scripts
 
-Runnable analyses live under `Scripts/`. Each script's header docstring is a
-self-contained usage guide — read it before running.
+Runnable analyses live in the separate `analysis_scripts` git repository,
+checked out at `./analysis_scripts/` (git ignores it here). Each script's
+header docstring is a self-contained usage guide; read it before you run
+the script.
 
 ```bash
-python Scripts/event-triggered/event-based.py
+python analysis_scripts/event-triggered/event-based.py
 ```
 
 | Script | Description |
@@ -124,7 +146,6 @@ python Scripts/event-triggered/event-based.py
 | `pupil/pupil-baseline-normalize.py` | Pupil baseline normalization |
 | `oscillations/oscillation-detector.py` | Single-session oscillation burst detection |
 | `oscillations/oscillation-descriptive-stats.py` | Oscillation descriptive statistics |
-| `oscillations/oscillation-pupil-eta.py` | Pupil ETA around oscillation bursts |
 | `Tools/extract-features-csv.py` | Batch feature extraction to long-format CSV |
 
 ---
@@ -135,8 +156,8 @@ Every run produces a versioned, fully-provenanced output folder:
 
 ```
 outputs/<dataset_alias>/<script_name>/<YYMMDD_HHMMSS>[_<tag>]/
-├── plots/                 # SVG/PNG figures (+ multi-page PDFs)
-├── tables/                # CSV / parquet / JSON tables
+├── overview.svg            # figures (SVG/PNG, multi-page PDFs) — flat
+├── bursts.csv              # tables (CSV / parquet / JSON) — flat
 ├── provenance.json        # databench version, git hash, env versions, paths
 └── report.md              # human-readable summary with clickable git permalink
 ```
@@ -147,17 +168,72 @@ Everything goes through the `Run`:
 proj = Project("etoh")
 run  = proj.run(name="oscillation-detector", tag="L_VISp-spont")
 
-run.save_figure(fig, "overview.svg")        # → plots/
-run.save_table(result.events, "bursts.csv") # → tables/ (suffix-driven)
-run.save_json({"n": 42}, "summary.json")    # → tables/
+run.save_figure(fig, "overview.svg")        # → run dir
+run.save_table(result.events, "bursts.csv") # → run dir (suffix-driven)
+run.save_json({"n": 42}, "summary.json")    # → run dir
 run.finish(notes="...")                      # writes provenance.json + report.md
 ```
 
 `provenance.json` is the single source of truth: it includes a clickable
 GitHub permalink (`https://github.com/<owner>/<repo>/blob/<full-hash>/<script>`)
 plus a `Reproduce` block in the rendered report (`git checkout <hash> && python
-<script>`). Reports use relative image links (`plots/figure.svg`) so they
+<script>`). Reports use relative image links (`figure.svg`) so they
 render correctly on GitHub and in local Markdown viewers.
+
+### Browsing past runs
+
+```bash
+python -m databench.viewer          # or: databench-view
+```
+
+This opens a local page that finds every run under `outputs/`. It rescans
+each time you reload, so it needs no index. You can search by script, tag,
+dataset, notes or file name, and filter by dataset. Each run shows its
+figures in a gallery, previews of its tables and documents, and its
+provenance. The page also has buttons to copy the reproduce command and to
+reveal the folder in Finder. Options: `--root PATH`, `--port N`,
+`--no-browser`. The viewer uses only the standard library, and it binds to
+`127.0.0.1` by default.
+
+### Sharing without Python
+
+Every `run.finish()` writes two pages:
+
+- `<run dir>/report.html` — that one run, fully self-contained. Figures are
+  embedded in the file, so you can email it by itself.
+- `outputs/index.html` — every run, but figures are linked by relative path,
+  so keep it with the `outputs/` folder.
+
+To build one file for a group of runs, embed their figures and scope it:
+
+```bash
+python -m databench.viewer --standalone --alias etoh2
+python -m databench.viewer --standalone --script fig1-cortical-state-correlation
+python -m databench.viewer --standalone --since 260801 --out ~/Desktop/august.html
+```
+
+Filters: `--alias`, `--script`, `--tag`, `--since` (`260801` or `2026-08-01`),
+`--run <outputs-relative path>`. `--export` writes the linked-figure
+`index.html` instead.
+
+Each page holds the run list, provenance, notes, the first 100 rows of each
+table, and text files. Standalone pages embed one image per figure: the SVG
+when there is one, because it stays sharp at any zoom, or the PNG when the
+SVG is much larger. PDFs are too large to embed, so those links need the
+folder and the page dims them.
+
+Standalone pages also contain a plain-HTML copy of each run. Phones usually
+open a local `.html` file in a preview that doesn't run JavaScript: iOS Quick
+Look in Files, Mail and Messages, and mail or chat apps on Android. That copy
+is what such previews show. In a real browser, the interactive viewer replaces
+it.
+
+Browsers treat each local file as its own origin and ask permission before a
+page reads files beside it. Standalone pages avoid that prompt; `index.html`
+does not, because its figures are separate files.
+
+These pages include the absolute paths recorded in provenance (dataset
+location, repo path). Check them before you send anything outside your lab.
 
 `dataset_alias` comes from `DATABENCH_DATASET` (or `DATASET`) when set,
 otherwise from the `default` entry in `datasets.toml`. `script_name` is the
@@ -207,10 +283,10 @@ proj = Project(
 
 | Method | Returns | Description |
 |---|---|---|
-| `save_figure(fig, name, *, formats=None, close=True)` | `Path` | Save figure to `plots/` (closes fig) |
-| `save_table(df, name, *, index=False)` | `Path` | Save table to `tables/` (suffix-driven) |
-| `save_json(payload, name)` | `Path` | Save JSON to `tables/` |
-| `pdf(name)` | context manager | Multi-page PDF rooted at `plots/` |
+| `save_figure(fig, name, *, formats=None, close=True)` | `Path` | Save figure to the run dir (closes fig) |
+| `save_table(df, name, *, index=False)` | `Path` | Save table to the run dir (suffix-driven) |
+| `save_json(payload, name)` | `Path` | Save JSON to the run dir |
+| `pdf(name)` | context manager | Multi-page PDF in the run dir |
 | `finish(notes=)` | `Path` | Write `provenance.json` + `report.md`; return the run dir |
 
 ### `Session`
@@ -227,9 +303,9 @@ Analysis-specific parameter tables and usage examples live in module
 docstrings and script headers:
 
 - **OscillationDetector / OscillationResult** — see `databench/analysis/oscillation.py`
-  and `Scripts/oscillations/oscillation-detector.py`
+  and `analysis_scripts/oscillations/oscillation-detector.py`
 - **EtaAnalysis / EtaResult** — see `databench/analysis/eta.py`
-  and `Scripts/event-triggered/event-based.py`
+  and `analysis_scripts/event-triggered/event-based.py`
 - **Event generation** — `locomotion_events` in `databench/analysis/locomotion.py`,
   `make_events` in `databench/signal/epoching.py`
 
@@ -253,6 +329,25 @@ Each `TraceStyle` controls: remap method, gap-filling, smoothing, outlier
 removal, colour, line width, opacity, drawstyle, and y-axis label. Analysis
 plotting modules use these internally — adding a new trace type is a one-line
 entry in `TRACE_STYLES`.
+
+---
+
+## Versioning
+
+The version comes from git tags (setuptools-scm). The repository does not
+store the version in a file. A tagged commit is that version (`v0.3.0` →
+`0.3.0`); later commits are development versions (`0.3.1.devN`).
+`databench.__version__` and every run's `provenance.json` read the
+version from `git describe` in a checkout, so an editable install never
+reports a stale version.
+
+```bash
+make version            # print the current version
+make release V=0.3.1    # tag v0.3.1 on a clean tree and push it
+```
+
+When you push a `v*` tag, `.github/workflows/release.yml` builds the
+distributions and attaches them to a GitHub release.
 
 ---
 
@@ -295,8 +390,7 @@ databench/
     ├── labels.py            # Session-label parsing / condition labeling
     └── logger.py            # Logging configuration
 
-Scripts/_template.py          # Minimal analysis-script starting point
-Scripts/how-to.py             # Runnable API tour
+analysis_scripts/             # Separate git repo of analysis scripts (ignored here)
 datasets.toml                 # Local dataset path aliases
 databench.toml                # Local analyst/lab config (optional)
 ```

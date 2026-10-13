@@ -28,6 +28,5 @@ where = ["."]
 include = ["databench*"]
 
 [tool.setuptools_scm]
-write_to = "databench/_version.py"
 version_scheme = "guess-next-dev"
 local_scheme = "no-local-version"
