@@ -11,9 +11,9 @@ place results go::
     run.finish(notes="...")          # writes provenance.json + report.md
 
 Outputs land in
-``outputs/<alias>/<script>/<YYMMDD_HHMMSS>[_<tag>]/`` with ``plots/``,
-``tables/``, a top-level ``provenance.json`` (the single source of truth),
-and a human-readable ``report.md``.
+``outputs/<alias>/<script>/<YYMMDD_HHMMSS>[_<tag>]/`` — figures, tables,
+``provenance.json`` (the single source of truth) and a human-readable
+``report.md`` all sit flat in that one directory.
 """
 from __future__ import annotations
 
@@ -49,8 +49,10 @@ class Run:
         self.tag = tag
         self.script = _detect_script_name()
         self.dir = _build_run_dir(project.output_root, project.alias, self.script, tag)
-        self.plots_dir = self.dir / "plots"
-        self.tables_dir = self.dir / "tables"
+        # Everything lands flat in the dated run directory; the attributes
+        # remain as aliases so existing scripts keep working.
+        self.plots_dir = self.dir
+        self.tables_dir = self.dir
         self.dir.mkdir(parents=True, exist_ok=True)
 
     def __repr__(self) -> str:
@@ -72,7 +74,7 @@ class Run:
         formats: Iterable[str] | None = None,
         close: bool = True,
     ) -> Path:
-        """Save *fig* to ``plots/``; ``formats`` writes extra suffixes too."""
+        """Save *fig* into the run directory; ``formats`` writes extra suffixes too."""
         self.plots_dir.mkdir(parents=True, exist_ok=True)
         path = self.plots_dir / name
         fig.savefig(path, dpi=dpi, bbox_inches=bbox_inches)
@@ -89,7 +91,7 @@ class Run:
     # ── tables ───────────────────────────────────────────────────────────
 
     def save_table(self, df: pd.DataFrame, name: str, *, index: bool = False) -> Path:
-        """Save *df* to ``tables/``; format follows the suffix (.csv/.parquet/.json)."""
+        """Save *df* into the run directory; format follows the suffix (.csv/.parquet/.json)."""
         self.tables_dir.mkdir(parents=True, exist_ok=True)
         path = self.tables_dir / name
         if path.suffix == ".parquet":
@@ -103,7 +105,7 @@ class Run:
         return path
 
     def save_json(self, payload: Mapping[str, Any], name: str) -> Path:
-        """Save an arbitrary JSON payload to ``tables/``."""
+        """Save an arbitrary JSON payload into the run directory."""
         self.tables_dir.mkdir(parents=True, exist_ok=True)
         path = self.tables_dir / name
         path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
@@ -112,7 +114,7 @@ class Run:
 
     @contextmanager
     def pdf(self, name: str):
-        """Multi-page PDF context manager rooted at ``plots/``::
+        """Multi-page PDF context manager rooted at the run directory::
 
         >>> with run.pdf("report.pdf") as pdf:
         ...     pdf.savefig(fig)
@@ -136,4 +138,19 @@ class Run:
         report_path = self.dir / "report.md"
         report_path.write_text(report, encoding="utf-8")
         self._announce(report_path)
+        self._write_viewer_pages()
         return self.dir
+
+    def _write_viewer_pages(self) -> None:
+        """Write this run's self-contained ``report.html`` and refresh ``outputs/index.html``."""
+        try:
+            from databench.viewer import export as viewer
+
+            pages = [viewer.export_run(self.project.output_root, self.dir),
+                     viewer.refresh(self.project.output_root)]
+        except Exception as exc:  # the pages are a convenience; never fail a run over them
+            print(f"[databench] could not write viewer pages: {exc}")
+            return
+        for page in pages:
+            if page is not None:
+                self._announce(page)

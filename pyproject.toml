@@ -17,6 +17,12 @@ dependencies = [
     "scipy",
 ]
 
+[project.scripts]
+databench-view = "databench.viewer:main"
+
+[tool.setuptools.package-data]
+"databench.viewer" = ["index.html"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["databench*"]

@@ -1,0 +1,726 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="utf-8">
+<script>document.documentElement.className = "js";</script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>databench outputs</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --faint: #9a9a94;
+  --line: #e4e3de; --hover: #f0efea; --sel: #e6eefc; --sel-ink: #1c4fb8;
+  --accent: #2f6fe4; --warn: #b45309; --warn-bg: #fdf1e2; --pill: #eeede8;
+  --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.04);
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --side-w: 340px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141413; --panel: #1c1c1a; --ink: #ecebe6; --muted: #a3a29c; --faint: #75746f;
+    --line: #2e2e2b; --hover: #252523; --sel: #1f2b44; --sel-ink: #9fbdf7;
+    --accent: #6d9cf2; --warn: #f0a35a; --warn-bg: #3a2a18; --pill: #2a2a27;
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141413; --panel: #1c1c1a; --ink: #ecebe6; --muted: #a3a29c; --faint: #75746f;
+  --line: #2e2e2b; --hover: #252523; --sel: #1f2b44; --sel-ink: #9fbdf7;
+  --accent: #6d9cf2; --warn: #f0a35a; --warn-bg: #3a2a18; --pill: #2a2a27;
+  --shadow: none;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg); color: var(--ink);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+  display: grid; grid-template-rows: auto 1fr; overflow: hidden;
+}
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing iframe { pointer-events: none; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button, select {
+  font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 10px; cursor: pointer;
+}
+button:hover, select:hover { background: var(--hover); }
+button:disabled { opacity: .45; cursor: default; background: var(--panel); }
+code, .mono { font-family: var(--mono); font-size: 12.5px; }
+
+/* header */
+header {
+  display: flex; align-items: center; gap: 14px; padding: 10px 16px;
+  border-bottom: 1px solid var(--line); background: var(--panel);
+}
+header h1 { font-size: 15px; margin: 0; font-weight: 600; white-space: nowrap; }
+header .root { color: var(--faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+#search {
+  width: min(380px, 40vw); padding: 6px 10px 6px 30px; border-radius: 7px;
+  border: 1px solid var(--line); background: var(--bg) no-repeat 9px center; color: var(--ink); font: inherit;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='none' stroke='%239a9a94' stroke-width='2'%3E%3Ccircle cx='6' cy='6' r='4.5'/%3E%3Cpath d='M9.5 9.5 13 13'/%3E%3C/svg%3E");
+}
+#search:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+/* layout */
+.app { display: grid; grid-template-columns: var(--side-w) 1fr; min-height: 0; }
+aside { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--panel); position: relative; min-width: 0; }
+.resizer { position: absolute; top: 0; bottom: 0; right: -4px; width: 8px; cursor: col-resize; z-index: 3; }
+.resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background .12s; }
+.resizer:hover::after, body.resizing .resizer::after { background: var(--accent); }
+.filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.chip {
+  border-radius: 999px; padding: 2px 10px; font-size: 12px; border: 1px solid var(--line);
+  background: transparent; color: var(--muted);
+}
+.chip.on { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+.chip .cn { opacity: .55; margin-left: 2px; font-variant-numeric: tabular-nums; }
+.toolbar { display: flex; align-items: center; gap: 6px; padding: 6px 10px 6px 14px; border-bottom: 1px solid var(--line); }
+.toolbar #summary { flex: 1; font-size: 12px; color: var(--faint); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toolbar select, .toolbar button { font-size: 12px; padding: 2px 6px; border-radius: 5px; color: var(--muted); }
+#list { overflow-y: auto; flex: 1; padding-bottom: 24px; }
+.group > summary {
+  list-style: none; cursor: pointer; padding: 8px 14px 4px; font-weight: 600; font-size: 13px;
+  display: flex; gap: 8px; align-items: flex-start; position: sticky; top: 0;
+  background: var(--panel); z-index: 1;
+}
+.group > summary::-webkit-details-marker { display: none; }
+.group > summary::before { content: "▸"; color: var(--faint); font-size: 10px; transition: transform .1s; display: inline-block; margin-top: 3px; flex-shrink: 0; }
+.group[open] > summary::before { transform: rotate(90deg); }
+.group > summary .t { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.35; }
+.group > summary .n { color: var(--faint); font-weight: 400; font-size: 12px; white-space: nowrap; margin-top: 1px; }
+.run {
+  display: block; padding: 6px 14px 6px 30px; cursor: pointer; color: var(--ink);
+  border-left: 3px solid transparent;
+}
+.run.flat { padding-left: 14px; }
+.run:hover { background: var(--hover); text-decoration: none; }
+.run.sel { background: var(--sel); border-left-color: var(--accent); }
+.run .l0 { font-weight: 600; font-size: 13px; overflow-wrap: anywhere; line-height: 1.35; margin-bottom: 2px; }
+.run .l1 { display: flex; gap: 8px; align-items: center; font-size: 13px; }
+.run .l1 .pill { min-width: 0; }
+.run .l1 .notag { color: var(--faint); font-size: 12px; }
+.run .date { font-variant-numeric: tabular-nums; white-space: nowrap; flex-shrink: 0; margin-left: auto; color: var(--muted); font-size: 12.5px; }
+.run .l2 { color: var(--faint); font-size: 11.5px; display: flex; gap: 10px; margin-top: 1px; }
+.pill { background: var(--pill); color: var(--muted); border-radius: 4px; padding: 0 6px; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.pill.tag { background: var(--sel); color: var(--sel-ink); }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
+.empty { padding: 30px 16px; color: var(--faint); text-align: center; }
+
+/* detail */
+main { overflow-y: auto; min-height: 0; }
+.detail { max-width: 1280px; margin: 0 auto; padding: 22px 28px 60px; }
+.back { display: none; margin-bottom: 12px; }
+.title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.title h2 { margin: 0; font-size: 22px; font-weight: 650; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.path { color: var(--faint); font-size: 12px; word-break: break-all; margin-top: 4px; }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 0; }
+.actions a:hover { text-decoration: none; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; margin-top: 16px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; box-shadow: var(--shadow); }
+.card .cl { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); }
+.card .cv { font-size: 15px; font-weight: 600; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .cv .pill { vertical-align: 2px; font-weight: 500; }
+.card .cs { font-size: 12px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+.card .cs .mono { font-size: 11.5px; }
+section { margin-top: 26px; }
+section > h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+section > h3 .n { color: var(--faint); font-weight: 400; }
+.notes { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; box-shadow: var(--shadow); }
+.notes > :first-child { margin-top: 0; } .notes > :last-child { margin-bottom: 0; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+.fig {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+  display: flex; flex-direction: column; box-shadow: var(--shadow);
+}
+.fig .thumb {
+  height: 200px; display: flex; align-items: center; justify-content: center; cursor: zoom-in;
+  background: #fff; border-bottom: 1px solid var(--line); padding: 8px;
+}
+.fig .thumb img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.fig .thumb.pdf { background: var(--hover); color: var(--muted); font-weight: 600; font-size: 13px; flex-direction: column; gap: 4px; }
+.fig .cap { padding: 7px 10px; display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.fig .cap .name { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fmts { display: flex; gap: 4px; flex-shrink: 0; }
+.fmts a { font-size: 11px; font-family: var(--mono); background: var(--pill); color: var(--muted); padding: 0 5px; border-radius: 3px; }
+.fmts a.off { opacity: .45; }
+
+.files { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; box-shadow: var(--shadow); }
+.file { border-top: 1px solid var(--line); }
+.file:first-child { border-top: 0; }
+.file > summary { list-style: none; cursor: pointer; padding: 8px 12px; display: flex; gap: 10px; align-items: center; }
+.file > summary::-webkit-details-marker { display: none; }
+.file > summary:hover { background: var(--hover); }
+.file > summary::before { content: "▸"; color: var(--faint); font-size: 10px; transition: transform .1s; }
+.file[open] > summary::before { transform: rotate(90deg); }
+.file .fname { flex: 1; font-family: var(--mono); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file .size { color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+.file .body { padding: 0 12px 12px; }
+.tablewrap { overflow: auto; max-height: 460px; border: 1px solid var(--line); border-radius: 6px; }
+table.data { border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+table.data th, table.data td { padding: 3px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; text-align: left; }
+table.data th { position: sticky; top: 0; background: var(--hover); font-weight: 600; }
+table.data td.num { text-align: right; font-family: var(--mono); font-size: 11.5px; }
+.hint { color: var(--faint); font-size: 12px; margin-top: 6px; }
+pre { background: var(--hover); padding: 10px 12px; border-radius: 6px; overflow: auto; max-height: 460px; font-family: var(--mono); font-size: 12px; margin: 0; white-space: pre-wrap; word-break: break-word; }
+.md table { border-collapse: collapse; font-size: 13px; } .md td, .md th { border: 1px solid var(--line); padding: 3px 8px; }
+.md img { max-width: 100%; }
+
+/* provenance key/value tables */
+.kvt { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.kvt > tbody > tr + tr > * { border-top: 1px solid var(--line); }
+.kvt th { text-align: left; font-weight: 500; font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; vertical-align: top; padding: 6px 18px 6px 0; width: 1%; }
+.kvt td { padding: 6px 0; vertical-align: top; overflow-wrap: anywhere; font-family: var(--mono); font-size: 12px; }
+.kvt.nested { background: var(--bg); border-radius: 6px; border: 1px solid var(--line); border-collapse: separate; border-spacing: 0; }
+.kvt.nested th { padding-left: 10px; } .kvt.nested td { padding-right: 10px; }
+.kvt.nested > tbody > tr + tr > * { border-top: 1px solid var(--line); }
+.tok { display: inline-block; background: var(--pill); border-radius: 4px; padding: 0 6px; margin: 1px 4px 1px 0; }
+.stack > * { display: block; margin: 2px 0; }
+.nil { color: var(--faint); }
+.bool-true { color: var(--accent); } .bool-false { color: var(--muted); }
+
+.welcome { color: var(--muted); max-width: 520px; margin: 12vh auto; text-align: center; padding: 0 16px; }
+.welcome h2 { color: var(--ink); font-weight: 600; }
+kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--panel); }
+
+/* lightbox */
+#lb { position: fixed; inset: 0; background: rgba(10,10,10,.88); display: none; z-index: 10; flex-direction: column; }
+#lb.on { display: flex; }
+#lb .bar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; color: #eee; }
+#lb .bar .name { flex: 1; font-family: var(--mono); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#lb .bar button, #lb .bar a { background: rgba(255,255,255,.1); border: 0; color: #eee; border-radius: 5px; padding: 3px 9px; font-size: 12px; }
+#lb .bar a.on { background: rgba(255,255,255,.3); }
+#lb .stage { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; padding: 0 56px 20px; position: relative; }
+#lb .stage img { max-width: 100%; max-height: 100%; background: #fff; }
+#lb .stage iframe { width: 100%; height: 100%; border: 0; background: #fff; border-radius: 4px; }
+#lb .nav { position: absolute; top: 50%; transform: translateY(-50%); background: rgba(255,255,255,.12); color: #fff; border: 0; font-size: 22px; width: 40px; height: 56px; border-radius: 6px; }
+#lb .prev { left: 8px; } #lb .next { right: 8px; }
+#toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--panel); padding: 6px 14px; border-radius: 6px; font-size: 13px; opacity: 0; transition: opacity .15s; pointer-events: none; z-index: 20; }
+#toast.on { opacity: 1; }
+
+/* script-free rendering (phone previewers such as iOS Quick Look) */
+html.no-js body { display: block; overflow: auto; height: auto; }
+html.no-js header, html.no-js .app, html.no-js #lb, html.no-js #toast { display: none; }
+html.js #static { display: none; }
+.static { max-width: 1100px; margin: 0 auto; padding: 18px 16px 60px; }
+.static .stop { color: var(--faint); font-size: 12px; }
+.static .stoc { margin: 14px 0 0; padding-left: 22px; font-size: 13px; }
+.static .stoc li { margin: 4px 0; }
+.static .srun { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--line); }
+.static .srun:first-of-type { border-top: 0; padding-top: 4px; }
+.static .sfigs { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+.static figure { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.static figure img { display: block; width: 100%; height: auto; background: #fff; }
+.static figcaption { padding: 7px 10px; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.static figure.missing figcaption { color: var(--muted); }
+
+@media (max-width: 800px) {
+  header { flex-wrap: wrap; gap: 8px; } header .root { display: none; } #search { width: 100%; order: 3; }
+  .app { grid-template-columns: 1fr; }
+  .resizer { display: none; }
+  body.has-run aside { display: none; }
+  body:not(.has-run) main { display: none; }
+  .back { display: inline-block; }
+  .detail { padding: 16px 16px 48px; }
+  #lb .stage { padding: 0 8px 12px; } #lb .nav { display: none; }
+}
+</style>
+</head>
+<body>
+<!--databench-static-->
+<header>
+  <h1>📊 databench outputs</h1>
+  <span class="root" id="root"></span>
+  <input id="search" type="search" placeholder="Search scripts, tags, notes, files…  ( / )" autocomplete="off">
+  <button id="refresh" title="Rescan outputs">↻</button>
+</header>
+<div class="app">
+  <aside>
+    <div class="filters" id="filters"></div>
+    <div class="toolbar">
+      <span id="summary">Scanning…</span>
+      <select id="sort" title="Sort runs">
+        <option value="newest">Newest first</option>
+        <option value="oldest">Oldest first</option>
+        <option value="script">Script A–Z</option>
+        <option value="count">Most runs</option>
+        <option value="flat">Recent, ungrouped</option>
+      </select>
+      <button id="collapse" title="Collapse or expand all scripts">Collapse all</button>
+    </div>
+    <div id="list"></div>
+    <div class="resizer" id="resizer" title="Drag to resize · double-click to reset"></div>
+  </aside>
+  <main id="main"></main>
+</div>
+<div id="lb">
+  <div class="bar"><span class="name"></span><span class="fmts"></span><a class="open" target="_blank">open ↗</a><button class="close">✕ Esc</button></div>
+  <div class="stage"><button class="nav prev">‹</button><div class="content" style="display:contents"></div><button class="nav next">›</button></div>
+</div>
+<div id="toast"></div>
+
+<!--databench-data-->
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+/* Data source: an embedded snapshot (exported index.html opened from disk) or the local server. */
+const SNAP = (() => { const el = document.getElementById("databench-data"); try { return el ? JSON.parse(el.textContent) : null; } catch { return null; } })();
+/* standalone pages store each image once, in the script-free markup; lift them out and drop that markup */
+if (SNAP) {
+  const staticEl = document.getElementById("static");
+  if (staticEl) {
+    for (const img of staticEl.querySelectorAll("img[data-asset]")) SNAP.assets[img.dataset.asset] = img.getAttribute("src");
+    staticEl.remove();
+  }
+}
+const TEXT_LIMIT = 200000;
+const api = SNAP ? {
+  runs: async () => ({ root: SNAP.root, runs: SNAP.runs }),
+  run: async id => SNAP.details[id] || null,
+  table: async key => SNAP.previews[key] || { error: "No preview in this snapshot. Open the raw file instead." },
+  text: async key => SNAP.texts[key] || null,
+} : {
+  runs: async () => (await fetch("/api/runs")).json(),
+  run: async id => { const r = await fetch("/api/run?id=" + encodeURIComponent(id)); return r.ok ? r.json() : null; },
+  table: async key => (await fetch(`/api/table?rows=200&path=${encodeURIComponent(key)}`)).json(),
+  text: async key => {
+    const r = await fetch("/files/" + key.split("/").map(encodeURIComponent).join("/")); if (!r.ok) return null;
+    const t = await r.text(); return { text: t.slice(0, TEXT_LIMIT), truncated: t.length > TEXT_LIMIT };
+  },
+};
+/* embedded figure, else a path relative to wherever this page sits, else the server */
+const asset = key => (SNAP && SNAP.assets && SNAP.assets[key]) || null;
+const relPath = key => (SNAP && SNAP.base && key.startsWith(SNAP.base + "/") ? key.slice(SNAP.base.length + 1) : key)
+  .split("/").map(encodeURIComponent).join("/");
+function fileUrl(runId, path) {
+  const key = runId + "/" + path;
+  if (!SNAP) return "/files/" + key.split("/").map(encodeURIComponent).join("/");
+  return asset(key) || relPath(key);
+}
+const needsFolder = f => !!(SNAP && SNAP.embed && !f.embedded);
+const IMG = ["png", "jpg", "jpeg", "gif", "svg"];  // thumbnail preference order
+const ext = p => (p.split(".").pop() || "").toLowerCase();
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const LS = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+             set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
+const NO_SCRIPT = "(unknown script)";
+
+const state = {
+  runs: [], root: "", alias: LS.get("alias", ""), query: "", selected: null, lastFetch: 0,
+  sort: LS.get("sort", "newest"), collapsed: new Set(LS.get("collapsed", [])),
+};
+
+function fmtDate(iso, withTime = true) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  const date = d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  return withTime && hasTime(iso) ? `${date} · ${fmtTime(iso)}` : date;
+}
+const hasTime = iso => !!iso && !/T00:00:00$/.test(iso);
+const fmtTime = iso => new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+/* compact, sortable stamp for the sidebar: 2026-09-13 23:46 */
+function fmtStamp(iso) {
+  if (!iso) return "—";
+  const [d, t = ""] = iso.split("T");
+  return hasTime(iso) ? `${d} ${t.slice(0, 5)}` : d;
+}
+function ago(iso) {
+  if (!iso) return "";
+  const days = Math.floor((Date.now() - new Date(iso)) / 864e5);
+  if (days < 1) return "today"; if (days === 1) return "yesterday";
+  if (days < 30) return `${days}d ago`; if (days < 365) return `${Math.floor(days / 30)}mo ago`;
+  return `${Math.floor(days / 365)}y ago`;
+}
+const fmtSize = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("on"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("on"), 1400); }
+async function copy(text, label = "Copied") { try { await navigator.clipboard.writeText(text); toast(label); } catch { prompt("Copy:", text); } }
+
+/* ── data ─────────────────────────────────────────────────────────── */
+async function loadRuns() {
+  state.lastFetch = Date.now();
+  const data = await api.runs();
+  state.runs = data.runs; state.root = data.root;
+  for (const r of state.runs) r._hay = [r.script, r.name, r.alias, r.tag, r.notes, r.id, r.git, ...r.files].join(" ").toLowerCase();
+  const rootLabel = !SNAP ? data.root
+    : SNAP.embed ? `Standalone page · ${plural(data.runs.length, "run")} · ${fmtDate(SNAP.generated)}`
+    : `Snapshot of ${data.root} · ${fmtDate(SNAP.generated)}`;
+  $("#root").textContent = rootLabel; $("#root").title = rootLabel;
+  renderFilters(); renderList();
+}
+
+function visibleRuns() {
+  const terms = state.query.toLowerCase().split(/\s+/).filter(Boolean);
+  return state.runs.filter(r => (!state.alias || r.alias === state.alias) && terms.every(t => r._hay.includes(t)));
+}
+
+/* ── sidebar ──────────────────────────────────────────────────────── */
+function renderFilters() {
+  const counts = {};
+  for (const r of state.runs) counts[r.alias || "—"] = (counts[r.alias || "—"] || 0) + 1;
+  const aliases = Object.keys(counts).sort();
+  if (state.alias && !counts[state.alias]) state.alias = "";
+  $("#filters").innerHTML = [["", "All", state.runs.length], ...aliases.map(a => [a, a, counts[a]])]
+    .map(([a, label, n]) => `<button class="chip ${state.alias === a ? "on" : ""}" data-alias="${esc(a)}">${esc(label)} <span class="cn">${n}</span></button>`).join("");
+}
+
+function sortRuns(runs) {
+  const byDate = (a, b) => (b.created || "").localeCompare(a.created || "");
+  return [...runs].sort(state.sort === "oldest" ? (a, b) => byDate(b, a) : byDate);
+}
+
+function groupRuns(runs) {
+  const groups = new Map();  // insertion order follows the date sort
+  for (const r of sortRuns(runs)) { const k = r.script || NO_SCRIPT; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); }
+  const arr = [...groups];
+  if (state.sort === "script") arr.sort((a, b) => a[0].localeCompare(b[0]));
+  if (state.sort === "count") arr.sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+  return arr;
+}
+
+function renderList() {
+  const runs = visibleRuns(); const searching = !!state.query; const flat = state.sort === "flat";
+  const nScripts = new Set(runs.map(r => r.script || NO_SCRIPT)).size;
+  $("#summary").textContent = plural(runs.length, "run") + (searching ? " match" : "");
+  $("#summary").title = `${plural(runs.length, "run")} across ${plural(nScripts, "script")}`;
+  $("#sort").value = state.sort;
+  if (!runs.length) {
+    $("#list").innerHTML = `<div class="empty">${state.runs.length ? "No runs match." : "No runs found under this outputs folder yet."}</div>`;
+  } else if (flat) {
+    $("#list").innerHTML = sortRuns(runs).map(r => runRow(r, true)).join("");
+  } else {
+    $("#list").innerHTML = groupRuns(runs).map(([script, rs]) => {
+      const open = searching || !state.collapsed.has(script);
+      const latest = rs.reduce((m, r) => (r.created || "") > m ? r.created : m, "");
+      return `<details class="group" data-script="${esc(script)}" ${open ? "open" : ""}>
+        <summary><span class="t">${esc(script)}</span><span class="n">${rs.length} · ${ago(latest)}</span></summary>
+        ${rs.map(r => runRow(r, false)).join("")}</details>`;
+    }).join("");
+  }
+  updateCollapseButton();
+  markSelected();
+}
+
+function runRow(r, flat) {
+  const c = r.counts; const bits = [];
+  if (c.figure) bits.push(`${c.figure} fig`); if (c.table) bits.push(`${c.table} tbl`); if (c.doc) bits.push(`${c.doc} doc`);
+  return `<a class="run${flat ? " flat" : ""}" href="#run=${encodeURIComponent(r.id)}" data-id="${esc(r.id)}">
+    ${flat ? `<div class="l0">${esc(r.script || NO_SCRIPT)}</div>` : ""}
+    <div class="l1">${r.tag ? `<span class="pill tag" title="${esc(r.tag)}">${esc(r.tag)}</span>` : `<span class="notag">no tag</span>`}<span class="date" title="${esc(fmtDate(r.created))}">${fmtStamp(r.created)}</span></div>
+    <div class="l2">${state.alias ? "" : `<span>${esc(r.alias || "—")}</span>`}<span>${bits.join(" · ") || "no files"}</span>${r.dirty ? `<span title="uncommitted changes when run">dirty</span>` : ""}</div></a>`;
+}
+
+function updateCollapseButton() {
+  const btn = $("#collapse"); const groups = [...document.querySelectorAll("#list .group")];
+  btn.disabled = !groups.length;
+  btn.textContent = groups.some(g => g.open) ? "Collapse all" : "Expand all";
+}
+
+function markSelected() {
+  document.querySelectorAll(".run.sel").forEach(e => e.classList.remove("sel"));
+  if (!state.selected) return;
+  const el = document.querySelector(`.run[data-id="${CSS.escape(state.selected)}"]`);
+  if (el) { el.classList.add("sel"); if (el.offsetParent) el.scrollIntoView({ block: "nearest" }); }
+}
+
+/* resizable sidebar */
+function setSideWidth(px) {
+  const w = Math.round(Math.max(240, Math.min(px, 720, window.innerWidth - 360)));
+  document.documentElement.style.setProperty("--side-w", w + "px");
+  return w;
+}
+(() => {
+  const saved = LS.get("sideW", null); if (saved) setSideWidth(saved);
+  const handle = $("#resizer"); let width = null;
+  handle.addEventListener("pointerdown", e => {
+    e.preventDefault(); handle.setPointerCapture(e.pointerId); document.body.classList.add("resizing");
+    const move = ev => { width = setSideWidth(ev.clientX); };
+    const up = () => {
+      handle.removeEventListener("pointermove", move); handle.removeEventListener("pointerup", up);
+      document.body.classList.remove("resizing"); if (width) LS.set("sideW", width);
+    };
+    handle.addEventListener("pointermove", move); handle.addEventListener("pointerup", up);
+  });
+  handle.addEventListener("dblclick", () => { document.documentElement.style.removeProperty("--side-w"); LS.set("sideW", null); });
+})();
+
+/* ── detail ───────────────────────────────────────────────────────── */
+async function showRun(id) {
+  state.selected = id; markSelected();
+  document.body.classList.toggle("has-run", !!id);
+  const main = $("#main");
+  if (!id) { main.innerHTML = welcome(); return; }
+  const run = await api.run(id);
+  if (!run) { main.innerHTML = `<div class="welcome"><h2>Run not found</h2><p class="mono">${esc(id)}</p><p>It may have been moved or deleted.</p></div>`; return; }
+  if (state.selected !== id) return;  // user moved on while loading
+  main.innerHTML = renderDetail(run); main.scrollTop = 0;
+  wireDetail(run);
+}
+
+function welcome() {
+  const n = state.runs.length, latest = state.runs[0];
+  return `<div class="welcome"><h2>${plural(n, "run")} discovered</h2>
+    <p>Pick a run on the left, or search by script, tag, dataset, notes or file name.</p>
+    ${latest ? `<p>Most recent: <a href="#run=${encodeURIComponent(latest.id)}">${esc(latest.script)}${latest.tag ? " · " + esc(latest.tag) : ""}</a> (${ago(latest.created)})</p>` : ""}
+    <p class="hint"><kbd>/</kbd> search &nbsp; <kbd>↑</kbd><kbd>↓</kbd> move between runs &nbsp; <kbd>←</kbd><kbd>→</kbd> figures in viewer</p></div>`;
+}
+
+function groupFigures(files) {
+  const by = new Map();
+  for (const f of files.filter(f => f.kind === "figure")) {
+    const key = f.path.replace(/\.[^./]+$/, "");
+    if (!by.has(key)) by.set(key, []); by.get(key).push(f);
+  }
+  return [...by].map(([key, fs]) => {
+    fs.sort((a, b) => fmtRank(a.path) - fmtRank(b.path));
+    const embedded = fs.filter(f => f.embedded);  // standalone pages show the embedded copy
+    const preview = (embedded.length ? embedded : fs).find(f => IMG.includes(ext(f.path)));
+    return { key, name: key.split("/").pop(), dir: key.includes("/") ? key.slice(0, key.lastIndexOf("/")) : "", files: fs, preview };
+  });
+}
+const fmtRank = p => { const i = [...IMG, "pdf"].indexOf(ext(p)); return i < 0 ? 99 : i; };
+
+const card = (label, value, sub = "") =>
+  `<div class="card"><div class="cl">${label}</div><div class="cv">${value}</div>${sub ? `<div class="cs">${sub}</div>` : ""}</div>`;
+
+function summaryCards(run, figs, tables, docs, other) {
+  const m = run.meta || {}; const g = m.git || {}; const env = m.env || {};
+  const cards = [];
+  const dsFile = m.dataset_path ? m.dataset_path.split(/[\\/]/).pop() : "";
+  cards.push(card("Dataset", esc(run.alias || "—"), [
+    [m.rows != null ? `${m.rows} rows` : "", dsFile ? `<span title="${esc(m.dataset_path)}">${esc(dsFile)}</span>` : ""].filter(Boolean).join(" · "),
+    m.sha256 ? `<span class="mono" title="sha256 ${esc(m.sha256)}">sha ${esc(m.sha256.slice(0, 12))}…</span>` : "",
+  ].filter(Boolean).join("<br>")));
+  cards.push(card("Created", fmtDate(run.created, false), [hasTime(run.created) ? fmtTime(run.created) : "", ago(run.created)].filter(Boolean).join(" · ")));
+  cards.push(g.short
+    ? card("Code",
+        `${g.permalink ? `<a href="${esc(g.permalink)}" target="_blank" class="mono">${esc(g.short)}</a>` : `<span class="mono">${esc(g.short)}</span>`}${g.dirty ? ` <span class="pill warn" title="Working tree had uncommitted changes">dirty</span>` : ""}`,
+        [g.branch ? esc(g.branch) : "", m.script_path ? `<span class="mono">${esc(m.script_path)}</span>` : ""].filter(Boolean).join(" · "))
+    : card("Code", `<span class="nil">not recorded</span>`));
+  const size = run.files.reduce((s, f) => s + f.size, 0);
+  cards.push(card("Outputs", `${plural(figs.length, "figure")} · ${plural(tables.length, "table")}`,
+    [docs.length ? plural(docs.length, "doc") : "", other.length ? `${other.length} other` : "", fmtSize(size)].filter(Boolean).join(" · ")));
+  if (env.python || m.databench) {
+    const libs = Object.entries(env).filter(([k]) => !["python", "databench"].includes(k)).map(([k, v]) => `${k} ${v}`);
+    cards.push(card("Environment", env.python ? `python ${esc(env.python)}` : "—",
+      [m.databench ? `databench ${esc(m.databench.split("+")[0])}` : "", libs.length ? esc(libs.join(", ")) : ""].filter(Boolean).join("<br>")));
+  }
+  if (m.analyst || m.lab) cards.push(card("Analyst", esc(m.analyst || "—"), esc(m.lab)));
+  return `<div class="cards">${cards.join("")}</div>`;
+}
+
+function renderDetail(run) {
+  const p = run.provenance || {}; const g = (run.meta || {}).git || {}; const scriptPath = (run.meta || {}).script_path;
+  const figs = groupFigures(run.files); run._figs = figs;
+  const tables = run.files.filter(f => f.kind === "table" && !f.reserved);
+  const docs = run.files.filter(f => f.kind === "doc" && !f.reserved);
+  const other = run.files.filter(f => f.kind === "other");
+  const hasReport = run.files.some(f => f.path === "report.md");
+  const repro = g.hash && scriptPath ? `git checkout ${g.hash} && python ${scriptPath}` : "";
+  const { params, ...record } = p;
+
+  return `<div class="detail">
+    <button class="back" data-act="back">‹ All runs</button>
+    <div class="title"><h2>${esc(run.script || run.id)}</h2>${run.tag ? `<span class="pill tag">${esc(run.tag)}</span>` : ""}${run.name && run.name !== run.script ? `<span class="pill" title="run name">${esc(run.name)}</span>` : ""}${!run.has_provenance ? `<span class="pill warn">no provenance.json</span>` : ""}</div>
+    <div class="path mono">${esc(run.id)}</div>
+    <div class="actions">
+      ${SNAP ? "" : `<button data-act="reveal" data-path="${esc(run.id)}">Reveal in Finder</button>`}
+      <button data-act="copy" data-text="${esc(SNAP ? run.id : run.abs_path)}" data-label="Path copied">Copy path</button>
+      ${repro ? `<button data-act="copy" data-text="${esc(repro)}" data-label="Reproduce command copied">Copy reproduce cmd</button>` : ""}
+      ${scriptPath ? `<button data-act="copy" data-text="${esc(scriptPath)}" data-label="Script path copied">Copy script path</button>` : ""}
+      ${hasReport && !(SNAP && SNAP.embed) ? `<a href="${fileUrl(run.id, "report.md")}" target="_blank"><button>report.md ↗</button></a>` : ""}
+    </div>
+    ${summaryCards(run, figs, tables, docs, other)}
+
+    ${figs.length ? `<section><h3>Figures <span class="n">${figs.length}</span></h3><div class="grid">${figs.map((f, i) => `
+      <div class="fig">
+        ${f.preview ? `<div class="thumb" data-fig="${i}"><img loading="lazy" src="${fileUrl(run.id, f.preview.path)}" alt="${esc(f.name)}"></div>`
+                    : `<div class="thumb pdf" data-fig="${i}"><span>${esc(ext(f.files[0].path).toUpperCase())}</span><span class="hint">click to open</span></div>`}
+        <div class="cap"><span class="name" title="${esc(f.key)}">${f.dir ? `<span style="color:var(--faint)">${esc(f.dir)}/</span>` : ""}${esc(f.name)}</span>
+          <span class="fmts">${f.files.map(x => `<a href="${fileUrl(run.id, x.path)}" target="_blank" class="${needsFolder(x) ? "off" : ""}" title="${fmtSize(x.size)}${needsFolder(x) ? " · not embedded, needs the outputs folder" : ""}">${esc(ext(x.path))}</a>`).join("")}</span></div>
+      </div>`).join("")}</div></section>` : ""}
+
+    ${run.notes ? `<section><h3>Notes</h3><div class="notes md">${md(run.notes, run.id)}</div></section>` : ""}
+
+    ${tables.length ? `<section><h3>Tables <span class="n">${tables.length}</span></h3><div class="files">${tables.map(fileRow).join("")}</div></section>` : ""}
+    ${docs.length ? `<section><h3>Documents <span class="n">${docs.length}</span></h3><div class="files">${docs.map(fileRow).join("")}</div></section>` : ""}
+    ${other.length ? `<section><h3>Other files <span class="n">${other.length}</span></h3><div class="files">${other.map(f => `
+      <div class="file"><summary style="cursor:default"><a class="fname" href="${fileUrl(run.id, f.path)}" target="_blank">${esc(f.path)}</a><span class="size">${fmtSize(f.size)}</span></summary></div>`).join("")}</div></section>` : ""}
+
+    ${run.has_provenance ? `<section><h3>Provenance</h3><div class="files">
+      ${params && Object.keys(params).length ? propBlock("Parameters", params, true) : ""}
+      ${propBlock("Run record", record, !params)}
+      ${repro ? `<details class="file"><summary><span class="fname">Reproduce</span></summary><div class="body"><pre>${esc(repro)}</pre></div></details>` : ""}
+    </div></section>` : ""}
+  </div>`;
+}
+
+function fileRow(f) {
+  return `<details class="file" data-path="${esc(f.path)}" data-kind="${f.kind}">
+    <summary><span class="fname">${esc(f.path)}</span><span class="size">${fmtSize(f.size)}</span>${SNAP && SNAP.embed ? "" : `<a href="#" data-act="open" title="Open raw file">↗</a>`}</summary>
+    <div class="body"><div class="hint">Loading…</div></div></details>`;
+}
+
+/* JSON → nested key/value tables: objects nest, scalar lists become tokens */
+function propValue(v) {
+  if (v === null || v === undefined || v === "") return `<span class="nil">—</span>`;
+  if (typeof v === "boolean") return `<span class="bool-${v}">${v}</span>`;
+  if (typeof v === "number") return String(v);
+  if (typeof v === "string") return /^https?:\/\//.test(v) ? `<a href="${esc(v)}" target="_blank">${esc(v)}</a>` : esc(v);
+  if (Array.isArray(v)) {
+    if (!v.length) return `<span class="nil">empty list</span>`;
+    if (v.every(x => x === null || typeof x !== "object")) return v.map(x => `<span class="tok">${x === null ? "—" : esc(x)}</span>`).join("");
+    return `<div class="stack">${v.map(x => `<div>${propValue(x)}</div>`).join("")}</div>`;
+  }
+  return Object.keys(v).length ? propTable(v, true) : `<span class="nil">empty</span>`;
+}
+const propTable = (obj, nested = false) =>
+  `<table class="kvt${nested ? " nested" : ""}"><tbody>${Object.entries(obj).map(([k, v]) => `<tr><th>${esc(k)}</th><td>${propValue(v)}</td></tr>`).join("")}</tbody></table>`;
+const propBlock = (title, obj, open = false) =>
+  `<details class="file" ${open ? "open" : ""}><summary><span class="fname">${esc(title)}</span><span class="size">${Object.keys(obj || {}).length}</span></summary><div class="body">${propTable(obj || {})}</div></details>`;
+
+function wireDetail(run) {
+  const main = $("#main");
+  main.querySelectorAll("details.file[data-path]").forEach(d => d.addEventListener("toggle", () => {
+    if (d.open && !d._loaded) { d._loaded = true; loadPreview(run, d); }
+  }));
+  main.querySelectorAll(".thumb[data-fig]").forEach(t => t.addEventListener("click", () => openLightbox(run, +t.dataset.fig)));
+  main.onclick = e => {
+    const a = e.target.closest("[data-act]"); if (!a) return;
+    const act = a.dataset.act;
+    if (act === "copy") copy(a.dataset.text, a.dataset.label);
+    else if (act === "reveal") fetch("/api/reveal", { method: "POST", body: JSON.stringify({ path: a.dataset.path }) }).then(r => toast(r.ok ? "Opened in file browser" : "Could not reveal"));
+    else if (act === "back") { location.hash = ""; }
+    else if (act === "open") { e.preventDefault(); e.stopPropagation(); window.open(fileUrl(run.id, a.closest("[data-path]").dataset.path), "_blank"); }
+  };
+}
+
+async function loadPreview(run, d) {
+  const path = d.dataset.path, body = $(".body", d), e = ext(path);
+  try {
+    if (["csv", "tsv", "parquet"].includes(e)) {
+      const t = await api.table(run.id + "/" + path);
+      if (t.error) { body.innerHTML = `<div class="hint">${esc(t.error)}</div>`; return; }
+      const isNum = s => s !== "" && !isNaN(+s);
+      body.innerHTML = `<div class="tablewrap"><table class="data"><thead><tr>${t.header.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead>
+        <tbody>${t.rows.map(r => `<tr>${r.map(c => `<td class="${isNum(c) ? "num" : ""}">${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+        <div class="hint">${t.rows.length < t.total ? `First ${t.rows.length} of ${t.total.toLocaleString()} rows` : `${t.total.toLocaleString()} rows`} · ${t.header.length} columns</div>`;
+    } else {
+      const got = await api.text(run.id + "/" + path);
+      if (!got) { body.innerHTML = `<div class="hint">No preview available. <a href="${fileUrl(run.id, path)}" target="_blank">Open the raw file</a>.</div>`; return; }
+      let { text, truncated } = got;
+      if (e === "json") { try { text = JSON.stringify(JSON.parse(text), null, 2); } catch {} }
+      body.innerHTML = (e === "md" ? `<div class="md">${md(text, run.id, path)}</div>` : `<pre>${esc(text)}</pre>`) + (truncated ? `<div class="hint">Truncated — open the raw file for the rest.</div>` : "");
+    }
+  } catch (err) { body.innerHTML = `<div class="hint">Could not load: ${esc(err)}</div>`; }
+}
+
+/* ── tiny markdown (headings, lists, tables, code, links, images) ── */
+function md(src, runId, docPath = "") {
+  const base = docPath.includes("/") ? docPath.slice(0, docPath.lastIndexOf("/") + 1) : "";
+  const link = u => /^(https?:|#|\/)/.test(u) ? u : fileUrl(runId, base + u);
+  const inline = s => esc(s)
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, a, u) => `<img alt="${a}" src="${link(u)}">`)
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, t, u) => `<a href="${link(u)}" target="_blank">${t}</a>`)
+    .replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/(^|\W)\*([^*]+)\*/g, "$1<em>$2</em>");
+  const lines = src.split("\n"); const out = []; let i = 0;
+  while (i < lines.length) {
+    const l = lines[i];
+    if (/^```/.test(l)) { const buf = []; i++; while (i < lines.length && !/^```/.test(lines[i])) buf.push(lines[i++]); i++; out.push(`<pre>${esc(buf.join("\n"))}</pre>`); continue; }
+    let m;
+    if ((m = l.match(/^(#{1,6})\s+(.*)/))) { const n = Math.min(m[1].length + 2, 6); out.push(`<h${n}>${inline(m[2])}</h${n}>`); i++; continue; }
+    if (/^\s*\|/.test(l)) { const rows = []; while (i < lines.length && /^\s*\|/.test(lines[i])) rows.push(lines[i++]);
+      const cells = r => r.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+      const body = rows.filter(r => !/^\s*\|[\s:|-]+\|\s*$/.test(r));
+      out.push(`<table>${body.map((r, j) => `<tr>${cells(r).map(c => j ? `<td>${inline(c)}</td>` : `<th>${inline(c)}</th>`).join("")}</tr>`).join("")}</table>`); continue; }
+    if (/^\s*([-*]|\d+\.)\s+/.test(l)) { const items = []; while (i < lines.length && /^\s*([-*]|\d+\.)\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*([-*]|\d+\.)\s+/, ""));
+      out.push(`<ul>${items.map(t => `<li>${inline(t)}</li>`).join("")}</ul>`); continue; }
+    if (/^---+\s*$/.test(l)) { out.push("<hr>"); i++; continue; }
+    if (!l.trim()) { i++; continue; }
+    const para = []; while (i < lines.length && lines[i].trim() && !/^(#|```|\s*\||\s*[-*]\s|---)/.test(lines[i])) para.push(lines[i++]);
+    if (!para.length) para.push(lines[i++]);
+    out.push(`<p>${inline(para.join(" "))}</p>`);
+  }
+  return out.join("\n");
+}
+
+/* ── lightbox ─────────────────────────────────────────────────────── */
+const lb = { run: null, i: 0, file: null };
+function openLightbox(run, i, file) {
+  lb.run = run; lb.i = (i + run._figs.length) % run._figs.length;
+  const g = run._figs[lb.i]; lb.file = file || g.preview || g.files[0];
+  const url = fileUrl(run.id, lb.file.path);
+  const box = $("#lb");
+  $(".name", box).textContent = g.key + "." + ext(lb.file.path);
+  $(".fmts", box).innerHTML = g.files.map((f, j) => `<a href="#" data-j="${j}" class="${f === lb.file ? "on" : ""}">${esc(ext(f.path))}</a>`).join("");
+  $(".open", box).href = url;
+  $(".content", box).innerHTML = IMG.includes(ext(lb.file.path)) ? `<img src="${url}" alt="">` : `<iframe src="${url}"></iframe>`;
+  box.querySelectorAll(".nav").forEach(b => b.style.visibility = run._figs.length > 1 ? "visible" : "hidden");
+  box.classList.add("on");
+}
+const closeLightbox = () => { $("#lb").classList.remove("on"); $("#lb .content").innerHTML = ""; };
+$("#lb .close").onclick = closeLightbox;
+$("#lb .prev").onclick = () => openLightbox(lb.run, lb.i - 1);
+$("#lb .next").onclick = () => openLightbox(lb.run, lb.i + 1);
+$("#lb .fmts").onclick = e => { const a = e.target.closest("[data-j]"); if (!a) return; e.preventDefault(); openLightbox(lb.run, lb.i, lb.run._figs[lb.i].files[+a.dataset.j]); };
+$("#lb .stage").onclick = e => { if (e.target.classList.contains("stage")) closeLightbox(); };
+
+/* ── events ───────────────────────────────────────────────────────── */
+function route() {
+  const m = location.hash.match(/^#run=(.+)$/);
+  const only = SNAP && SNAP.runs.length === 1 ? SNAP.runs[0].id : null;  // single-run pages open straight to it
+  showRun(m ? decodeURIComponent(m[1]) : only);
+}
+window.addEventListener("hashchange", route);
+
+$("#filters").onclick = e => { const c = e.target.closest(".chip"); if (!c) return; state.alias = c.dataset.alias; LS.set("alias", state.alias); renderFilters(); renderList(); };
+$("#search").addEventListener("input", e => { state.query = e.target.value; renderList(); });
+$("#sort").addEventListener("change", e => { state.sort = e.target.value; LS.set("sort", state.sort); renderList(); });
+$("#collapse").onclick = () => {
+  const groups = [...document.querySelectorAll("#list .group")];
+  const open = !groups.some(g => g.open);
+  if (!state.query) {  // while searching, only toggle the view; don't overwrite saved state
+    state.collapsed = open ? new Set() : new Set(state.runs.map(r => r.script || NO_SCRIPT));
+    LS.set("collapsed", [...state.collapsed]);
+  }
+  groups.forEach(g => { g.open = open; });
+  updateCollapseButton();
+};
+$("#list").addEventListener("toggle", e => {
+  const g = e.target.closest?.(".group"); if (!g) return;
+  if (!state.query) {
+    g.open ? state.collapsed.delete(g.dataset.script) : state.collapsed.add(g.dataset.script);
+    LS.set("collapsed", [...state.collapsed]);
+  }
+  updateCollapseButton();
+}, true);
+$("#refresh").onclick = async () => { await loadRuns(); toast(`${plural(state.runs.length, "run")}`); if (state.selected) showRun(state.selected); };
+window.addEventListener("focus", () => { if (!SNAP && Date.now() - state.lastFetch > 5000) loadRuns(); });
+if (SNAP) $("#refresh").hidden = true;  // a snapshot can't rescan; re-export instead
+
+document.addEventListener("keydown", e => {
+  const inField = /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+  if ($("#lb").classList.contains("on")) {
+    if (e.key === "Escape") closeLightbox();
+    else if (e.key === "ArrowLeft") openLightbox(lb.run, lb.i - 1);
+    else if (e.key === "ArrowRight") openLightbox(lb.run, lb.i + 1);
+    return;
+  }
+  if (e.key === "/" && !inField) { e.preventDefault(); $("#search").focus(); $("#search").select(); return; }
+  if (e.key === "Escape" && document.activeElement === $("#search")) { e.target.value = ""; state.query = ""; renderList(); e.target.blur(); return; }
+  if (document.activeElement.tagName === "SELECT") return;
+  if (["ArrowDown", "ArrowUp", "j", "k"].includes(e.key) && (!inField || e.key.startsWith("Arrow"))) {
+    const rows = [...document.querySelectorAll("#list .run")].filter(r => !r.closest("details:not([open])"));
+    if (!rows.length) return;
+    e.preventDefault();
+    const cur = rows.findIndex(r => r.dataset.id === state.selected);
+    const next = rows[Math.max(0, Math.min(rows.length - 1, cur + (/Down|j/.test(e.key) ? 1 : -1)))];
+    if (inField) document.activeElement.blur();
+    location.hash = "run=" + encodeURIComponent(next.dataset.id);
+  }
+});
+
+loadRuns().then(route).catch(err => { $("#summary").textContent = "Could not reach the viewer server."; console.error(err); });
+</script>
+</body>
+</html>

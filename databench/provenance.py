@@ -242,26 +242,46 @@ def render_report(prov: dict[str, Any], run: "Run", *, notes: str = "") -> str:
         lines += [f"- `{k}` = {v}" for k, v in prov["params"].items()]
         lines.append("")
 
-    plots = _list_dir(run.plots_dir)
-    if plots:
+    figures, tables = _split_outputs(run.dir)
+    if figures:
         lines += ["## Plots", ""]
-        for p in plots:
-            if p.suffix.lower() in {".png", ".svg", ".jpg", ".jpeg"}:
-                lines.append(f"![{p.stem}](plots/{p.name})\n")
+        for p in figures:
+            if p.suffix.lower() in _IMAGE_SUFFIXES:
+                lines.append(f"![{p.stem}]({p.name})\n")
             else:
-                lines.append(f"- [plots/{p.name}](plots/{p.name})")
+                lines.append(f"- [{p.name}]({p.name})")
         lines.append("")
 
-    tables = _list_dir(run.tables_dir)
     if tables:
         lines += ["## Tables", ""]
-        lines += [f"- [tables/{p.name}](tables/{p.name})" for p in tables]
+        lines += [f"- [{p.name}]({p.name})" for p in tables]
         lines.append("")
 
     if notes:
         lines += ["---", "", "## Notes", "", notes, ""]
 
     return "\n".join(lines).rstrip() + "\n"
+
+
+_IMAGE_SUFFIXES = {".png", ".svg", ".jpg", ".jpeg"}
+_FIGURE_SUFFIXES = _IMAGE_SUFFIXES | {".pdf", ".tif", ".tiff", ".eps", ".mp4", ".gif"}
+_TABLE_SUFFIXES = {".csv", ".parquet", ".json", ".tsv", ".txt"}
+_RESERVED = {"provenance.json", "report.md"}
+
+
+def _split_outputs(d: Path) -> tuple[list[Path], list[Path]]:
+    """Partition a flat run directory into figures and tables for the report."""
+    figures: list[Path] = []
+    tables: list[Path] = []
+    for p in _list_dir(d):
+        if p.is_dir() or p.name in _RESERVED:
+            continue
+        suffix = p.suffix.lower()
+        if suffix in _FIGURE_SUFFIXES:
+            figures.append(p)
+        elif suffix in _TABLE_SUFFIXES:
+            tables.append(p)
+    return figures, tables
 
 
 def _list_dir(d: Path) -> list[Path]:
