@@ -138,6 +138,18 @@ def dataset_sha256(path: Path) -> str:
     return archive_sha256(path) if is_archive(path) else file_sha256(path)
 
 
+def dataset_rows(project: "Project") -> int | None:
+    """Row count of *project*'s dataset without reading it: the loaded frame's length, an archive's manifest
+    ``rows``, or None when the dataset is an unread pickle (counting it would load the whole file)."""
+    from databench.store import is_archive, read_manifest
+    if project.loaded:
+        return int(len(project.df))
+    if is_archive(project.dataset_path):
+        rows = read_manifest(project.dataset_path).get("rows")
+        return None if rows is None else int(rows)
+    return None
+
+
 def _archive_origin(path: Path) -> dict[str, Any]:
     """``{"converted_from": {name, sha256}}`` for an archive, else ``{}``.
 
@@ -187,7 +199,7 @@ def capture(project: "Project", run: "Run") -> dict[str, Any]:
             "alias": project.alias,
             "path": str(project.dataset_path),
             "sha256": dataset_sha256(project.dataset_path),
-            "rows": int(len(project.df)),
+            "rows": dataset_rows(project),
             **_archive_origin(project.dataset_path),
         },
         "code": {
@@ -221,7 +233,8 @@ def render_report(prov: dict[str, Any], run: "Run", *, notes: str = "") -> str:
         lines.append(f"| Analyst | {prov['analyst']} |")
     if prov["lab"]:
         lines.append(f"| Lab | {prov['lab']} |")
-    lines.append(f"| Dataset | `{ds['alias']}` ({ds['rows']} rows) |")
+    rows = "rows not read" if ds.get("rows") is None else f"{ds['rows']} rows"
+    lines.append(f"| Dataset | `{ds['alias']}` ({rows}) |")
     lines.append(f"| Data SHA-256 | `{ds['sha256'][:16]}…` |")
     short = code.get("short")
     if short:
