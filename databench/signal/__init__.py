@@ -5,6 +5,11 @@ from databench.signal.bandpass import (  # noqa: F401
     robust_threshold,
 )
 
+from databench.signal.peaks import (  # noqa: F401
+    PEAK_EVENT_COLUMNS,
+    prominence_events,
+)
+
 from databench.signal.preproc import (  # noqa: F401
     MEDIAN_FILTER_SIZE,
     SAVGOL_WINDOW,
