@@ -5,6 +5,8 @@ Region names carry a hemisphere prefix (``L_``/``R_``) and an Allen acronym.
 mesomap figure labels — visual, somatosensory, motor, auditory, retrosplenial,
 frontal — and :func:`order_by_group` / :func:`group_blocks` turn a set of
 region names into grouped, labelled rows for a heatmap axis.
+:data:`ROI_GROUPS` / :func:`roi_group` are the narrower motor, somatosensory,
+visual and retrosplenial groups that analyses average parcels into.
 """
 from __future__ import annotations
 
@@ -43,6 +45,22 @@ _GROUP_BY_ACRONYM: Dict[str, str] = {
     for acronym in acronyms
 }
 
+# Functional ROI groups that analyses average parcels into (hemispheres
+# pooled).  Unlike REGION_GROUPS they do not cover every acronym: auditory,
+# frontal and "Other" areas, and VISli / VISpl / VISpor, belong to no group.
+ROI_GROUPS: Dict[str, Tuple[str, ...]] = {
+    "Motor":          ("MOp", "MOs"),
+    "Somatosensory":  ("SSp-bfd", "SSp-ll", "SSp-m", "SSp-n", "SSp-tr",
+                       "SSp-ul", "SSp-un", "SSs"),
+    "Visual primary": ("VISp",),
+    "Visual higher":  ("VISa", "VISal", "VISam", "VISl", "VISpm", "VISrl"),
+    "Retrosplenial":  ("RSPagl", "RSPd", "RSPv"),
+}
+_ROI_GROUP_BY_ACRONYM: Dict[str, str] = {
+    acronym: group for group, acronyms in ROI_GROUPS.items()
+    for acronym in acronyms
+}
+
 
 def region_acronym(region: str) -> str:
     """Allen acronym of a mesomap region name, without its hemisphere prefix.
@@ -59,6 +77,14 @@ def region_group(region: str) -> str:
     Acronyms absent from the table are grouped as ``"Other"``.
     """
     return _GROUP_BY_ACRONYM.get(region_acronym(region), "Other")
+
+
+def roi_group(region: str) -> str | None:
+    """Functional ROI group of a mesomap region — a key of :data:`ROI_GROUPS` — or None.
+
+    ``"L_SSp-bfd"`` -> ``"Somatosensory"``; ``"R_AUDp"`` -> None.
+    """
+    return _ROI_GROUP_BY_ACRONYM.get(region_acronym(region))
 
 
 def order_by_group(regions: Iterable[str],
@@ -642,3 +668,48 @@ def plot_parcellation(ax, parcellation: Parcellation, *,
         return f"{len(inside)} regions in mask"
 
     return "no parcellation on this machine"
+
+
+# ── Dorsal view of a frame-space label image ────────────────────────────
+
+def orient_dorsal(image: np.ndarray, turns: int, mirror: bool) -> np.ndarray:
+    """*image* rotated by *turns* quarter turns (:func:`numpy.rot90`), then mirrored left-right when *mirror*."""
+    image = np.rot90(image, turns)
+    return np.fliplr(image) if mirror else image
+
+
+def dorsal_orientation(labels: np.ndarray, names: Mapping[int, str]) -> Tuple[int, bool]:
+    """Quarter turns and mirror that show a frame-space label image as a dorsal view.
+
+    Among the eight rotations and mirrors, picks the one that puts the motor
+    areas (``MO*``) furthest above the visual areas (``VIS*``) and the left
+    hemisphere (``L_*``) furthest left of the right one (``R_*``).  *names*
+    maps label values to region names such as ``"L_MOp"``.  Apply the result
+    with :func:`orient_dorsal`.
+    """
+    def centre(image: np.ndarray, prefix: str) -> np.ndarray:
+        ids = [label for label, name in names.items() if name.startswith(prefix) or name[2:].startswith(prefix)]
+        return np.argwhere(np.isin(image, ids)).mean(axis=0)
+
+    def separation(turns: int, mirror: bool) -> float:
+        image = orient_dorsal(labels, turns, mirror)
+        return float(centre(image, "VIS")[0] - centre(image, "MO")[0] + centre(image, "R_")[1] - centre(image, "L_")[1])
+
+    return max(((turns, mirror) for turns in range(4) for mirror in (False, True)), key=lambda pair: separation(*pair))
+
+
+def label_outlines(labels: np.ndarray, *, shape: Tuple[int, int] | None = None) -> List[np.ndarray]:
+    """Boundary polylines of every label > 0 in *labels*, as ``(n, 2)`` arrays of ``(x, y)`` image coordinates.
+
+    With *shape*, coordinates are mapped onto a coarser grid of that shape made
+    of block-averaged pixels: label pixel ``i`` lands at
+    ``(i + 0.5) x shape / labels.shape - 0.5``.  Draw them with
+    :class:`matplotlib.collections.LineCollection`.
+    """
+    from contourpy import contour_generator
+
+    scale = np.ones(2) if shape is None else np.asarray(shape[::-1], float) / np.asarray(labels.shape[::-1], float)
+    lines: List[np.ndarray] = []
+    for label in np.unique(labels[labels > 0]):
+        lines += contour_generator(z=(labels == label).astype(float)).lines(0.5)
+    return [line * scale + (scale / 2 - 0.5) for line in lines]
