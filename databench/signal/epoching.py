@@ -72,6 +72,18 @@ def segments_from_mask(mask: np.ndarray) -> list[Tuple[int, int]]:
     return segments
 
 
+def masked_samples(mask: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Indices of the True samples of *mask* and, for each, the number of its
+    contiguous segment (0, 1, … in the order of :func:`segments_from_mask`).
+
+    ``x[..., index]`` keeps the masked samples of a signal concatenated;
+    ``segment`` tells which samples were contiguous before masking.
+    """
+    index = np.flatnonzero(mask)
+    segment = np.cumsum(np.diff(index, prepend=-2) > 1) - 1
+    return index, segment
+
+
 # ── Sample-based merging / filtering ──────────────────────────────────────
 
 def merge_gaps(
@@ -348,6 +360,22 @@ def epoch_overlap(intervals: pd.DataFrame, epochs: pd.DataFrame) -> pd.DataFrame
         "open_at_start": ((b0 <= a0) & (b1 > a0)).any(axis=1),
         "first_start_s": np.where(np.isfinite(first), first, np.nan),
     }, index=intervals.index)
+
+
+def epoch_latency(intervals: pd.DataFrame, epochs: pd.DataFrame) -> pd.DataFrame:
+    """:func:`epoch_overlap` plus the latency from each interval start to the first epoch.
+
+    Adds ``latency_s``: 0 when an epoch was already running as the interval
+    began (``open_at_start``), else ``first_start_s`` minus the interval's
+    ``start_s``, and NaN when no epoch overlaps the interval.
+
+    To date each epoch by a later moment (e.g. when a burst was confirmed),
+    pass ``epochs.assign(start_s=epochs["confirmed_s"])``.
+    """
+    relation = epoch_overlap(intervals, epochs)
+    start = intervals[START_S].to_numpy(dtype=float)
+    relation["latency_s"] = np.where(relation["open_at_start"], 0.0, relation["first_start_s"] - start)
+    return relation
 
 
 def make_events(

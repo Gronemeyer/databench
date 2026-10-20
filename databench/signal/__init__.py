@@ -2,6 +2,7 @@
 
 from databench.signal.bandpass import (  # noqa: F401
     bandpass_envelope,
+    bandpass_filter,
     robust_threshold,
 )
 
@@ -51,6 +52,7 @@ from databench.signal.epoching import (  # noqa: F401 — public re-exports
     REQUIRED_COLUMNS,
     # Segment primitives
     segments_from_mask,
+    masked_samples,
     merge_gaps,
     apply_min_duration,
     merge_gaps_by_time,
@@ -60,6 +62,7 @@ from databench.signal.epoching import (  # noqa: F401 — public re-exports
     detect_epochs,
     epochs_around_events,
     epoch_overlap,
+    epoch_latency,
     # Point-event table
     make_events,
     # Peri-event extraction
