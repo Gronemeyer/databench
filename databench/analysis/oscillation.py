@@ -310,6 +310,7 @@ def bosc_episodes(
     percentile: float = 0.95,
     min_cycles: float = 3.0,
     width: float = 6.0,
+    background=None,
 ) -> dict:
     """Oscillatory episodes in *band_hz* by the BOSC rule (Caplan et al. 2001; Whitten et al. 2011).
 
@@ -322,6 +323,11 @@ def bosc_episodes(
     ``chi2.ppf(percentile, 2) / 2``.  A frequency is detected where power
     stays above its threshold for at least *min_cycles* cycles; a sample is
     oscillating when any *band_hz* frequency is detected.
+
+    *background* replaces the line fit: a callable from frequency to
+    background wavelet power, or an array over the wavelet frequencies.  The
+    wavelets are unit-energy, so for a one-sided Welch PSD fit ``S(f)`` the
+    matching wavelet background is ``S(f) * fs / 2``.
 
     Returns a dict:
 
@@ -346,8 +352,11 @@ def bosc_episodes(
     reference = np.ones(t.size, dtype=bool) if reference is None else np.asarray(reference, dtype=bool)
     mean_power = power[:, reference].mean(axis=1) if reference.any() else power.mean(axis=1)
     in_band = (freqs >= band_hz[0]) & (freqs <= band_hz[1])
-    slope, intercept = np.polyfit(np.log(freqs[~in_band]), np.log(mean_power[~in_band]), 1)
-    background = np.exp(intercept + slope * np.log(freqs))
+    if background is None:
+        slope, intercept = np.polyfit(np.log(freqs[~in_band]), np.log(mean_power[~in_band]), 1)
+        background = np.exp(intercept + slope * np.log(freqs))
+    else:
+        background = np.asarray(background(freqs) if callable(background) else background, dtype=float)
     threshold = background * chi2.ppf(percentile, 2) / 2
     band_freqs = freqs[in_band]
     ratio = power[in_band] / background[in_band, None]

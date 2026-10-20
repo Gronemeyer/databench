@@ -25,10 +25,20 @@ from databench.signal.preproc import (  # noqa: F401
 )
 
 from databench.signal.spectral import (  # noqa: F401
+    aperiodic_fit,
     aperiodic_peak,
+    colored_noise,
+    band_coupling,
+    epoch_cross_spectra,
+    epoch_cross_spectral_matrix,
     epoch_spectra,
     mean_spectrum,
     morlet_power,
+)
+
+from databench.signal.ssd import (  # noqa: F401
+    ssd,
+    ssd_scan,
 )
 
 from databench.signal.remap import (  # noqa: F401 — public re-exports
