@@ -17,8 +17,12 @@ dependencies = [
     "scipy",
 ]
 
+[project.optional-dependencies]
+duckdb = ["duckdb"]
+
 [project.scripts]
 databench-view = "databench.viewer:main"
+databench-duckdb = "databench.duckdb_export:main"
 
 [tool.setuptools.package-data]
 "databench.viewer" = ["index.html"]

@@ -63,6 +63,24 @@ archive is a plain zip of `.npy` files, so
 `np.load(path, allow_pickle=True)["GS26/ses-01/task-spont/mesomap/L_VISp"]`
 works without databench. Format details: `databench/store.py`.
 
+### DuckDB export
+
+To query a dataset in SQL, export it to a `.duckdb` file (needs
+`pip install duckdb`, or `pip install -e ".[duckdb]"`):
+
+```bash
+databench-duckdb etoh2 ~/Desktop/etoh2.duckdb           # alias or path to a .pkl/.npz
+databench-duckdb --views ~/Desktop/etoh2.duckdb         # (re)create the views only
+```
+
+`recordings` has one row per recording (labels, `session_config` and the
+other scalar cells). Each source with arrays gets a table with one row per
+sample (`mesomap`, `pupil_dlc`, `treadmill`, …). The views `sessions`,
+`coverage`, `parcels`, `mesomap_long`, `pupil` and `locomotion` join these
+tables with the recording labels. In Python,
+`databench.duckdb_export.write_duckdb(df, path, labels=...)` takes the
+dataset frame directly. Details: `databench/duckdb_export.py`.
+
 ---
 
 ## Core Concepts
