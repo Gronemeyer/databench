@@ -23,3 +23,23 @@ datasets.toml
 *.html
 !/databench/viewer/index.html
 /etoh-figure1
+
+# Figure, video and export outputs
+*.png
+*.svg
+*.pdf
+*.jpg
+*.jpeg
+*.gif
+*.tif
+*.tiff
+*.eps
+*.mp4
+*.mov
+*.webm
+*.duckdb
+*.duckdb.wal
+
+# Local scratch and editor state
+/_to_delete/
+/.posit/
